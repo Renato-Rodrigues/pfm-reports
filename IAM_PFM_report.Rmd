@@ -39,12 +39,15 @@ library(kableExtra)
 library(patchwork)
 library(scales)
 
+# Load local helpers
+source("R/kableCorrelationMatrix.R")
+
 madrat::setConfig(
   forcecache = TRUE,
   cachefolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default"
 )
 
-theme_pem <- function() {
+theme_report <- function() {
   theme_minimal(base_size = 16, base_family = "serif") +
     theme(
       plot.title = element_text(face = "bold", size = 14),
@@ -104,7 +107,7 @@ render_forest_plot <- function(coef_df, title, subtitle) {
     geom_text(aes(label = sig), nudge_y = 0.4, size = 4.5, color = "black", show.legend = FALSE) +
     coord_flip() +
     labs(title = title, subtitle = subtitle, x = NULL, y = "Estimate (95% CI)") +
-    theme_pem() +
+    theme_report() +
     scale_color_manual(values = c(
       "Actor Power" = "#e74c3c", # Red
       "Institutional Quality" = "#2ecc71", # Green
@@ -642,7 +645,7 @@ render_forest_plot <- function(coef_df, title, subtitle) {
     geom_text(aes(label = sig), nudge_y = 0.4, size = 4.5, color = "black", show.legend = FALSE) +
     coord_flip() +
     labs(title = title, subtitle = subtitle, x = NULL, y = "Estimate (95% CI)") +
-    theme_pem() +
+    theme_report() +
     scale_color_manual(values = c(
       "Actor Power" = "#e74c3c", # Red
       "Institutional Quality" = "#2ecc71", # Green
@@ -782,7 +785,7 @@ p1 <- ggplot(comp_adopt, aes(x = sector, y = pseudoR2, fill = Model)) +
   scale_fill_manual(values = c("md (full AP)" = col_md, "md2 (API only)" = col_md2, "md3 (REMIND FE)" = col_md3, "md4 (Lagged ECP)" = col_md4)) +
   labs(title = "Adoption — Pseudo-R²", y = "McFadden Pseudo-R²", x = NULL) +
   ylim(0, 0.95) +
-  theme_pem()
+  theme_report()
 
 p2 <- ggplot(comp_adopt, aes(x = sector, y = aic, fill = Model)) +
   geom_col(position = "dodge", width = 0.6) +
@@ -791,7 +794,7 @@ p2 <- ggplot(comp_adopt, aes(x = sector, y = aic, fill = Model)) +
   ) +
   scale_fill_manual(values = c("md (full AP)" = col_md, "md2 (API only)" = col_md2, "md3 (REMIND FE)" = col_md3, "md4 (Lagged ECP)" = col_md4)) +
   labs(title = "Adoption — AIC (lower = better)", y = "AIC", x = NULL) +
-  theme_pem()
+  theme_report()
 
 p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = "bottom")
 ```
@@ -827,7 +830,7 @@ p3 <- ggplot(comp_str, aes(x = sector, y = pseudoR2, fill = Model)) +
   scale_fill_manual(values = c("md (full AP)" = col_md, "md2 (API only)" = col_md2, "md3 (REMIND FE)" = col_md3, "md4 (Lagged ECP)" = col_md4)) +
   labs(title = "Stringency — Pseudo-R²", y = "Pseudo-R²", x = NULL) +
   ylim(0, max(comp_str$pseudoR2) * 1.3) +
-  theme_pem()
+  theme_report()
 
 p4 <- ggplot(comp_str, aes(x = sector, y = aic, fill = Model)) +
   geom_col(position = "dodge", width = 0.6) +
@@ -836,7 +839,7 @@ p4 <- ggplot(comp_str, aes(x = sector, y = aic, fill = Model)) +
   ) +
   scale_fill_manual(values = c("md (full AP)" = col_md, "md2 (API only)" = col_md2, "md3 (REMIND FE)" = col_md3, "md4 (Lagged ECP)" = col_md4)) +
   labs(title = "Stringency — AIC", y = "AIC", x = NULL) +
-  theme_pem()
+  theme_report()
 
 p3 + p4 + plot_layout(guides = "collect") & theme(legend.position = "bottom")
 ```
@@ -1001,7 +1004,7 @@ p <- ggplot(r2_df, aes(
     subtitle = "Rules of thumb: < 0.2 = poor, 0.2–0.4 = moderate, > 0.4 = good",
     x = NULL, y = "Pseudo-R²"
   ) +
-  theme_pem()
+  theme_report()
 print(p)
 
 # Save plot
@@ -1218,7 +1221,7 @@ if (!is.null(future_mag)) {
       scale_color_manual(values = my_colors) +
       scale_alpha_manual(values = c("TRUE" = 0.4, "FALSE" = 1), guide = "none") +
       scale_linewidth_manual(values = c("TRUE" = 0.5, "FALSE" = 1.2), guide = "none") +
-      theme_pem() +
+      theme_report() +
       labs(
         title = sprintf("Projected Probability of Adoption (%s)", sector_name),
         subtitle = sprintf("The %s threshold is the minimum probability that ensures the model successfully identifies 90%% of actual historical policy shifts.", threshold),
