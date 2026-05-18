@@ -1,8 +1,12 @@
 .Rproj.user
 .Rhistory
-.RData
 .Ruserdata
+
+# Input data (large, generated externally)
+data/
+
+# Rendered output
 output/
-*.html
-*.RData
+
+# R session artefacts
 *.Rproj
