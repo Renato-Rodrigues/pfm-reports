@@ -1,6 +1,6 @@
 # PFM Reports
 
-Reporting and visualisation code for the **Political Feasibility Module (PFM)** used in Integrated Assessment Models (IAMs). Reports are generated from model outputs produced by the [`mrPEM`](../mrPEM) R package.
+Reporting and visualisation code for the **Political Feasibility Module (PFM)** used in Integrated Assessment Models (IAMs). Reports are generated from model outputs produced by the [`pfm`](../pfm) and [`mrpfm`](../mrpfm) R packages.
 
 ---
 
@@ -90,7 +90,7 @@ render_report(
 )
 ```
 
-This will run the full mrPEM pipeline (~10–30 min depending on machine), save the result to `data/modelData.RData`, then render the report.
+This will run the full pfm/mrpfm pipeline (~10–30 min depending on machine), save the result to `data/modelData.RData`, then render the report.
 
 ### Example: re-render from cached data (fast)
 

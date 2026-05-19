@@ -56,16 +56,19 @@ panelData         <- modelData$panelData
 cor_df_AP         <- modelData$cor_df_AP
 cor_df_IQ         <- modelData$cor_df_IQ
 cor_df_ctrl       <- modelData$cor_df_ctrl
+cor_df_vdem       <- modelData$cor_df_vdem
 md                <- modelData$md
 md2               <- modelData$md2
 md3               <- modelData$md3
 md4               <- modelData$md4
+md5               <- modelData$md5
+md6               <- modelData$md6
 future_mag        <- modelData$future_mag
 future_df_bulk    <- modelData$future_df_bulk
 future_df_diffuse <- modelData$future_df_diffuse
 
 diag_results <- diagnoseModelResults(
-  workflows = list(md = md, md2 = md2, md3 = md3, md4 = md4)
+  workflows = list(md = md, md2 = md2, md3 = md3, md4 = md4, md5 = md5, md6 = md6)
 )
 ```
 
@@ -82,29 +85,43 @@ Four model variants were estimated:
 
 ```{r table-variants, echo=FALSE}
 table_data <- data.frame(
-  Variant = c("**md**", "**md2**", "**md3**", "**md4**"),
+  Variant = c("**md**", "**md2**", "**md3**", "**md4**", "**md5**", "**md6**"),
   `Actor Power drivers` = c(
     "Full set (VRE share, Electrification, Coal, Oil/Gas, Fossil in Industry)",
     "Actor Power Index composite",
     "Actor Power Index composite",
+    "Actor Power Index composite",
+    "Actor Power Index composite",
     "Actor Power Index composite"
+  ),
+  `IQ source` = c(
+    "WGI: Government Effectiveness",
+    "WGI: Government Effectiveness",
+    "WGI: Government Effectiveness",
+    "WGI: Government Effectiveness",
+    "V-Dem: Rule of Law + Vertical Accountability",
+    "WGI + V-Dem: Gov. Effectiveness + Rule of Law (VDem)"
   ),
   `Region Fixed effects` = c(
     "clustered regions (EU+, OECD+, other)",
     "clustered regions (EU+, OECD+, other)",
     "54-region mapping",
+    "clustered regions (EU+, OECD+, other)",
+    "clustered regions (EU+, OECD+, other)",
     "clustered regions (EU+, OECD+, other)"
   ),
-  `Lagged ECP` = c("NO", "NO", "NO", "YES"),
+  `Lagged ECP` = c("NO", "NO", "NO", "YES", "NO", "NO"),
   check.names = FALSE
 )
 
 kable(table_data, escape = FALSE) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE) %>%
-  column_spec(1, width = "10%") %>%
-  column_spec(2, width = "40%") %>%
-  column_spec(3, width = "40%") %>%
-  column_spec(4, width = "10%")
+  column_spec(1, width = "8%") %>%
+  column_spec(2, width = "32%") %>%
+  column_spec(3, width = "32%") %>%
+  column_spec(4, width = "20%") %>%
+  column_spec(5, width = "8%") %>%
+  row_spec(5:6, background = "#f0fff0")
 ```
 
 **Top-line findings:**
@@ -154,7 +171,9 @@ ggplot(nodes, aes(x, y)) +
 var_df <- data.frame(
   Group = c(
     rep("Actor Power (AP)", 5),
-    rep("Institutional Quality (IQ)", 1),
+    rep("IQ — WGI (md1–md4)", 1),
+    rep("IQ — V-Dem (md5)", 2),
+    rep("IQ — Combined (md6)", 2),
     rep("Controls", 2),
     rep("Fixed Effects / Trend", 2)
   ),
@@ -162,12 +181,16 @@ var_df <- data.frame(
     "VRE Share", "Electrification", "Coal Primary Energy Share",
     "Oil/Gas Primary Energy Share", "Fossil Share in Industry",
     "Government Effectiveness",
+    "Rule of Law (VDem)", "Vertical Accountability (VDem)",
+    "Government Effectiveness", "Rule of Law (VDem)",
     "GDP per Capita", "Population",
     "Region FE (EU / OECD+ / other)", "Time Trend"
   ),
   Role = c(
     rep("Proxy for fossil-fuel incumbents' resistance", 5),
-    rep("State capacity & democratic accountability", 1),
+    "State capacity — WGI source",
+    "Rule of law quality — V-Dem source", "Electoral accountability — V-Dem source",
+    "State capacity — WGI", "Rule of law quality — V-Dem",
     rep("Economic & geographic controls", 2),
     "Captures unobserved regional heterogeneity", "Secular trend in adoption/stringency"
   )
@@ -233,10 +256,10 @@ cat(
 )
 ```
 
-## Institutional Quality Drivers
+## Institutional Quality Drivers (WGI)
 
 ```{r cor-iq, echo=FALSE}
-kableCorrelationMatrix(cor_df_IQ, caption = "Institutional Quality Correlation Matrix",
+kableCorrelationMatrix(cor_df_IQ, caption = "Institutional Quality Correlation Matrix (WGI)",
   show = "lower", percentile = 0.85)
 ```
 
@@ -252,6 +275,36 @@ cat(
   "Select a small subset (e.g. Government Effectiveness, Voice & Accountability,",
   "Political Stability) and verify VIF < 10 after model fitting."
 )
+```
+
+## Institutional Quality Drivers (V-Dem)
+
+```{r cor-vdem, echo=FALSE}
+kableCorrelationMatrix(cor_df_vdem,
+  caption = "Institutional Quality Correlation Matrix — WGI vs V-Dem",
+  show = "lower", percentile = 0.85)
+```
+
+```{r cor-vdem-note, echo=FALSE, results='asis'}
+vdem_cols <- c("Rule of Law (VDem)", "Vertical Accountability (VDem)",
+               "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)")
+vdem_present <- intersect(vdem_cols, colnames(cor_df_vdem))
+if (length(vdem_present) >= 2) {
+  cor_vdem_mat <- as.matrix(cor_df_vdem[cor_df_vdem$Driver %in% vdem_cols, vdem_present])
+  diag(cor_vdem_mat) <- NA
+  mean_vdem <- round(mean(abs(cor_vdem_mat), na.rm = TRUE), 2)
+  max_vdem  <- round(max(abs(cor_vdem_mat), na.rm = TRUE), 2)
+  cat(
+    "> **V-Dem internal correlation:** The four V-Dem indicators are correlated",
+    "(mean |r| =", mean_vdem, ", max |r| =", max_vdem, ").",
+    "**md5** uses Rule of Law (VDem) + Vertical Accountability (VDem) as IQ drivers.",
+    "**md6** cross-tests Government Effectiveness (WGI) alongside Rule of Law (VDem).",
+    "Cross-source pairs near the diagonal of this matrix reveal whether WGI and V-Dem",
+    "measure the same construct or capture complementary dimensions."
+  )
+} else {
+  cat("> V-Dem indicators not found in panel data. Ensure V-Dem source data is installed.")
+}
 ```
 
 ## Control Variables
@@ -303,10 +356,12 @@ wfs <- list(
   list(wf = md,  name = "md (full AP)"),
   list(wf = md2, name = "md2 (API only)"),
   list(wf = md3, name = "md3 (REMIND FE)"),
-  list(wf = md4, name = "md4 (Lagged ECP)")
+  list(wf = md4, name = "md4 (Lagged ECP)"),
+  list(wf = md5, name = "md5 (V-Dem IQ)"),
+  list(wf = md6, name = "md6 (WGI+VDem IQ)")
 )
 
-grid <- expand.grid(wf_idx = 1:4, sector = c("Bulk", "Diffuse"),
+grid <- expand.grid(wf_idx = 1:6, sector = c("Bulk", "Diffuse"),
   stage = c("adoption", "stringency"), stringsAsFactors = FALSE)
 grid$stage_order  <- ifelse(grid$stage == "adoption", 1, 2)
 grid$sector_order <- ifelse(grid$sector == "Bulk", 1, 2)
@@ -340,7 +395,9 @@ wf_meta <- list(
   "md"  = "md: Results with Full AP Drivers",
   "md2" = "md2: Results with API Only",
   "md3" = "md3: Results with REMIND Region FE",
-  "md4" = "md4: Results with Lagged ECP in Stringency"
+  "md4" = "md4: Results with Lagged ECP in Stringency",
+  "md5" = "md5: V-Dem IQ (Rule of Law + Vertical Accountability)",
+  "md6" = "md6: Combined WGI + V-Dem IQ"
 )
 
 for (wfid in names(wf_meta)) {

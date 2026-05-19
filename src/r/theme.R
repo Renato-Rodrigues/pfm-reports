@@ -31,12 +31,13 @@ col_bad  <- "#e74c3c"
 
 # Coefficient group colours (used in forest plots)
 col_group <- c(
-  "Actor Power"          = "#e74c3c",
-  "Institutional Quality" = "#2ecc71",
-  "Interaction"          = "#f1c40f",
-  "Controls"             = "#3498db",
-  "Region Fixed Effects" = "#9b59b6",
-  "Time Trend"           = "#34495e"
+  "Actor Power"                  = "#e74c3c",
+  "Institutional Quality"        = "#2ecc71",
+  "Institutional Quality (VDem)" = "#27ae60",
+  "Interaction"                  = "#f1c40f",
+  "Controls"                     = "#3498db",
+  "Region Fixed Effects"         = "#9b59b6",
+  "Time Trend"                   = "#34495e"
 )
 
 # Static driver lists (used in correlation analysis and group classification)
@@ -46,11 +47,21 @@ ext_actorPowerDrivers <- c(
   "Fossil share in Industry"
 )
 
+# WGI governance indicators
 ext_instQualityDrivers <- c(
   "Government Effectiveness", "Control of Corruption",
   "Voice and Accountability", "Political Stability",
   "Regulatory Quality", "Rule of Law"
 )
+
+# V-Dem governance indicators (alternative IQ source)
+ext_vdemDrivers <- c(
+  "Rule of Law (VDem)", "Vertical Accountability (VDem)",
+  "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"
+)
+
+# Combined WGI + V-Dem (used in cross-source correlation and combined model variants)
+ext_instQualityDrivers_all <- c(ext_instQualityDrivers, ext_vdemDrivers)
 
 ext_controlDrivers <- c(
   "Population", "GDP per Capita", "Land Area",
