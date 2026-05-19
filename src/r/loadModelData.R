@@ -47,9 +47,9 @@ loadModelData <- function(params) {
     "Coal primary energy share", "Oil/Gas primary energy share",
     "Fossil share in Industry"
   )
-  instQualityDrivers          <- c("Government Effectiveness")
+  instQualityDrivers          <- c("Government Effectiveness (WGI)")
   instQualityDrivers_vdem     <- c("Rule of Law (VDem)", "Vertical Accountability (VDem)")
-  instQualityDrivers_combined <- c("Government Effectiveness", "Rule of Law (VDem)")
+  instQualityDrivers_combined <- c("Government Effectiveness (WGI)", "Rule of Law (VDem)")
   controlDrivers              <- c("GDP per Capita", "Population")
 
   # --- Model selection workflows ---
@@ -105,7 +105,7 @@ loadModelData <- function(params) {
     regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
   )
 
-  # Combined WGI + V-Dem: Government Effectiveness + Rule of Law (VDem)
+  # Combined WGI + V-Dem: Government Effectiveness (WGI) + Rule of Law (VDem)
   md6 <- modelSelectionWorkflow(
     panelData = panelData,
     outputRegionMappingFile = "regionmapping_54.csv",

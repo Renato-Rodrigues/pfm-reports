@@ -180,9 +180,9 @@ var_df <- data.frame(
   Variable = c(
     "VRE Share", "Electrification", "Coal Primary Energy Share",
     "Oil/Gas Primary Energy Share", "Fossil Share in Industry",
-    "Government Effectiveness",
+    "Government Effectiveness (WGI)",
     "Rule of Law (VDem)", "Vertical Accountability (VDem)",
-    "Government Effectiveness", "Rule of Law (VDem)",
+    "Government Effectiveness (WGI)", "Rule of Law (VDem)",
     "GDP per Capita", "Population",
     "Region FE (EU / OECD+ / other)", "Time Trend"
   ),
@@ -272,8 +272,8 @@ cat(
   "> **Critical finding:** The World Governance Indicators are highly inter-correlated",
   "(mean |r| =", mean_r, ", max |r| =", max_r, ").",
   "Using more than two simultaneously risks severe multicollinearity.",
-  "Select a small subset (e.g. Government Effectiveness, Voice & Accountability,",
-  "Political Stability) and verify VIF < 10 after model fitting."
+  "Select a small subset (e.g. Government Effectiveness (WGI), Voice & Accountability (WGI),",
+  "Political Stability (WGI)) and verify VIF < 10 after model fitting."
 )
 ```
 
