@@ -26,6 +26,7 @@ library(rprojroot)
 
 render_report <- function(
     modelDataFile = "data/modelData.RData",
+    modelDir      = "models",
     cacheDir      = "",
     gdxPath       = "",
     outputFile    = "output/IAM_PFM_report.html",
@@ -38,6 +39,7 @@ render_report <- function(
   params <- list(
     modelData     = NULL,
     modelDataFile = file.path(root, modelDataFile),
+    modelDir      = file.path(root, modelDir),
     cacheDir      = cacheDir,
     gdxPath       = gdxPath,
     assetDir      = file.path(root, assetDir)
@@ -60,8 +62,9 @@ render_report <- function(
 # Run immediately when sourced (edit params here or call render_report() with args)
 render_report(
   modelDataFile = "data/modelData.RData",
-  cacheDir      = "",   # <-- fill in your madrat cache path if recomputing
-  gdxPath       = "",   # <-- fill in path to fulldata.gdx for projections
+  modelDir      = "models",  # <-- folder where individual .rds model files are saved
+  cacheDir      = "",        # <-- fill in your madrat cache path if recomputing
+  gdxPath       = "",        # <-- fill in path to fulldata.gdx for projections
   outputFile    = "output/IAM_PFM_report.html",
   assetDir      = "output/IAM_PFM_report"
 )

@@ -6,6 +6,7 @@ date: "`r Sys.Date()`"
 params:
   modelData:     NULL
   modelDataFile: "data/modelData.RData"
+  modelDir:      "models"
   cacheDir:      ""
   gdxPath:       ""
   assetDir:      "output/IAM_PFM_report"

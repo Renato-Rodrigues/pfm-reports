@@ -51,6 +51,7 @@ cat("--- Parameters ---\n")
 cat("(Press Enter to accept the default shown in brackets)\n\n")
 
 model_data_file <- prompt_path("modelDataFile", "data/modelData.RData")
+model_dir       <- prompt_path("modelDir (PFM model store — where .rds files are saved)", "models")
 cache_dir       <- prompt_path("cacheDir (madrat cache, leave blank to skip)", "")
 gdx_path        <- prompt_path("gdxPath (fulldata.gdx, leave blank to skip projections)", "")
 output_file     <- prompt_path("outputFile", sprintf("output/%s_report.html", gsub("-", "_", chosen)))
@@ -66,6 +67,7 @@ local({
   source(report_run, local = TRUE)
   render_report(
     modelDataFile = model_data_file,
+    modelDir      = model_dir,
     cacheDir      = cache_dir,
     gdxPath       = gdx_path,
     outputFile    = output_file,

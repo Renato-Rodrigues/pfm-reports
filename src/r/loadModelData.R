@@ -1,23 +1,35 @@
 library(pfm)
 
+# Null-coalescing helper (base R has no %||% before 4.4)
+`%||%` <- function(x, y) if (!is.null(x) && nchar(as.character(x)) > 0) x else y
+
 #' Load or compute model data for IAM-PFM reports
 #'
 #' Checks whether a cached modelData file exists. If it does, loads it. If not,
-#' runs the full mrPEM pipeline (panel data, correlation matrices, model
+#' runs the full pfm pipeline (panel data, correlation matrices, model
 #' selection workflows, scenario projections) and saves the result.
 #'
 #' @param params A list with the following named elements:
 #'   \describe{
 #'     \item{modelDataFile}{Path to the cached .RData file. Default: "data/modelData.RData"}
+#'     \item{modelDir}{Directory for per-model .rds files (PFM model store).
+#'       Default: "models". Sets pfm.modelDir option so models are cached to disk
+#'       and reloaded on subsequent runs with the same formula + data.}
 #'     \item{cacheDir}{madrat cache folder path. Required when recomputing.}
 #'     \item{gdxPath}{Path to fulldata.gdx for scenario projections. Optional.}
 #'   }
 #'
 #' @return A named list with elements: panelData, cor_df_AP, cor_df_IQ,
-#'   cor_df_ctrl, md, md2, md3, md4, future_mag, future_df_bulk,
-#'   future_df_diffuse.
+#'   cor_df_vdem, cor_df_ctrl, md, md2, md3, md4, md5, md6,
+#'   future_mag, future_df_bulk, future_df_diffuse.
 loadModelData <- function(params) {
   modelDataFile <- params$modelDataFile %||% "data/modelData.RData"
+
+  # Set pfm.modelDir unconditionally so loadPFMModel() / listPFMModels() work
+  # regardless of whether we load from the modelData cache or recompute.
+  modelDir <- params$modelDir %||% "models"
+  options(pfm.modelDir = modelDir)
+  message("PFM model store: ", normalizePath(modelDir, mustWork = FALSE))
 
   if (file.exists(modelDataFile)) {
     load(modelDataFile)
@@ -52,69 +64,59 @@ loadModelData <- function(params) {
   instQualityDrivers_combined <- c("Government Effectiveness (WGI)", "Rule of Law (VDem)")
   controlDrivers              <- c("GDP per Capita", "Population")
 
+  # Common workflow arguments shared across all six model variants
+  .wfArgs <- function(...) {
+    c(
+      list(
+        panelData               = panelData,
+        outputRegionMappingFile = "regionmapping_54.csv",
+        actorPowerIndex         = "Actor Power Index",
+        controlDrivers          = controlDrivers,
+        regionMappingFixedEffects = "regionmapping_EU_OECDp.csv",
+        modelDir                = modelDir
+      ),
+      list(...)
+    )
+  }
+
   # --- Model selection workflows ---
-  md <- modelSelectionWorkflow(
-    panelData = panelData,
-    outputRegionMappingFile = "regionmapping_54.csv",
-    actorPowerDrivers = actorPowerDrivers,
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = instQualityDrivers,
-    controlDrivers = controlDrivers,
-    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
-  )
+  # md: full AP drivers (individual VRE/coal/etc.) + WGI IQ
+  md <- do.call(modelSelectionWorkflow, .wfArgs(
+    actorPowerDrivers  = actorPowerDrivers,
+    instQualityDrivers = instQualityDrivers
+  ))
 
-  md2 <- modelSelectionWorkflow(
-    panelData = panelData,
-    outputRegionMappingFile = "regionmapping_54.csv",
-    actorPowerDrivers = NULL,
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = instQualityDrivers,
-    controlDrivers = controlDrivers,
-    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
-  )
+  # md2: Actor Power Index composite + WGI IQ (recommended for projection)
+  md2 <- do.call(modelSelectionWorkflow, .wfArgs(
+    actorPowerDrivers  = NULL,
+    instQualityDrivers = instQualityDrivers
+  ))
 
-  md3 <- modelSelectionWorkflow(
-    panelData = panelData,
-    outputRegionMappingFile = "regionmapping_54.csv",
-    actorPowerDrivers = NULL,
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = instQualityDrivers,
-    controlDrivers = controlDrivers,
+  # md3: API + WGI IQ + 54-region fixed effects
+  md3 <- do.call(modelSelectionWorkflow, .wfArgs(
+    actorPowerDrivers         = NULL,
+    instQualityDrivers        = instQualityDrivers,
     regionMappingFixedEffects = "regionmapping_54.csv"
-  )
+  ))
 
-  md4 <- modelSelectionWorkflow(
-    panelData = panelData,
-    outputRegionMappingFile = "regionmapping_54.csv",
-    actorPowerDrivers = NULL,
-    actorPowerIndex = "Actor Power Index",
+  # md4: API + WGI IQ + lagged ECP in stringency
+  md4 <- do.call(modelSelectionWorkflow, .wfArgs(
+    actorPowerDrivers  = NULL,
     instQualityDrivers = instQualityDrivers,
-    controlDrivers = controlDrivers,
-    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv",
-    includeLaggedECP = TRUE
-  )
+    includeLaggedECP   = TRUE
+  ))
 
-  # V-Dem alternative IQ: Rule of Law + Vertical Accountability
-  md5 <- modelSelectionWorkflow(
-    panelData = panelData,
-    outputRegionMappingFile = "regionmapping_54.csv",
-    actorPowerDrivers = NULL,
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = instQualityDrivers_vdem,
-    controlDrivers = controlDrivers,
-    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
-  )
+  # md5: API + V-Dem IQ (Rule of Law + Vertical Accountability)
+  md5 <- do.call(modelSelectionWorkflow, .wfArgs(
+    actorPowerDrivers  = NULL,
+    instQualityDrivers = instQualityDrivers_vdem
+  ))
 
-  # Combined WGI + V-Dem: Government Effectiveness (WGI) + Rule of Law (VDem)
-  md6 <- modelSelectionWorkflow(
-    panelData = panelData,
-    outputRegionMappingFile = "regionmapping_54.csv",
-    actorPowerDrivers = NULL,
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = instQualityDrivers_combined,
-    controlDrivers = controlDrivers,
-    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
-  )
+  # md6: API + combined WGI + V-Dem IQ
+  md6 <- do.call(modelSelectionWorkflow, .wfArgs(
+    actorPowerDrivers  = NULL,
+    instQualityDrivers = instQualityDrivers_combined
+  ))
 
   # --- Scenario projections ---
   gdx_path <- params$gdxPath %||% ""
@@ -164,6 +166,3 @@ loadModelData <- function(params) {
 
   modelData
 }
-
-# Null-coalescing helper (base R has no %||% before 4.4)
-`%||%` <- function(x, y) if (!is.null(x) && nchar(as.character(x)) > 0) x else y
