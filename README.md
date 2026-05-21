@@ -1,144 +1,61 @@
-# PFM Reports
+# PFM Reports Tutorial
 
-Reporting and visualisation code for the **Political Feasibility Module (PFM)** used in Integrated Assessment Models (IAMs). Reports are generated from model outputs produced by the [`pfm`](../pfm) and [`mrpfm`](../mrpfm) R packages.
-
----
-
-## Repository structure
-
-```
-pfm-reports/
-├── data/                              # gitignored — model output files from mrPEM
-│   └── modelData.RData                #   cached pipeline result (auto-generated)
-├── output/                            # gitignored — rendered reports and assets
-│   ├── IAM_PFM_report.html
-│   └── IAM_PFM_report/
-│       └── plots/
-├── reports/
-│   └── model-diagnostics/             # IAM-PFM econometric diagnostics report
-│       ├── IAM_PFM_report.Rmd         #   report document
-│       ├── run.R                      #   report-specific render script
-│       └── R/
-│           ├── forestPlot.R           #   coefficient forest plot helper
-│           └── modelHelpers.R         #   model extraction helpers
-├── src/
-│   └── r/                             # shared R helpers (used across reports)
-│       ├── loadModelData.R            #   loads / computes the modelData list
-│       ├── theme.R                    #   ggplot2 theme, colours, driver lists
-│       └── kableCorrelationMatrix.R   #   styled correlation table helper
-├── run.R                              # interactive CLI — build any report
-└── CONTEXT.md                         # domain glossary
-```
+Welcome to the `pfm-reports` directory. This folder is dedicated to **R Markdown (.Rmd)** documents that perform deep analytical evaluations, progressive testing, and generate reproducible, shareable HTML/PDF reports of the Political Feasibility Module (PFM) models.
 
 ---
 
-## Quickstart
+## 📚 Available Reports
 
-### Build a report interactively (recommended)
+### 1. `model-selection.Rmd`
+**What it is for:** 
+This report is a deep-dive into the econometric assumptions behind the PFM Hurdle Models (Logit Adoption & Gamma Stringency). It tests 6 progressive model specifications:
+1. **Baseline**: Single `Actor Power Index`
+2. **Split Variables**: Evaluates asymmetric lobbying by separating Innovators and Incumbents
+3. **Path Dependency**: Tests institutional inertia by adding lagged adoption/stringency
+4. **Advanced Controls**: Adds macro-structural controls like `Energy Intensity` and `Urban Population Share`
+5. **Non-Linear Dynamics**: Tests if wealth has diminishing returns using `GDP per Capita Sq`
+6. **Heterogeneous Regions**: Tests if Actor Power operates differently across global blocks (EU vs OECD) by interacting power indices with Region Fixed Effects.
 
-Open an R session at the repo root and run:
+**Why use it:** 
+Run this report whenever you update your core `iamHistoricalData` or want to validate the statistical justification for choosing one model structure over another. The report outputs the Akaike Information Criterion (AIC) for every stage and sector across all 6 configurations.
 
-```r
-source("run.R")
+---
+
+## 🚀 How to Run the Reports
+
+R Markdown files combine narrative text with executable R code. To execute the code and generate the final document, you must **"Knit"** or **Render** the file.
+
+### Method A: Using RStudio (Recommended)
+1. Open the `.Rmd` file (e.g., `model-selection.Rmd`) in RStudio.
+2. At the top of the editor window, look for the **"Knit"** button (it has an icon of a ball of yarn).
+3. Click **Knit** (or use the shortcut `Ctrl+Shift+K`).
+4. RStudio will run all the code chunks in the background and generate an `.html` file in this same directory. The file will automatically pop up in a viewer window.
+
+### Method B: Using the R Console
+If you prefer running commands directly in the R console without using the RStudio interface:
+```R
+# Make sure the rmarkdown package is installed
+if (!require(rmarkdown)) install.packages("rmarkdown")
+
+# Render the report
+rmarkdown::render("pfm-reports/reports/model-selection/model-selection.Rmd")
 ```
 
-The script will:
-1. List all available reports.
-2. Ask you to pick one.
-3. Prompt for any required parameters (paths, etc.).
-4. Render the report and save it to `output/`.
-
-### Build a specific report directly
-
-```r
-source("reports/model-diagnostics/run.R")
+### Method C: From the Command Line / Terminal
+You can generate the report directly from your operating system's terminal:
+```bash
+Rscript -e "rmarkdown::render('pfm-reports/reports/model-selection/model-selection.Rmd')"
 ```
 
-This runs `render_report()` with default parameters. Edit the call at the bottom of the file, or call `render_report()` yourself with custom arguments:
+---
 
-```r
-source("reports/model-diagnostics/run.R", local = TRUE)
-render_report(
-  modelDataFile = "data/modelData.RData",
-  cacheDir      = "C:/path/to/madrat/cache",
-  gdxPath       = "C:/path/to/fulldata.gdx",
-  outputFile    = "output/IAM_PFM_report.html",
-  assetDir      = "output/IAM_PFM_report"
+## 📝 Creating New Reports
+If you wish to create a new report in the future (e.g., `PFM_Projection_Analysis.Rmd`), simply place it in this folder. Be sure to configure `madrat` in the setup chunk of your new report to ensure data loading works seamlessly:
+
+```R
+madrat::setConfig(
+  forcecache = TRUE,
+  cachefolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default",
+  mappingfolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/mappings"
 )
 ```
-
----
-
-## Parameters explained
-
-| Parameter | What it is | Required? |
-|---|---|---|
-| `modelDataFile` | Path to the cached `.RData` file. If it does not exist, the full pipeline runs and saves here. | Yes (default: `data/modelData.RData`) |
-| `cacheDir` | madrat cache folder (see mrPEM docs). Only needed the first time, or after clearing the cache. | Only when recomputing |
-| `gdxPath` | Path to `fulldata.gdx` from a REMIND run. Enables the Projection Results section. Leave `""` to skip. | No |
-| `outputFile` | Where to write the rendered HTML. | Yes (has default) |
-| `assetDir` | Folder for plots and other assets saved during rendering. | Yes (has default) |
-
-### Example: first-time run (no cached data)
-
-```r
-source("reports/model-diagnostics/run.R", local = TRUE)
-render_report(
-  modelDataFile = "data/modelData.RData",
-  cacheDir      = "C:/Users/yourname/Desktop/Input Data/remind_inputdata/cache/default",
-  gdxPath       = "C:/Users/yourname/Desktop/Projects/Elevate/code/fulldata.gdx"
-)
-```
-
-This will run the full pfm/mrpfm pipeline (~10–30 min depending on machine), save the result to `data/modelData.RData`, then render the report.
-
-### Example: re-render from cached data (fast)
-
-```r
-source("reports/model-diagnostics/run.R", local = TRUE)
-render_report()  # uses data/modelData.RData if it exists
-```
-
-### Example: pass a pre-loaded object (skip file I/O entirely)
-
-```r
-# Useful during interactive development
-modelData <- loadModelData(list(
-  modelDataFile = "data/modelData.RData",
-  cacheDir      = "",
-  gdxPath       = ""
-))
-
-rmarkdown::render(
-  "reports/model-diagnostics/IAM_PFM_report.Rmd",
-  output_file = "output/IAM_PFM_report.html",
-  params = list(modelData = modelData, assetDir = "output/IAM_PFM_report")
-)
-```
-
----
-
-## Adding a new report
-
-1. Create `reports/<descriptive-name>/` with at minimum:
-   - `<ReportName>.Rmd` — the report document
-   - `run.R` — exposing a `render_report(...)` function (copy from an existing report and adapt)
-   - `R/` — any report-specific helpers
-
-2. The root `run.R` automatically discovers the new report — no registration needed.
-
-3. Add shared helpers (reused across reports) to `src/r/`.
-
-4. Document the new report in this README under a new section.
-
----
-
-## Reports
-
-### model-diagnostics — `IAM_PFM_report`
-
-**What it covers:** Full diagnostic and validation report for the two-stage hurdle model (adoption + stringency) across four model variants (`md`, `md2`, `md3`, `md4`) and two sectors (Bulk, Diffuse).
-
-**Sections:** Model architecture · Correlation analysis · Model fit summary · Coefficient forest plots · Group-level variance partitioning · Pseudo-R² comparison · Issues table · IAM integration notes · Projection results (adoption probability, timelines, spatial maps).
-
-**Output:** `output/IAM_PFM_report.html` + plots in `output/IAM_PFM_report/plots/`.

@@ -38,8 +38,8 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/kableCorrelationMat
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/loadModelData.R"))
 
 # Report-specific helpers
-source("R/forestPlot.R")
-source("R/modelHelpers.R")
+source("../../src/r/forestPlot.R")
+source("../../src/r/modelHelpers.R")
 
 # Asset output folder (plots, etc.)
 plotOutputDir <- file.path(params$assetDir, "plots")

@@ -11,9 +11,9 @@ library(dplyr)
 render_forest_plot <- function(coef_df, title, subtitle) {
   if (nrow(coef_df) == 0) return(NULL)
 
-  ap_vars   <- make.names(c("Actor Power Index", "Incumbent Power", ext_actorPowerDrivers))
+  ap_vars   <- make.names(c("Actor Power Index", "Innovator Power", "Incumbent Power", ext_actorPowerDrivers))
   iq_vars   <- make.names(ext_instQualityDrivers)
-  ctrl_vars <- make.names(c(ext_controlDrivers, "lagged_ecp", "lagged_adoption"))
+  ctrl_vars <- make.names(c("GDP per Capita Sq", ext_controlDrivers, "lagged_ecp", "lagged_adoption"))
 
   p_data <- coef_df %>%
     filter(term != "(Intercept)") %>%
