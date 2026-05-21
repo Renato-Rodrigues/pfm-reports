@@ -8,8 +8,9 @@ library(dplyr)
 #' @param title Plot title string.
 #' @param subtitle Plot subtitle string.
 #' @return A ggplot object, or NULL if coef_df has no rows.
-render_forest_plot <- function(coef_df, title, subtitle) {
+render_forest_plot <- function(coef_df, title, subtitle = NULL) {
   if (nrow(coef_df) == 0) return(NULL)
+  if (!is.null(subtitle) && subtitle == "") subtitle <- NULL
 
   ap_vars   <- make.names(c("Actor Power Index", "Innovator Power", "Incumbent Power", ext_actorPowerDrivers))
   iq_vars   <- make.names(ext_instQualityDrivers)

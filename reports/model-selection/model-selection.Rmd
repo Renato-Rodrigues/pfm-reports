@@ -4,18 +4,32 @@ author: "PFM Modeling Output"
 date: "`r Sys.Date()`"
 html_document:
   toc: true
-  toc_float: true
+  toc_float:
+    collapsed: false
   toc_depth: 3
   theme: flatly
   highlight: tango
   number_sections: true
   code_folding: hide
-  fig_width: 9
-  fig_height: 5
 ---
 
+<style>
+  .main-container {
+    max-width: 95% !important;
+  }
+  .toc-content {
+    padding-left: 0px !important;
+  }
+  .svg-container {
+    margin: auto !important;
+  }
+</style>
+
+
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 8, fig.height = 4)
+
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, dev='svglite',  fig.ext = ".svg", fig.width = 12, fig.height = 8, dpi=100)
+
 library(pfm)
 library(magclass)
 library(ggplot2)
@@ -32,6 +46,62 @@ madrat::setConfig(
 
 options(pfm.modelDir = "../../../models/")
 
+```
+
+
+```{r defining_models, include=FALSE}
+
+# Global Model Configurations
+model_configs <- list(
+  list(
+    name = "Baseline",
+    description = "**What it does:** Uses a single composite Actor Power Index.\n\n**Assumption:** Actor power operates symmetrically (a 1-unit increase in Innovator Power perfectly cancels out a 1-unit increase in Incumbent Power). Institutional quality interacts globally with this net power.",
+    actorPowerDrivers = "Actor Power Index", actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE
+  ),
+  list(
+    name = "Split Variables",
+    description = "**What it does:** Replaces the combined index with discrete components.\n\n**Assumption:** Incumbents and Innovators exert asymmetric power dynamics over policy adoption.",
+    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
+    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE
+  ),
+  list(
+    name = "Advanced Controls",
+    description = "**What it does:** Expands the structural controls.\n\n**Assumption:** Broader macroeconomic and demographic factors drive feasibility.",
+    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
+    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"),
+    includeLagged = FALSE, interactRegionFE = FALSE
+  ),
+  list(
+    name = "Non-Linear Dynamics",
+    description = "**What it does:** Includes a squared term for GDP per Capita.\n\n**Assumption:** The Environmental Kuznets Curve hypothesis applies to pricing adoption.",
+    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
+    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
+    includeLagged = FALSE, interactRegionFE = FALSE
+  ),
+  list(
+    name = "Heterogeneous Regional Effects",
+    description = "**What it does:** Interacts Region Fixed Effects with structural drivers.\n\n**Assumption:** The impact of actor power and institutional quality varies intrinsically by region.",
+    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
+    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
+    includeLagged = FALSE, interactRegionFE = TRUE
+  ),
+  list(
+    name = "Path Dependency",
+    description = "**What it does:** Introduces lagged adoption/price stringency.\n\n**Assumption:** Policy adoption strongly correlates with historical status (inertia).",
+    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
+    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
+    includeLagged = TRUE, interactRegionFE = TRUE
+  )
+)
+
+```
+
+
+```{r loading data, include=FALSE}
+
 # 1. Load Data
 panelData <- panelDataHistorical(
   aggregate = TRUE, y = 2000:2022,
@@ -44,52 +114,76 @@ panelData <- mbind(
   setNames(panelData[, , "GDP per Capita"]^2, "GDP per Capita Sq")
 )
 
-# Helper function to extract AIC
-get_aic <- function(fit) {
-  m <- fit$model
-  if (inherits(m, "logistf")) return(round(-2 * m$loglik["full"] + 2 * length(m$coefficients), 2))
-  return(round(m$aic, 2))
-}
 
-# Helper function to extract McFadden's Pseudo R-squared
-get_pseudo_r2 <- function(fit) {
-  m <- fit$model
-  if (inherits(m, "logistf")) {
-    if(is.null(m$loglik)) return(NA)
-    return(round(1 - (m$loglik["full"] / m$loglik["null"]), 3))
-  }
-  if (!is.null(m$deviance) && !is.null(m$null.deviance)) {
-    return(round(1 - (m$deviance / m$null.deviance), 3))
-  }
-  return(NA)
-}
+```
 
-# Helper function to extract number of significant predictors (p < 0.05)
-get_nsig <- function(fit) {
-  if (is.null(fit$coeftest)) return(0)
-  pvals <- fit$coeftest[, 4] # Pr(>|z|) is the 4th column
-  sum(pvals < 0.05, na.rm = TRUE)
-}
 
-# Global list to track AIC values for the final comparison table
-all_aics <- data.frame(
-  Sector_Stage = character(), 
-  Model = character(), 
-  AIC = numeric(), 
-  PseudoR2 = numeric(), 
-  nSig = numeric(), 
-  stringsAsFactors = FALSE
-)
+```{r auxiliar functions, include=FALSE}
+
+# Global list to track diagnostics for the final comparison table
+all_aics <- data.frame()
 
 add_aic <- function(fit, sector_stage, model_name) {
-  all_aics <<- rbind(all_aics, data.frame(
+  m <- fit$model
+  is_logistf <- inherits(m, "logistf")
+  k <- length(coef(m))
+  
+  # N obs
+  nObs <- if (is_logistf) m$n else nobs(m)
+  
+  # Log-likelihood
+  loglik <- if (is_logistf) as.numeric(m$loglik["full"]) else as.numeric(logLik(m))
+  
+  # ICs
+  aic <- if (is_logistf) -2 * loglik + 2 * k else m$aic
+  bic <- if (is_logistf) -2 * loglik + k * log(nObs) else BIC(m)
+  aicc <- if (!is.na(aic) && nObs > k + 1) aic + (2 * k * (k + 1)) / (nObs - k - 1) else NA
+  hqic <- if (!is.na(loglik) && nObs > 0) -2 * loglik + 2 * k * log(log(nObs)) else NA
+  
+  # Pseudo-R2
+  pseudoR2 <- if (is_logistf) {
+    if (is.null(m$loglik)) NA else round(1 - (m$loglik["full"] / m$loglik["null"]), 3)
+  } else if (!is.null(m$deviance) && !is.null(m$null.deviance)) {
+    round(1 - (m$deviance / m$null.deviance), 3)
+  } else NA
+  
+  # Coef testing
+  pvals <- if (!is.null(fit$coeftest)) fit$coeftest[, 4] else NULL
+  zvals <- if (!is.null(fit$coeftest)) fit$coeftest[, 3] else NULL
+  nSig <- if (!is.null(pvals)) sum(pvals < 0.05, na.rm = TRUE) else 0
+  maxAbsZ <- if (!is.null(zvals)) max(abs(zvals), na.rm = TRUE) else NA
+  highZ <- if (!is.na(maxAbsZ)) maxAbsZ > 15 else NA
+  
+  # Flags
+  converged <- if (is_logistf) !is.null(m$coefficients) && !any(is.na(m$coefficients)) else m$converged
+  kOverN <- k / nObs
+  overfitting <- kOverN > 0.1
+  separation <- highZ # Approximation for separation based on extreme Z
+  
+  # Compile row
+  row_df <- data.frame(
     Sector_Stage = sector_stage,
     Model = model_name,
-    AIC = get_aic(fit),
-    PseudoR2 = get_pseudo_r2(fit),
-    nSig = get_nsig(fit),
+    AIC = round(as.numeric(aic), 1),
+    AICc = round(as.numeric(aicc), 1),
+    BIC = round(as.numeric(bic), 1),
+    HQIC = round(as.numeric(hqic), 1),
+    `Log-lik` = round(as.numeric(loglik), 1),
+    `Pseudo-R2` = as.numeric(pseudoR2),
+    `N obs` = nObs,
+    `N predictors` = k,
+    `N significant` = nSig,
+    `k / N` = round(kOverN, 3),
+    Overfitting = overfitting,
+    Separation = separation,
+    `High-Z` = highZ,
+    `Max |Z|` = round(as.numeric(maxAbsZ), 1),
+    Converged = converged,
+    check.names = FALSE,
     stringsAsFactors = FALSE
-  ))
+  )
+  
+  all_aics <<- rbind(all_aics, row_df)
 }
 
 # Load Shared Helpers for plotting
@@ -104,369 +198,120 @@ plot_forest <- function(fit, title = "Coefficient Forest Plot") {
   
   if(nrow(df) == 0) return(NULL)
   
-  render_forest_plot(df, title = title, subtitle = paste0("AIC: ", get_aic(fit)))
+  render_forest_plot(df, title = title)
 }
 ```
 
 # Introduction
 
-This report details a progressive testing approach to improve the Political Feasibility Module (PFM) two-stage hurdle model. We begin with the standard baseline formulation and add progressive econometric improvements. The metric of success is the **Akaike Information Criterion (AIC)** (lower is better).
+This report details a progressive testing approach to improve the Political Feasibility Module (PFM) two-stage hurdle model. We begin with the standard baseline formulation and add progressive econometric improvements. Success mterics are presented in the Summary and Best Model Choice tab..
+
+
+```{r model-specs, echo=FALSE}
+library(tibble)
+library(purrr)
+
+model_specs <- map_df(model_configs, ~ tibble(
+  Model = .x$name,
+  actorPowerDrivers = paste(.x$actorPowerDrivers, collapse = "<br>"),
+  actorPowerIndex = paste(.x$actorPowerIndex, collapse = "<br>"),
+  instQualityDrivers = paste(.x$instQualityDrivers, collapse = "<br>"),
+  controlDrivers = paste(.x$controlDrivers, collapse = "<br>"),
+  `includeLagged*` = as.character(.x$includeLagged),
+  interactRegionFE = as.character(.x$interactRegionFE)
+))
+
+kable(model_specs, format = "html", escape = FALSE, caption = "Summary of Tested Model Configurations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), full_width = FALSE, font_size = 12) %>%
+  column_spec(1, bold = TRUE)
+
+```
 
 ---
 
 # Models {.tabset}
 
-## Adoption: Diffuse Sector
+```{r dynamic-models, results='asis', echo=FALSE, warning=FALSE, message=FALSE, fig.width=9, fig.height=5}
+sectors <- c("Diffuse", "Bulk")
+stages <- c("Adoption", "Stringency")
 
-### 1.0 Baseline (Combined Index)
-**What it does:** Uses a single composite Actor Power Index.  
-**Assumption:** Actor power operates symmetrically (a 1-unit increase in Innovator Power perfectly cancels out a 1-unit increase in Incumbent Power). Institutional quality interacts globally with this net power.
-```{r}
-res_adop_diff_0 <- estimateAdoptionModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = "Actor Power Index", actorPowerIndex = "Actor Power Index",
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_adop_diff_0, "Adoption: Diffuse", "1.0 Baseline")
-plot_forest(res_adop_diff_0, "Adoption Diffuse - Baseline")
+for (stg in stages) {
+  for (sec in sectors) {
+    cat(sprintf("\n## %s: %s Sector\n\n", stg, sec))
+    
+    for (i in seq_along(model_configs)) {
+      cfg <- model_configs[[i]]
+      
+      cat(sprintf("\n### %s. %s\n\n", i, cfg$name))
+      cat(cfg$description, "\n\n")
+      
+      if (stg == "Adoption") {
+        fit <- estimateAdoptionModel(
+          data = panelData, sector = sec,
+          actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
+          instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
+          includeLaggedAdoption = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE
+        )
+      } else {
+        fit <- estimatePriceStringencyModel(
+          data = panelData, sector = sec,
+          actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
+          instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
+          includeLaggedECP = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE
+        )
+      }
+      
+      # Track AIC
+      stage_label <- paste0(stg, ": ", sec)
+      add_aic(fit, stage_label, paste0(i, ". ", cfg$name))
+      
+      # Plot
+      plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
+      p <- plot_forest(fit, plot_title)
+      
+      if (!is.null(p)) {
+        cat("\n\n")
+        print(p)
+        cat("\n\n")
+      }
+    }
+  }
+}
 ```
 
-### 1.1 Split Variables
-**What it does:** Replaces the combined index with discrete components.  
-**Assumption:** Incumbents and Innovators exert asymmetric power dynamics over policy adoption.
-```{r}
-res_adop_diff_1 <- estimateAdoptionModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_adop_diff_1, "Adoption: Diffuse", "1.1 Split Variables")
-plot_forest(res_adop_diff_1, "Adoption Diffuse - Split Variables")
-```
-
-### 1.2 Path Dependency
-**What it does:** Adds the previous year's policy status as a driver.  
-**Assumption:** Policy adoption is sticky. A region's adoption status last year strongly predicts its status this year.
-```{r}
-res_adop_diff_2 <- estimateAdoptionModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
-  includeLaggedAdoption = TRUE
-)
-add_aic(res_adop_diff_2, "Adoption: Diffuse", "1.2 Path Dependency")
-plot_forest(res_adop_diff_2, "Adoption Diffuse - Path Dependency")
-```
-
-### 1.3 Advanced Controls
-**What it does:** Adds Energy Intensity and Urban Population Share.  
-**Assumption:** Structural factors dictate feasibility beyond pure economic wealth.
-```{r}
-res_adop_diff_3 <- estimateAdoptionModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"), includeLaggedAdoption = TRUE
-)
-add_aic(res_adop_diff_3, "Adoption: Diffuse", "1.3 Advanced Controls")
-plot_forest(res_adop_diff_3, "Adoption Diffuse - Advanced Controls")
-```
-
-### 1.4 Non-Linear Dynamics
-**What it does:** Adds a squared GDP per capita term.  
-**Assumption:** The impact of wealth on adoption has diminishing returns (quadratic effect).
-```{r}
-res_adop_diff_4 <- estimateAdoptionModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"), includeLaggedAdoption = TRUE
-)
-add_aic(res_adop_diff_4, "Adoption: Diffuse", "1.4 Non-Linear Dynamics")
-plot_forest(res_adop_diff_4, "Adoption Diffuse - Non-Linear Dynamics")
-```
-
-### 1.5 Heterogeneous Regional Effects
-**What it does:** Interacts Region Fixed Effects with Actor Power.  
-**Assumption:** Actor Power operates fundamentally differently in the EU vs. OECD vs. Rest of World.
-```{r}
-res_adop_diff_5 <- estimateAdoptionModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
-  includeLaggedAdoption = TRUE, interactRegionFE = TRUE
-)
-add_aic(res_adop_diff_5, "Adoption: Diffuse", "1.5 Region Interactions")
-plot_forest(res_adop_diff_5, "Adoption Diffuse - Region Interactions")
-```
-
-## Adoption: Bulk Sector
-
-### 2.0 Baseline (Combined Index)
-**Assumption:** Standard composite index and core controls.
-```{r}
-res_adop_bulk_0 <- estimateAdoptionModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = "Actor Power Index", actorPowerIndex = "Actor Power Index",
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_adop_bulk_0, "Adoption: Bulk", "2.0 Baseline")
-plot_forest(res_adop_bulk_0, "Adoption Bulk - Baseline")
-```
-
-### 2.1 Split Variables
-**Assumption:** Asymmetric power representation improves the model fit.
-```{r}
-res_adop_bulk_1 <- estimateAdoptionModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_adop_bulk_1, "Adoption: Bulk", "2.1 Split Variables")
-plot_forest(res_adop_bulk_1, "Adoption Bulk - Split Variables")
-```
-
-### 2.2 Path Dependency
-**Assumption:** Last year's pricing regime persists.
-```{r}
-res_adop_bulk_2 <- estimateAdoptionModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
-  includeLaggedAdoption = TRUE
-)
-add_aic(res_adop_bulk_2, "Adoption: Bulk", "2.2 Path Dependency")
-plot_forest(res_adop_bulk_2, "Adoption Bulk - Path Dependency")
-```
-
-### 2.3 Advanced Controls
-**Assumption:** Structural economics explain variance better than GDP alone.
-```{r}
-res_adop_bulk_3 <- estimateAdoptionModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"), includeLaggedAdoption = TRUE
-)
-add_aic(res_adop_bulk_3, "Adoption: Bulk", "2.3 Advanced Controls")
-plot_forest(res_adop_bulk_3, "Adoption Bulk - Advanced Controls")
-```
-
-### 2.4 Non-Linear Dynamics
-**Assumption:** GDP exhibits diminishing returns on bulk power policy adoption.
-```{r}
-res_adop_bulk_4 <- estimateAdoptionModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"), includeLaggedAdoption = TRUE
-)
-add_aic(res_adop_bulk_4, "Adoption: Bulk", "2.4 Non-Linear Dynamics")
-plot_forest(res_adop_bulk_4, "Adoption Bulk - Non-Linear Dynamics")
-```
-
-### 2.5 Heterogeneous Regional Effects
-**Assumption:** EU institutions warp actor power differently than OECD systems.
-```{r}
-res_adop_bulk_5 <- estimateAdoptionModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
-  includeLaggedAdoption = TRUE, interactRegionFE = TRUE
-)
-add_aic(res_adop_bulk_5, "Adoption: Bulk", "2.5 Region Interactions")
-plot_forest(res_adop_bulk_5, "Adoption Bulk - Region Interactions")
-```
-
-## Stringency: Bulk Sector
-
-Estimating the actual Carbon Price via Gamma GLM conditional on adoption.
-
-### 3.0 Baseline (Combined Index)
-```{r}
-res_str_bulk_0 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = "Actor Power Index", actorPowerIndex = "Actor Power Index",
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_str_bulk_0, "Stringency: Bulk", "3.0 Baseline")
-plot_forest(res_str_bulk_0, "Stringency Bulk - Baseline")
-```
-
-### 3.1 Split Variables
-```{r}
-res_str_bulk_1 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_str_bulk_1, "Stringency: Bulk", "3.1 Split Variables")
-plot_forest(res_str_bulk_1, "Stringency Bulk - Split Variables")
-```
-
-### 3.2 Path Dependency
-```{r}
-res_str_bulk_2 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
-  includeLaggedECP = TRUE
-)
-add_aic(res_str_bulk_2, "Stringency: Bulk", "3.2 Path Dependency")
-plot_forest(res_str_bulk_2, "Stringency Bulk - Path Dependency")
-```
-
-### 3.3 Advanced Controls
-```{r}
-res_str_bulk_3 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"), includeLaggedECP = TRUE
-)
-add_aic(res_str_bulk_3, "Stringency: Bulk", "3.3 Advanced Controls")
-plot_forest(res_str_bulk_3, "Stringency Bulk - Advanced Controls")
-```
-
-### 3.4 Non-Linear Dynamics
-```{r}
-res_str_bulk_4 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"), includeLaggedECP = TRUE
-)
-add_aic(res_str_bulk_4, "Stringency: Bulk", "3.4 Non-Linear Dynamics")
-plot_forest(res_str_bulk_4, "Stringency Bulk - Non-Linear Dynamics")
-```
-
-### 3.5 Heterogeneous Regional Effects
-```{r}
-res_str_bulk_5 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Bulk",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
-  includeLaggedECP = TRUE, interactRegionFE = TRUE
-)
-add_aic(res_str_bulk_5, "Stringency: Bulk", "3.5 Region Interactions")
-plot_forest(res_str_bulk_5, "Stringency Bulk - Region Interactions")
-```
-
-## Stringency: Diffuse Sector
-
-The most challenging model to fit cleanly.
-
-### 4.0 Baseline (Combined Index)
-```{r}
-res_str_diff_0 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = "Actor Power Index", actorPowerIndex = "Actor Power Index",
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_str_diff_0, "Stringency: Diffuse", "4.0 Baseline")
-plot_forest(res_str_diff_0, "Stringency Diffuse - Baseline")
-```
-
-### 4.1 Split Variables
-```{r}
-res_str_diff_1 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita"
-)
-add_aic(res_str_diff_1, "Stringency: Diffuse", "4.1 Split Variables")
-plot_forest(res_str_diff_1, "Stringency Diffuse - Split Variables")
-```
-
-### 4.2 Path Dependency
-```{r}
-res_str_diff_2 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
-  includeLaggedECP = TRUE
-)
-add_aic(res_str_diff_2, "Stringency: Diffuse", "4.2 Path Dependency")
-plot_forest(res_str_diff_2, "Stringency Diffuse - Path Dependency")
-```
-
-### 4.3 Advanced Controls
-```{r}
-res_str_diff_3 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"), includeLaggedECP = TRUE
-)
-add_aic(res_str_diff_3, "Stringency: Diffuse", "4.3 Advanced Controls")
-plot_forest(res_str_diff_3, "Stringency Diffuse - Advanced Controls")
-```
-
-### 4.4 Non-Linear Dynamics
-```{r}
-res_str_diff_4 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"), includeLaggedECP = TRUE
-)
-add_aic(res_str_diff_4, "Stringency: Diffuse", "4.4 Non-Linear Dynamics")
-plot_forest(res_str_diff_4, "Stringency Diffuse - Non-Linear Dynamics")
-```
-
-### 4.5 Heterogeneous Regional Effects
-```{r}
-res_str_diff_5 <- estimatePriceStringencyModel(
-  data = panelData, sector = "Diffuse",
-  actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-  instQualityDrivers = "Government Effectiveness (WGI)", 
-  controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
-  includeLaggedECP = TRUE, interactRegionFE = TRUE
-)
-add_aic(res_str_diff_5, "Stringency: Diffuse", "4.5 Region Interactions")
-plot_forest(res_str_diff_5, "Stringency Diffuse - Region Interactions")
-```
-
----
-
-# Summary and Best Model Choice
+## Summary and Best Model Choice
 
 By stepping through these configurations, we systematically evaluate the structural foundations of the Hurdle Model.
 
 ```{r summary-table, echo=FALSE, results='asis'}
-# Split the AIC data into separate tables for each stage/sector combination
+# Split the data into separate tables for each stage/sector combination
 for (sec_stg in unique(all_aics$Sector_Stage)) {
   sub_df <- all_aics %>%
     filter(Sector_Stage == sec_stg) %>%
     arrange(Model) %>%
-    select(Model, AIC, PseudoR2, nSig)
+    select(-Sector_Stage) # Drop redundant column
     
-  # Identify best values
+  # Identify best values for styling
   best_aic  <- min(sub_df$AIC, na.rm = TRUE)
-  best_r2   <- max(sub_df$PseudoR2, na.rm = TRUE)
-  best_nsig <- max(sub_df$nSig, na.rm = TRUE)
+  best_aicc <- min(sub_df$AICc, na.rm = TRUE)
+  best_bic  <- min(sub_df$BIC, na.rm = TRUE)
+  best_hqic <- min(sub_df$HQIC, na.rm = TRUE)
+  best_ll   <- max(sub_df$`Log-lik`, na.rm = TRUE)
+  best_r2   <- max(sub_df$`Pseudo-R2`, na.rm = TRUE)
+  best_nsig <- max(sub_df$`N significant`, na.rm = TRUE)
     
-  # Build base table
-  k <- kable(sub_df, format = "html", caption = paste("Model Comparison:", sec_stg)) %>%
-    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE)
+  # Build base table with scroll_box for wide columns
+  k <- kable(sub_df, format = "html", caption = paste("Model Diagnostics:", sec_stg)) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
     
-  # Apply conditional highlighting per column
+  # Apply conditional highlighting for the most important metric columns
   k <- k %>%
-    column_spec(2, 
-      background = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), "#e8f8f5", "white"),
-      color = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), "#117a65", "black"),
-      bold = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), TRUE, FALSE)) %>%
-    column_spec(3, 
-      background = ifelse(sub_df$PseudoR2 == best_r2 & !is.na(sub_df$PseudoR2), "#e8f8f5", "white"),
-      color = ifelse(sub_df$PseudoR2 == best_r2 & !is.na(sub_df$PseudoR2), "#117a65", "black"),
-      bold = ifelse(sub_df$PseudoR2 == best_r2 & !is.na(sub_df$PseudoR2), TRUE, FALSE)) %>%
-    column_spec(4, 
-      background = ifelse(sub_df$nSig == best_nsig & !is.na(sub_df$nSig), "#e8f8f5", "white"),
-      color = ifelse(sub_df$nSig == best_nsig & !is.na(sub_df$nSig), "#117a65", "black"),
-      bold = ifelse(sub_df$nSig == best_nsig & !is.na(sub_df$nSig), TRUE, FALSE))
+    column_spec(2, background = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), "#e8f8f5", "white"), color = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), "#117a65", "black"), bold = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), TRUE, FALSE)) %>%
+    column_spec(3, background = ifelse(sub_df$AICc == best_aicc & !is.na(sub_df$AICc), "#e8f8f5", "white"), color = ifelse(sub_df$AICc == best_aicc & !is.na(sub_df$AICc), "#117a65", "black"), bold = ifelse(sub_df$AICc == best_aicc & !is.na(sub_df$AICc), TRUE, FALSE)) %>%
+    column_spec(4, background = ifelse(sub_df$BIC == best_bic & !is.na(sub_df$BIC), "#e8f8f5", "white"), color = ifelse(sub_df$BIC == best_bic & !is.na(sub_df$BIC), "#117a65", "black"), bold = ifelse(sub_df$BIC == best_bic & !is.na(sub_df$BIC), TRUE, FALSE)) %>%
+    column_spec(5, background = ifelse(sub_df$HQIC == best_hqic & !is.na(sub_df$HQIC), "#e8f8f5", "white"), color = ifelse(sub_df$HQIC == best_hqic & !is.na(sub_df$HQIC), "#117a65", "black"), bold = ifelse(sub_df$HQIC == best_hqic & !is.na(sub_df$HQIC), TRUE, FALSE)) %>%
+    column_spec(7, background = ifelse(sub_df$`Pseudo-R2` == best_r2 & !is.na(sub_df$`Pseudo-R2`), "#e8f8f5", "white"), color = ifelse(sub_df$`Pseudo-R2` == best_r2 & !is.na(sub_df$`Pseudo-R2`), "#117a65", "black"), bold = ifelse(sub_df$`Pseudo-R2` == best_r2 & !is.na(sub_df$`Pseudo-R2`), TRUE, FALSE)) %>%
+    scroll_box(width = "100%")
       
   # Render the table
   cat("\n### ", sec_stg, "\n\n")
@@ -475,10 +320,10 @@ for (sec_stg in unique(all_aics$Sector_Stage)) {
 }
 ```
 
-## Key Conclusions
+### Key Conclusions
 1. **Split Variables** better capture the asymmetric lobbying pressures of Incumbents vs. Innovators.
-2. **Path Dependency** (`lagged_adoption` and `lagged_ecp`) usually provides the single largest AIC drop, proving that political inertia is the primary driver of policy status.
-3. **Advanced Controls** (Energy Intensity, Urban Share) consistently reveal cleaner estimates by controlling for macro-structural confounders.
-4. **Heterogeneous Region Effects** (`interactRegionFE`) show that Actor Power operates fundamentally differently inside the EU compared to the OECD or the rest of the world.
+2. **Advanced Controls** (Energy Intensity, Urban Share) consistently reveal cleaner estimates by controlling for macro-structural confounders.
+3. **Heterogeneous Region Effects** (`interactRegionFE`) show that Actor Power operates fundamentally differently inside the EU compared to the OECD or the rest of the world.
+4. **Path Dependency** (`lagged_adoption` and `lagged_ecp`) provides a massive AIC drop, proving that political inertia is the single most powerful predictor of policy status.
 
-The **Fully Advanced Model (Models X.5)** drastically outperforms the Baseline and represents the strongest overall specification for both Adoption and Stringency.
+The **Fully Advanced Model (Model 6: Path Dependency)** drastically outperforms the Baseline and represents the strongest overall specification for both Adoption and Stringency.
