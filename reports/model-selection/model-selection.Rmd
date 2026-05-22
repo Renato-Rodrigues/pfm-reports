@@ -56,46 +56,68 @@ model_configs <- list(
   list(
     name = "Baseline",
     description = "**What it does:** Uses a single composite Actor Power Index.\n\n**Assumption:** Actor power operates symmetrically (a 1-unit increase in Innovator Power perfectly cancels out a 1-unit increase in Incumbent Power). Institutional quality interacts globally with this net power.",
-    actorPowerDrivers = "Actor Power Index", actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
     includeLagged = FALSE, interactRegionFE = FALSE
   ),
   list(
     name = "Split Variables",
     description = "**What it does:** Replaces the combined index with discrete components.\n\n**Assumption:** Incumbents and Innovators exert asymmetric power dynamics over policy adoption.",
-    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = "GDP per Capita",
+    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), 
+    actorPowerIndex = c("Innovator Power", "Incumbent Power"),
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
     includeLagged = FALSE, interactRegionFE = FALSE
   ),
   list(
     name = "Advanced Controls",
     description = "**What it does:** Expands the structural controls.\n\n**Assumption:** Broader macroeconomic and demographic factors drive feasibility.",
-    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"),
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"),
     includeLagged = FALSE, interactRegionFE = FALSE
   ),
   list(
     name = "Non-Linear Dynamics",
     description = "**What it does:** Includes a squared term for GDP per Capita.\n\n**Assumption:** The Environmental Kuznets Curve hypothesis applies to pricing adoption.",
-    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = c("GDP per Capita Sq"),
     includeLagged = FALSE, interactRegionFE = FALSE
   ),
   list(
     name = "Heterogeneous Regional Effects",
     description = "**What it does:** Interacts Region Fixed Effects with structural drivers.\n\n**Assumption:** The impact of actor power and institutional quality varies intrinsically by region.",
-    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
     includeLagged = FALSE, interactRegionFE = TRUE
   ),
   list(
     name = "Path Dependency",
     description = "**What it does:** Introduces lagged adoption/price stringency.\n\n**Assumption:** Policy adoption strongly correlates with historical status (inertia).",
-    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-    instQualityDrivers = "Government Effectiveness (WGI)", controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "GDP per Capita Sq"),
-    includeLagged = TRUE, interactRegionFE = TRUE
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
+    includeLagged = TRUE, interactRegionFE = FALSE
+  ),
+  list(
+    name = "Institutional Quality",
+    description = "**What it does:** Introduces VDem institutional quality indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
+    controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE
   )
 )
+
 
 ```
 
