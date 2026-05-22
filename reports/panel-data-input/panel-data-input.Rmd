@@ -162,11 +162,13 @@ if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
 
 ```{r load_data, cache=TRUE, include=FALSE}
 # --- Data Loading ---
-message("Loading historical panel data (aggregated)...")
-h_agg <- panelDataHistorical(aggregate = TRUE, outputRegionMappingFile = "regionmapping_54.csv")
+message("Loading historical panel data (raw)...")
+h_agg_raw <- panelDataHistorical(aggregate = TRUE, outputRegionMappingFile = "regionmapping_54.csv", movingAverage = NULL)
+h_cnt_raw <- panelDataHistorical(aggregate = FALSE, movingAverage = NULL)
 
-message("Loading historical panel data (country-level)...")
-h_cnt <- panelDataHistorical(aggregate = FALSE)
+message("Loading historical panel data (moving average)...")
+h_agg_ma <- panelDataHistorical(aggregate = TRUE, outputRegionMappingFile = "regionmapping_54.csv", movingAverage = 5)
+h_cnt_ma <- panelDataHistorical(aggregate = FALSE, movingAverage = 5)
 
 # Load scenario data if GDX is available
 has_scenario <- !is.null(params$gdxPath) && nchar(params$gdxPath) > 0 && file.exists(params$gdxPath)
@@ -204,22 +206,29 @@ tidy_magpie <- function(mag_obj, agg_label = "Aggregated") {
 }
 
 # Convert all
-df_h_agg <- tidy_magpie(h_agg, "Aggregated")
-df_h_cnt <- tidy_magpie(h_cnt, "Country-level")
+df_h_agg_raw <- tidy_magpie(h_agg_raw, "Aggregated")
+df_h_cnt_raw <- tidy_magpie(h_cnt_raw, "Country-level")
+df_h_agg_ma <- tidy_magpie(h_agg_ma, "Aggregated")
+df_h_cnt_ma <- tidy_magpie(h_cnt_ma, "Country-level")
 df_s_agg <- tidy_magpie(s_agg, "Aggregated")
 df_s_cnt <- tidy_magpie(s_cnt, "Country-level")
 
 # Combine historical and scenario for long-term visualizations
 combine_datasets <- function(df_agg, df_cnt, type = "Historical") {
+  if (is.null(df_agg) && is.null(df_cnt)) return(NULL)
   df <- rbind(df_agg, df_cnt)
   df$period <- type
   return(df)
 }
 
-df_h <- combine_datasets(df_h_agg, df_h_cnt, "Historical")
+df_h_raw <- combine_datasets(df_h_agg_raw, df_h_cnt_raw, "Historical (Raw)")
+df_h_ma <- combine_datasets(df_h_agg_ma, df_h_cnt_ma, "Historical (Moving Average)")
 df_s <- if (has_scenario) combine_datasets(df_s_agg, df_s_cnt, "Scenario") else NULL
 
-df_all <- if (has_scenario) rbind(df_h, df_s) else df_h
+df_all <- do.call(rbind, list(df_h_raw, df_h_ma, df_s))
+
+# We use the raw dataset for all standard density/stats plots
+df_h <- df_h_raw
 ```
 
 # Executive Summary
@@ -246,10 +255,10 @@ The historical datasets cover the years **`r paste(range(df_h$year), collapse = 
 <div class="card-header">Aggregated Region Data (<code>aggregate = TRUE</code>)</div>
 <div class="card-body">
 <ul>
-<li><strong>Number of Regions:</strong> `r length(unique(df_h_agg$region))`</li>
-<li><strong>Number of Variables:</strong> `r length(unique(df_h_agg$variable))`</li>
-<li><strong>Total Data Points:</strong> `r nrow(df_h_agg)`</li>
-<li><strong>Regions list:</strong> <small>`r paste(sort(unique(df_h_agg$region)), collapse = ", ")`</small></li>
+<li><strong>Number of Regions:</strong> `r length(unique(df_h_agg_raw$region))`</li>
+<li><strong>Number of Variables:</strong> `r length(unique(df_h_agg_raw$variable))`</li>
+<li><strong>Total Data Points:</strong> `r nrow(df_h_agg_raw)`</li>
+<li><strong>Regions list:</strong> <small>`r paste(sort(unique(df_h_agg_raw$region)), collapse = ", ")`</small></li>
 </ul>
 </div>
 </div>
@@ -259,10 +268,10 @@ The historical datasets cover the years **`r paste(range(df_h$year), collapse = 
 <div class="card-header">Country-Level Data (<code>aggregate = FALSE</code>)</div>
 <div class="card-body">
 <ul>
-<li><strong>Number of Countries:</strong> `r length(unique(df_h_cnt$region))`</li>
-<li><strong>Number of Variables:</strong> `r length(unique(df_h_cnt$variable))`</li>
-<li><strong>Total Data Points:</strong> `r nrow(df_h_cnt)`</li>
-<li><strong>Data density:</strong> `r percent(1 - (sum(is.na(df_h_cnt$value)) / nrow(df_h_cnt)))` non-NAs</li>
+<li><strong>Number of Countries:</strong> `r length(unique(df_h_cnt_raw$region))`</li>
+<li><strong>Number of Variables:</strong> `r length(unique(df_h_cnt_raw$variable))`</li>
+<li><strong>Total Data Points:</strong> `r nrow(df_h_cnt_raw)`</li>
+<li><strong>Data density:</strong> `r percent(1 - (sum(is.na(df_h_cnt_raw$value)) / nrow(df_h_cnt_raw)))` non-NAs</li>
 </ul>
 </div>
 </div>
