@@ -383,12 +383,12 @@ In scenario projections, WGI indicators are extended forward. Some indicators ar
 ```{r iq_scenario_plot, echo=FALSE, fig.width=12, fig.height=6}
 if (has_scenario) {
   df_iq_all <- df_all %>%
-    filter(variable %in% c("Government Effectiveness (WGI)", "Rule of Law (WGI)", "Voice and Accountability (WGI)", "Rule of Law (VDem)")) %>%
+    filter(variable %in% c("Government Effectiveness (WGI)", "Rule of Law (WGI)", "Voice and Accountability (WGI)", "Rule of Law (VDem)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)")) %>%
     filter(aggregation == "Aggregated")
   
   # Select a few major regions for clarity
-  regions_to_plot <- c("DEU", "USA", "CHN", "IND", "EU28", "OECD", "NEU", "AFR", "LAM", "ASI")
-  df_iq_select <- df_iq_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHN", "IND"))
+  regions_to_plot <- c("DEU", "USA", "CHA", "CHN", "IND", "EU28", "OECD", "NEU", "AFR", "LAM", "ASI")
+  df_iq_select <- df_iq_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHA", "CHN", "IND"))
   
   ggplot(df_iq_select, aes(x = year, y = value, color = region, linetype = period)) +
     geom_line(linewidth = 1.2) +
@@ -469,12 +469,12 @@ In the scenario period, Actor Power Drivers (VRE share, electrification, fossil 
 ```{r ap_scenario_plot, echo=FALSE, fig.width=12, fig.height=6}
 if (has_scenario) {
   df_ap_all <- df_all %>%
-    filter(variable %in% c("VRE share", "Electrification", "Actor Power Index|Bulk", "Incumbent Power|Bulk")) %>%
+    filter(variable %in% c("VRE share", "Electrification", "Actor Power Index|Bulk", "Actor Power Index|Diffuse", "Incumbent Power|Bulk", "Innovator Power|Bulk", "Innovator Power|Diffuse")) %>%
     filter(aggregation == "Aggregated")
   
   # Select illustrative regions
-  regions_to_plot <- c("DEU", "USA", "CHN", "IND", "EU28", "OECD", "AFR", "LAM", "ASI")
-  df_ap_select <- df_ap_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHN", "IND"))
+  regions_to_plot <- c("DEU", "USA", "CHA", "CHN", "IND", "EU28", "OECD", "AFR", "LAM", "ASI")
+  df_ap_select <- df_ap_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHA", "CHN", "IND"))
   
   ggplot(df_ap_select, aes(x = year, y = value, color = region, linetype = period)) +
     geom_line(linewidth = 1.2) +
@@ -554,12 +554,12 @@ The macroeconomic controls are derived from SSP2 storylines during the scenario 
 ```{r ctrl_scenario_plot, echo=FALSE, fig.width=12, fig.height=6}
 if (has_scenario) {
   df_ctrl_all <- df_all %>%
-    filter(variable %in% c("GDP per Capita", "Population", "Urban Population Share", "Energy Intensity")) %>%
+    filter(variable %in% c("GDP per Capita", "Population", "Urban Population Share")) %>%
     filter(aggregation == "Aggregated")
   
   # Select illustrative regions
-  regions_to_plot <- c("DEU", "USA", "CHN", "IND", "EU28", "OECD", "AFR", "LAM", "ASI")
-  df_ctrl_select <- df_ctrl_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHN", "IND"))
+  regions_to_plot <- c("DEU", "USA", "CHA", "CHN", "IND", "EU28", "OECD", "AFR", "LAM", "ASI")
+  df_ctrl_select <- df_ctrl_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHA", "CHN", "IND"))
   
   ggplot(df_ctrl_select, aes(x = year, y = value, color = region, linetype = period)) +
     geom_line(linewidth = 1.2) +
@@ -596,7 +596,7 @@ if (has_scenario) {
     filter(aggregation == "Aggregated")
   
   # Representative regions covering diverse profiles
-  stitch_regions <- c("USA", "CHN", "IND", "DEU")
+  stitch_regions <- c("USA", "CHA", "CHN", "IND", "DEU", "EUR")
   df_stitch_sel <- df_stitch %>% filter(region %in% stitch_regions)
   
   ggplot(df_stitch_sel, aes(x = year, y = value, color = region)) +

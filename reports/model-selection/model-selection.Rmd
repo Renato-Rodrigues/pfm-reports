@@ -60,7 +60,8 @@ model_configs <- list(
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
     controlDrivers = "GDP per Capita",
-    includeLagged = FALSE, interactRegionFE = FALSE
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
     name = "Split Variables",
@@ -69,7 +70,8 @@ model_configs <- list(
     actorPowerIndex = c("Innovator Power", "Incumbent Power"),
     instQualityDrivers = "Government Effectiveness (WGI)", 
     controlDrivers = "GDP per Capita",
-    includeLagged = FALSE, interactRegionFE = FALSE
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
     name = "Advanced Controls",
@@ -78,7 +80,8 @@ model_configs <- list(
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
     controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
     name = "Non-Linear Dynamics",
@@ -87,7 +90,8 @@ model_configs <- list(
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
     controlDrivers = c("GDP per Capita Sq"),
-    includeLagged = FALSE, interactRegionFE = FALSE
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
     name = "Heterogeneous Regional Effects",
@@ -96,7 +100,8 @@ model_configs <- list(
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
     controlDrivers = "GDP per Capita",
-    includeLagged = FALSE, interactRegionFE = TRUE
+    includeLagged = FALSE, interactRegionFE = TRUE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
     name = "Path Dependency",
@@ -105,16 +110,68 @@ model_configs <- list(
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
     controlDrivers = "GDP per Capita",
-    includeLagged = TRUE, interactRegionFE = FALSE
+    includeLagged = TRUE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
-    name = "Institutional Quality",
-    description = "**What it does:** Introduces VDem institutional quality indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
+    name = "Institutional Quality - Rule of Law",
+    description = "**What it does:** Introduces VDem institutional quality Rule of Law indicator.\n\n**Assumption:** Test alternative institutional quality indicators.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)"), 
+    controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
+  ),
+  list(
+    name = "Institutional Quality - Accountability",
+    description = "**What it does:** Introduces VDem institutional quality Accountability indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = c("Government Effectiveness (WGI)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
+    controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
+  ),
+  list(
+    name = "Institutional Quality - VDem",
+    description = "**What it does:** Introduces all VDem institutional quality indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
     controlDrivers = "GDP per Capita",
-    includeLagged = FALSE, interactRegionFE = FALSE
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
+  ),
+  list(
+    name = "Region FE - EU/OECD+",
+    description = "**What it does:** Uses a specialized region mapping for fixed effects (EU, OECD+, Rest of World).\n\n**Assumption:** Policy dynamics are clustered in these macro-regions.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
+    includeLagged = TRUE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
+  ),
+  list(
+    name = "Region FE - None",
+    description = "**What it does:** Disables region fixed effects.\n\n**Assumption:** Eliminating region fixed effects highlights global drivers.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
+    includeLagged = TRUE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = NULL
+  ),
+  list(
+    name = "Region FE - 54 Regions",
+    description = "**What it does:** Uses 54 native regions for fixed effects.\n\n**Assumption:** Highly granular regional effects isolate country-level variations better.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = "Government Effectiveness (WGI)", 
+    controlDrivers = "GDP per Capita",
+    includeLagged = TRUE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmapping_54.csv"
   )
 )
 
@@ -145,7 +202,7 @@ panelData <- mbind(
 # Global list to track diagnostics for the final comparison table
 all_aics <- data.frame()
 
-add_aic <- function(fit, sector_stage, model_name) {
+add_aic <- function(fit, sector_stage, model_name, cfg) {
   m <- fit$model
   is_logistf <- inherits(m, "logistf")
   k <- length(coef(m))
@@ -173,6 +230,23 @@ add_aic <- function(fit, sector_stage, model_name) {
   pvals <- if (!is.null(fit$coeftest)) fit$coeftest[, 4] else NULL
   zvals <- if (!is.null(fit$coeftest)) fit$coeftest[, 3] else NULL
   nSig <- if (!is.null(pvals)) sum(pvals < 0.05, na.rm = TRUE) else 0
+  
+  # Categorize Significant Variables
+  sig_vars <- if (!is.null(pvals)) rownames(fit$coeftest)[!is.na(pvals) & pvals < 0.05] else character(0)
+  sig_interaction <- sum(grepl(":|_x_", sig_vars))
+  sig_base <- sig_vars[!grepl(":|_x_", sig_vars)]
+  
+  count_matches <- function(vars, patterns) {
+    if (length(vars) == 0 || is.null(patterns) || length(patterns) == 0) return(0)
+    pats_valid <- make.names(patterns)
+    sum(sapply(vars, function(v) any(sapply(pats_valid, function(p) grepl(p, v, fixed = TRUE)))))
+  }
+  
+  sig_iq <- count_matches(sig_base, cfg$instQualityDrivers)
+  sig_ap <- count_matches(sig_base, c(cfg$actorPowerDrivers, cfg$actorPowerIndex))
+  sig_ctrl <- count_matches(sig_base, cfg$controlDrivers)
+  sig_time <- sum(grepl("year|lagged|timeTrend", sig_base, ignore.case = TRUE))
+  
   maxAbsZ <- if (!is.null(zvals)) max(abs(zvals), na.rm = TRUE) else NA
   highZ <- if (!is.na(maxAbsZ)) maxAbsZ > 15 else NA
   
@@ -195,6 +269,11 @@ add_aic <- function(fit, sector_stage, model_name) {
     `N obs` = nObs,
     `N predictors` = k,
     `N significant` = nSig,
+    `Sig. Interactions` = sig_interaction,
+    `Sig. InstQual` = sig_iq,
+    `Sig. ActorPower` = sig_ap,
+    `Sig. Controls` = sig_ctrl,
+    `Sig. TimeTrend` = sig_time,
     `k / N` = round(kOverN, 3),
     Overfitting = overfitting,
     Separation = separation,
@@ -240,10 +319,23 @@ model_specs <- map_df(model_configs, ~ tibble(
   instQualityDrivers = paste(.x$instQualityDrivers, collapse = "<br>"),
   controlDrivers = paste(.x$controlDrivers, collapse = "<br>"),
   `includeLagged*` = as.character(.x$includeLagged),
-  interactRegionFE = as.character(.x$interactRegionFE)
+  interactRegionFE = as.character(.x$interactRegionFE),
+  regionMappingFE = if(is.null(.x$regionMappingFixedEffects)) "NULL" else .x$regionMappingFixedEffects
 ))
 
-kable(model_specs, format = "html", escape = FALSE, caption = "Summary of Tested Model Configurations") %>%
+model_specs_formatted <- model_specs
+for (col in names(model_specs_formatted)) {
+  if (col != "Model") {
+    baseline_val <- model_specs_formatted[[col]][1]
+    model_specs_formatted[[col]] <- ifelse(
+      model_specs_formatted[[col]] != baseline_val,
+      paste0("<strong>", model_specs_formatted[[col]], "</strong>"),
+      model_specs_formatted[[col]]
+    )
+  }
+}
+
+kable(model_specs_formatted, format = "html", escape = FALSE, caption = "Summary of Tested Model Configurations") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), full_width = FALSE, font_size = 12) %>%
   column_spec(1, bold = TRUE)
 
@@ -272,20 +364,22 @@ for (stg in stages) {
           data = panelData, sector = sec,
           actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
           instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
-          includeLaggedAdoption = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE
+          includeLaggedAdoption = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
+          regionMappingFixedEffects = cfg$regionMappingFixedEffects
         )
       } else {
         fit <- estimatePriceStringencyModel(
           data = panelData, sector = sec,
           actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
           instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
-          includeLaggedECP = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE
+          includeLaggedECP = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
+          regionMappingFixedEffects = cfg$regionMappingFixedEffects
         )
       }
       
       # Track AIC
       stage_label <- paste0(stg, ": ", sec)
-      add_aic(fit, stage_label, paste0(i, ". ", cfg$name))
+      add_aic(fit, stage_label, paste0(i, ". ", cfg$name), cfg)
       
       # Plot
       plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
@@ -310,8 +404,9 @@ By stepping through these configurations, we systematically evaluate the structu
 for (sec_stg in unique(all_aics$Sector_Stage)) {
   sub_df <- all_aics %>%
     filter(Sector_Stage == sec_stg) %>%
-    arrange(Model) %>%
-    select(-Sector_Stage) # Drop redundant column
+    mutate(ModelNum = as.integer(stringr::str_extract(Model, "^[0-9]+"))) %>%
+    arrange(ModelNum) %>%
+    select(-Sector_Stage, -ModelNum) # Drop redundant columns
     
   # Identify best values for styling
   best_aic  <- min(sub_df$AIC, na.rm = TRUE)
@@ -321,6 +416,60 @@ for (sec_stg in unique(all_aics$Sector_Stage)) {
   best_ll   <- max(sub_df$`Log-lik`, na.rm = TRUE)
   best_r2   <- max(sub_df$`Pseudo-R2`, na.rm = TRUE)
   best_nsig <- max(sub_df$`N significant`, na.rm = TRUE)
+  
+  # Identify models matching criteria for theoretical robustness
+  idx_all_three <- which(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 & sub_df$`Sig. ActorPower` > 0)
+  idx_at_least_one <- which(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 | sub_df$`Sig. ActorPower` > 0)
+
+  # Function to generate formatting vectors per column based on priorities
+  get_col_fmt <- function(values, minimize = TRUE) {
+    bg_colors <- rep("white", length(values))
+    bold_flags <- rep(FALSE, length(values))
+    
+    find_best <- function(idx) {
+      if(length(idx) == 0) return(NA)
+      val_subset <- values[idx]
+      if (minimize) min(val_subset, na.rm = TRUE) else max(val_subset, na.rm = TRUE)
+    }
+    
+    best_overall <- if(minimize) min(values, na.rm = TRUE) else max(values, na.rm = TRUE)
+    best_all_three <- find_best(idx_all_three)
+    best_at_least_one <- find_best(idx_at_least_one)
+    
+    # 3. Best overall (Lowest Priority for override)
+    if(!is.na(best_overall)) {
+      m <- which(values == best_overall)
+      bg_colors[m] <- "#fff9c4" # Light Yellow
+      bold_flags[m] <- TRUE
+    }
+    # 2. Best at least one
+    if(!is.na(best_at_least_one)) {
+      m <- which(values == best_at_least_one)
+      bg_colors[m] <- "#bbdefb" # Light Blue
+      bold_flags[m] <- TRUE
+    }
+    # 1. Best all three (Highest Priority)
+    if(!is.na(best_all_three)) {
+      m <- which(values == best_all_three)
+      bg_colors[m] <- "#c8e6c9" # Light Green
+      bold_flags[m] <- TRUE
+    }
+    
+    list(bg = bg_colors, color = rep("black", length(values)), bold = bold_flags)
+  }
+  
+  fmt_aic  <- get_col_fmt(sub_df$AIC, minimize = TRUE)
+  fmt_aicc <- get_col_fmt(sub_df$AICc, minimize = TRUE)
+  fmt_bic  <- get_col_fmt(sub_df$BIC, minimize = TRUE)
+  fmt_hqic <- get_col_fmt(sub_df$HQIC, minimize = TRUE)
+  fmt_ll   <- get_col_fmt(sub_df$`Log-lik`, minimize = FALSE)
+  fmt_r2   <- get_col_fmt(sub_df$`Pseudo-R2`, minimize = FALSE)
+  
+  # Warnings (Model Name Highlight)
+  is_warning <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE | sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
+  model_name_bg <- ifelse(is_warning, "#ffebee", "white")
+  model_name_color <- ifelse(is_warning, "#c62828", "black")
+  model_name_bold <- is_warning
     
   # Build base table with scroll_box for wide columns
   k <- kable(sub_df, format = "html", caption = paste("Model Diagnostics:", sec_stg)) %>%
@@ -328,11 +477,13 @@ for (sec_stg in unique(all_aics$Sector_Stage)) {
     
   # Apply conditional highlighting for the most important metric columns
   k <- k %>%
-    column_spec(2, background = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), "#e8f8f5", "white"), color = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), "#117a65", "black"), bold = ifelse(sub_df$AIC == best_aic & !is.na(sub_df$AIC), TRUE, FALSE)) %>%
-    column_spec(3, background = ifelse(sub_df$AICc == best_aicc & !is.na(sub_df$AICc), "#e8f8f5", "white"), color = ifelse(sub_df$AICc == best_aicc & !is.na(sub_df$AICc), "#117a65", "black"), bold = ifelse(sub_df$AICc == best_aicc & !is.na(sub_df$AICc), TRUE, FALSE)) %>%
-    column_spec(4, background = ifelse(sub_df$BIC == best_bic & !is.na(sub_df$BIC), "#e8f8f5", "white"), color = ifelse(sub_df$BIC == best_bic & !is.na(sub_df$BIC), "#117a65", "black"), bold = ifelse(sub_df$BIC == best_bic & !is.na(sub_df$BIC), TRUE, FALSE)) %>%
-    column_spec(5, background = ifelse(sub_df$HQIC == best_hqic & !is.na(sub_df$HQIC), "#e8f8f5", "white"), color = ifelse(sub_df$HQIC == best_hqic & !is.na(sub_df$HQIC), "#117a65", "black"), bold = ifelse(sub_df$HQIC == best_hqic & !is.na(sub_df$HQIC), TRUE, FALSE)) %>%
-    column_spec(7, background = ifelse(sub_df$`Pseudo-R2` == best_r2 & !is.na(sub_df$`Pseudo-R2`), "#e8f8f5", "white"), color = ifelse(sub_df$`Pseudo-R2` == best_r2 & !is.na(sub_df$`Pseudo-R2`), "#117a65", "black"), bold = ifelse(sub_df$`Pseudo-R2` == best_r2 & !is.na(sub_df$`Pseudo-R2`), TRUE, FALSE)) %>%
+    column_spec(1, background = model_name_bg, color = model_name_color, bold = model_name_bold) %>%
+    column_spec(2, background = fmt_aic$bg, color = fmt_aic$color, bold = fmt_aic$bold) %>%
+    column_spec(3, background = fmt_aicc$bg, color = fmt_aicc$color, bold = fmt_aicc$bold) %>%
+    column_spec(4, background = fmt_bic$bg, color = fmt_bic$color, bold = fmt_bic$bold) %>%
+    column_spec(5, background = fmt_hqic$bg, color = fmt_hqic$color, bold = fmt_hqic$bold) %>%
+    column_spec(6, background = fmt_ll$bg, color = fmt_ll$color, bold = fmt_ll$bold) %>%
+    column_spec(7, background = fmt_r2$bg, color = fmt_r2$color, bold = fmt_r2$bold) %>%
     scroll_box(width = "100%")
       
   # Render the table
@@ -341,6 +492,38 @@ for (sec_stg in unique(all_aics$Sector_Stage)) {
   cat("\n<br>\n")
 }
 ```
+
+### Diagnostic Metrics Guide
+
+* **AIC (Akaike Information Criterion):** *Lower is better.* Measures goodness of fit while penalizing for the number of parameters.
+* **AICc:** *Lower is better.* AIC corrected for smaller sample sizes.
+* **BIC (Bayesian Information Criterion):** *Lower is better.* Similar to AIC but with a harsher penalty for model complexity.
+* **HQIC (Hannan-Quinn Information Criterion):** *Lower is better.* An alternative criterion that falls between AIC and BIC in strictness.
+* **Log-lik:** *Higher is better (less negative).* The log-likelihood of the fitted model.
+* **Pseudo-R2:** *Higher is better.* A measure of how much variance the model explains relative to a null model (McFadden's Pseudo-R²).
+* **N obs:** Number of observations used to fit the model.
+* **N predictors (k):** Number of coefficients/parameters estimated by the model.
+* **N significant:** Count of coefficients that are statistically significant ($p < 0.05$).
+* **Sig. Interactions:** Count of significant interaction terms.
+* **Sig. InstQual:** Count of significant Institutional Quality variables.
+* **Sig. ActorPower:** Count of significant Actor Power variables.
+* **Sig. Controls:** Count of significant macroeconomic control variables.
+* **Sig. TimeTrend:** Count of significant time-trend or path-dependency variables.
+* **k / N:** Ratio of predictors to observations. *Lower is better.* Values above 0.1 may indicate overfitting.
+* **Overfitting:** *FALSE is better.* Flags if the k/N ratio exceeds 0.1.
+* **Separation:** *FALSE is better.* Flags potential complete or quasi-complete separation.
+* **High-Z:** *FALSE is better.* Flags extremely high Z-scores ($|Z| > 15$), usually a symptom of numerical instability.
+* **Max |Z|:** *Lower is better.* The maximum absolute Z-score among the predictors.
+* **Converged:** *TRUE is better.* Indicates if the optimization algorithm reached a solution.
+
+### Highlight Legend (Ranking Columns)
+
+* <span style="background-color: #c8e6c9; padding: 2px 4px; font-weight: bold;">Light Green</span>: **Best Model with All Three Theories** (Lowest AIC among models that have at least one significant interaction, one significant institutional quality, and one significant actor power term).
+* <span style="background-color: #bbdefb; padding: 2px 4px; font-weight: bold;">Light Blue</span>: **Best Model with At Least One Theory** (Lowest AIC among models that have significant coefficients for at least one of those three theoretical clusters).
+* <span style="background-color: #fff9c4; padding: 2px 4px; font-weight: bold;">Light Yellow</span>: **Best Model Overall** (Lowest AIC in the table).
+* <span style="background-color: #ffebee; color: #c62828; padding: 2px 4px; font-weight: bold;">Red (Model Name)</span>: **Warning Flag** indicates a model suffering from Overfitting, Separation, abnormally High Z-scores, or failure to Converge.
+
+*(Note: Ranking colors overwrite each other in priority. Green overwrites Blue and Yellow, Blue overwrites Yellow).*
 
 ### Key Conclusions
 1. **Split Variables** better capture the asymmetric lobbying pressures of Incumbents vs. Innovators.
