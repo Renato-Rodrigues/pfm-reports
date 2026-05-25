@@ -55,6 +55,7 @@ options(pfm.modelDir = "../../../models/")
 model_configs <- list(
   list(
     name = "Baseline",
+    phases = c("Phase 1: Base Model Assumptions", "Phase 2: Institutional Quality", "Phase 3: Regional Fixed Effects"),
     description = "**What it does:** Uses a single composite Actor Power Index.\n\n**Assumption:** Actor power operates symmetrically (a 1-unit increase in Innovator Power perfectly cancels out a 1-unit increase in Incumbent Power). Institutional quality interacts globally with this net power.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -65,6 +66,7 @@ model_configs <- list(
   ),
   list(
     name = "Split Variables",
+    phases = "Phase 1: Base Model Assumptions",
     description = "**What it does:** Replaces the combined index with discrete components.\n\n**Assumption:** Incumbents and Innovators exert asymmetric power dynamics over policy adoption.",
     actorPowerDrivers = c("Innovator Power", "Incumbent Power"), 
     actorPowerIndex = c("Innovator Power", "Incumbent Power"),
@@ -75,6 +77,7 @@ model_configs <- list(
   ),
   list(
     name = "Advanced Controls",
+    phases = "Phase 1: Base Model Assumptions",
     description = "**What it does:** Expands the structural controls.\n\n**Assumption:** Broader macroeconomic and demographic factors drive feasibility.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -85,6 +88,7 @@ model_configs <- list(
   ),
   list(
     name = "Non-Linear Dynamics",
+    phases = "Phase 1: Base Model Assumptions",
     description = "**What it does:** Includes a squared term for GDP per Capita.\n\n**Assumption:** The Environmental Kuznets Curve hypothesis applies to pricing adoption.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -95,6 +99,7 @@ model_configs <- list(
   ),
   list(
     name = "Heterogeneous Regional Effects",
+    phases = "Phase 1: Base Model Assumptions",
     description = "**What it does:** Interacts Region Fixed Effects with structural drivers.\n\n**Assumption:** The impact of actor power and institutional quality varies intrinsically by region.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -105,6 +110,7 @@ model_configs <- list(
   ),
   list(
     name = "Path Dependency",
+    phases = "Phase 1: Base Model Assumptions",
     description = "**What it does:** Introduces lagged adoption/price stringency.\n\n**Assumption:** Policy adoption strongly correlates with historical status (inertia).",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -115,6 +121,7 @@ model_configs <- list(
   ),
   list(
     name = "Institutional Quality - Rule of Law",
+    phases = "Phase 2: Institutional Quality",
     description = "**What it does:** Introduces VDem institutional quality Rule of Law indicator.\n\n**Assumption:** Test alternative institutional quality indicators.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -125,6 +132,7 @@ model_configs <- list(
   ),
   list(
     name = "Institutional Quality - Accountability",
+    phases = "Phase 2: Institutional Quality",
     description = "**What it does:** Introduces VDem institutional quality Accountability indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -135,6 +143,7 @@ model_configs <- list(
   ),
   list(
     name = "Institutional Quality - VDem",
+    phases = "Phase 2: Institutional Quality",
     description = "**What it does:** Introduces all VDem institutional quality indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -145,6 +154,7 @@ model_configs <- list(
   ),
   list(
     name = "Region FE - EU/OECD+",
+    phases = "Phase 3: Regional Fixed Effects",
     description = "**What it does:** Uses a specialized region mapping for fixed effects (EU, OECD+, Rest of World).\n\n**Assumption:** Policy dynamics are clustered in these macro-regions.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -155,6 +165,7 @@ model_configs <- list(
   ),
   list(
     name = "Region FE - None",
+    phases = "Phase 3: Regional Fixed Effects",
     description = "**What it does:** Disables region fixed effects.\n\n**Assumption:** Eliminating region fixed effects highlights global drivers.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -165,6 +176,7 @@ model_configs <- list(
   ),
   list(
     name = "Region FE - 54 Regions",
+    phases = "Phase 3: Regional Fixed Effects",
     description = "**What it does:** Uses 54 native regions for fixed effects.\n\n**Assumption:** Highly granular regional effects isolate country-level variations better.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
@@ -201,6 +213,7 @@ panelData <- mbind(
 
 # Global list to track diagnostics for the final comparison table
 all_aics <- data.frame()
+combo_summary_df <- data.frame()
 
 add_aic <- function(fit, sector_stage, model_name, cfg) {
   m <- fit$model
@@ -287,6 +300,73 @@ add_aic <- function(fit, sector_stage, model_name, cfg) {
   all_aics <<- rbind(all_aics, row_df)
 }
 
+get_colored_models <- function(phase_name, sec_stg, all_aics_data, topics_list) {
+  target_models <- topics_list[[phase_name]]
+  sub_df <- all_aics_data %>% filter(Sector_Stage == sec_stg, Model %in% target_models)
+  baseline_name <- target_models[1] # fallback
+  if(nrow(sub_df) == 0) return(list(green=baseline_name, blue=baseline_name, yellow=baseline_name))
+  
+  metrics <- c("AIC", "AICc", "BIC", "HQIC", "Log-lik", "Pseudo-R2")
+  minim <- c(TRUE, TRUE, TRUE, TRUE, FALSE, FALSE)
+  
+  idx_all_three <- which(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 & sub_df$`Sig. ActorPower` > 0)
+  idx_at_least_one <- which(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 | sub_df$`Sig. ActorPower` > 0)
+  
+  greens <- c()
+  blues <- c()
+  yellows <- c()
+  
+  if (phase_name == "Phase 1: Base Model Assumptions") {
+    baseline_row <- sub_df[1, ]
+    for (j in 2:nrow(sub_df)) {
+      beats <- FALSE
+      for (m in 1:length(metrics)) {
+         if (!is.na(sub_df[[metrics[m]]][j]) && !is.na(baseline_row[[metrics[m]]])) {
+            if (minim[m] && sub_df[[metrics[m]]][j] < baseline_row[[metrics[m]]]) beats <- TRUE
+            if (!minim[m] && sub_df[[metrics[m]]][j] > baseline_row[[metrics[m]]]) beats <- TRUE
+         }
+      }
+      if (beats) {
+         if (j %in% idx_all_three) greens <- c(greens, sub_df$Model[j])
+         else if (j %in% idx_at_least_one) blues <- c(blues, sub_df$Model[j])
+         else yellows <- c(yellows, sub_df$Model[j])
+      }
+    }
+  } else {
+    for (m in 1:length(metrics)) {
+      values <- sub_df[[metrics[m]]]
+      if (all(is.na(values))) next
+      
+      best_overall <- if(minim[m]) min(values, na.rm=TRUE) else max(values, na.rm=TRUE)
+      val_all_three <- values[idx_all_three]
+      best_all_three <- if(length(val_all_three)>0) { if(minim[m]) min(val_all_three, na.rm=TRUE) else max(val_all_three, na.rm=TRUE) } else NA
+      val_at_least_one <- values[idx_at_least_one]
+      best_at_least_one <- if(length(val_at_least_one)>0) { if(minim[m]) min(val_at_least_one, na.rm=TRUE) else max(val_at_least_one, na.rm=TRUE) } else NA
+      
+      if (!is.na(best_all_three)) {
+         greens <- c(greens, sub_df$Model[which(values == best_all_three & (1:nrow(sub_df) %in% idx_all_three))])
+      }
+      if (!is.na(best_at_least_one)) {
+         blues <- c(blues, sub_df$Model[which(values == best_at_least_one & (1:nrow(sub_df) %in% idx_at_least_one))])
+      }
+      if (!is.na(best_overall)) {
+         yellows <- c(yellows, sub_df$Model[which(values == best_overall)])
+      }
+    }
+  }
+  
+  greens <- unique(setdiff(greens, baseline_name))
+  blues <- unique(setdiff(blues, c(baseline_name, greens)))
+  yellows <- unique(setdiff(yellows, c(baseline_name, greens, blues)))
+  
+  if (length(greens) == 0) greens <- baseline_name
+  if (length(blues) == 0) blues <- baseline_name
+  if (length(yellows) == 0) yellows <- baseline_name
+  
+  list(green = greens, blue = blues, yellow = yellows)
+}
+
+
 # Load Shared Helpers for plotting
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/forestPlot.R"))
@@ -343,21 +423,39 @@ kable(model_specs_formatted, format = "html", escape = FALSE, caption = "Summary
 
 ---
 
-# Models {.tabset}
+# Results {.tabset}
 
-```{r dynamic-models, results='asis', echo=FALSE, warning=FALSE, message=FALSE, fig.width=9, fig.height=5}
+```{r generate-results, results='asis', echo=FALSE, warning=FALSE, message=FALSE, fig.width=9, fig.height=5}
+# Define the topics and the exact models that should compete in each heat dynamically
+topics_template <- list()
+for (idx in seq_along(model_configs)) {
+  cfg <- model_configs[[idx]]
+  if (!is.null(cfg$phases)) {
+    model_str <- paste0(idx, ". ", cfg$name)
+    for (ph in cfg$phases) {
+      if (is.null(topics_template[[ph]])) {
+        topics_template[[ph]] <- c()
+      }
+      topics_template[[ph]] <- c(topics_template[[ph]], model_str)
+    }
+  }
+}
+
 sectors <- c("Diffuse", "Bulk")
 stages <- c("Adoption", "Stringency")
 
 for (stg in stages) {
   for (sec in sectors) {
-    cat(sprintf("\n## %s: %s Sector\n\n", stg, sec))
+    sec_stg <- paste0(stg, ": ", sec)
+    cat(sprintf("\n## %s {.tabset}\n\n", sec_stg))
     
-    for (i in seq_along(model_configs)) {
-      cfg <- model_configs[[i]]
-      
-      cat(sprintf("\n### %s. %s\n\n", i, cfg$name))
-      cat(cfg$description, "\n\n")
+    # 1. Base model configs for this iteration
+    local_configs <- model_configs
+    plots_list <- list()
+    
+    # 2. Run Base Models
+    for (i in seq_along(local_configs)) {
+      cfg <- local_configs[[i]]
       
       if (stg == "Adoption") {
         fit <- estimateAdoptionModel(
@@ -377,123 +475,309 @@ for (stg in stages) {
         )
       }
       
-      # Track AIC
-      stage_label <- paste0(stg, ": ", sec)
-      add_aic(fit, stage_label, paste0(i, ". ", cfg$name), cfg)
-      
-      # Plot
+      add_aic(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
       plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
-      p <- plot_forest(fit, plot_title)
+      plots_list[[i]] <- plot_forest(fit, plot_title)
+    }
+    
+    topics <- topics_template
+    # 3. Determine winners and construct dynamic combos
+    c_p1 <- get_colored_models("Phase 1: Base Model Assumptions", sec_stg, all_aics, topics)
+    c_p2 <- get_colored_models("Phase 2: Institutional Quality", sec_stg, all_aics, topics)
+    c_p3 <- get_colored_models("Phase 3: Regional Fixed Effects", sec_stg, all_aics, topics)
+    
+    grid_G <- expand.grid(P1=c_p1$green, P2=c_p2$green, P3=c_p3$green, stringsAsFactors=FALSE)
+    
+    p1_gb <- unique(c(c_p1$green, c_p1$blue))
+    p2_gb <- unique(c(c_p2$green, c_p2$blue))
+    p3_gb <- unique(c(c_p3$green, c_p3$blue))
+    grid_B <- expand.grid(P1=p1_gb, P2=p2_gb, P3=p3_gb, stringsAsFactors=FALSE)
+    
+    p1_gby <- unique(c(p1_gb, c_p1$yellow))
+    p2_gby <- unique(c(p2_gb, c_p2$yellow))
+    p3_gby <- unique(c(p3_gb, c_p3$yellow))
+    grid_Y <- expand.grid(P1=p1_gby, P2=p2_gby, P3=p3_gby, stringsAsFactors=FALSE)
+    
+    all_combos <- unique(rbind(grid_G, grid_B, grid_Y))
+    
+    # Filter out pure baseline combination
+    is_base_p1 <- all_combos$P1 == topics[["Phase 1: Base Model Assumptions"]][1]
+    is_base_p2 <- all_combos$P2 == topics[["Phase 2: Institutional Quality"]][1]
+    is_base_p3 <- all_combos$P3 == topics[["Phase 3: Regional Fixed Effects"]][1]
+    all_combos <- all_combos[!(is_base_p1 & is_base_p2 & is_base_p3), ]
+    
+    combo_start_idx <- length(model_configs) + 1
+    combo_names <- c()
+    
+    if (nrow(all_combos) > 0) {
+      for(k in seq_len(nrow(all_combos))) {
+        p1_name <- all_combos$P1[k]
+        p2_name <- all_combos$P2[k]
+        p3_name <- all_combos$P3[k]
+        
+        idx_p1 <- as.integer(sub("\\..*", "", p1_name))
+        idx_p2 <- as.integer(sub("\\..*", "", p2_name))
+        idx_p3 <- as.integer(sub("\\..*", "", p3_name))
+        
+        base_cfg <- local_configs[[idx_p1]]
+        cfg_p2 <- local_configs[[idx_p2]]
+        cfg_p3 <- local_configs[[idx_p3]]
+        
+        base_name <- sub("^[0-9]+\\. ", "", p1_name)
+        inst_short <- sub("^[0-9]+\\. Institutional Quality - ", "", p2_name)
+        if(inst_short == "1. Baseline") inst_short <- "Base Inst"
+        reg_short <- sub("^[0-9]+\\. Region FE - ", "", p3_name)
+        if(reg_short == "1. Baseline") reg_short <- "Base Reg"
+        
+        combo_name <- paste0(combo_start_idx + k - 1, ". Combo ", k, " (", base_name, " + ", inst_short, " + ", reg_short, ")")
+        combo_names <- c(combo_names, combo_name)
+        
+        local_configs[[combo_start_idx + k - 1]] <- list(
+          name = combo_name,
+          description = paste0("**What it does:** Combines Base Winner '", base_name, "' with best institution (", cfg_p2$name, ") and best region (", cfg_p3$name, ")."),
+          actorPowerDrivers = base_cfg$actorPowerDrivers, 
+          actorPowerIndex = base_cfg$actorPowerIndex,
+          instQualityDrivers = cfg_p2$instQualityDrivers, 
+          controlDrivers = base_cfg$controlDrivers,
+          includeLagged = base_cfg$includeLagged, 
+          interactRegionFE = cfg_p3$interactRegionFE,
+          regionMappingFixedEffects = cfg_p3$regionMappingFixedEffects
+        )
+        
+        combo_summary_df <<- rbind(combo_summary_df, data.frame(
+          Sector_Stage = sec_stg,
+          Combo = combo_name,
+          Base_Model = base_name,
+          Institution = cfg_p2$name,
+          Region = cfg_p3$name,
+          Actor_Power = paste(base_cfg$actorPowerDrivers, collapse=", "),
+          Controls = paste(base_cfg$controlDrivers, collapse=", "),
+          Lagged = as.character(base_cfg$includeLagged),
+          Region_Map = if(is.null(cfg_p3$regionMappingFixedEffects)) "None" else cfg_p3$regionMappingFixedEffects,
+          stringsAsFactors = FALSE
+        ))
+      }
+    }
+    
+    topics[["Phase 4: The Final Combinations"]] <- c("1. Baseline", combo_names)
+    
+    # 4. Run Models
+    if (nrow(all_combos) > 0) {
+      for (i in seq(combo_start_idx, combo_start_idx + nrow(all_combos) - 1)) {
+        cfg <- local_configs[[i]]
+        
+        if (stg == "Adoption") {
+          fit <- estimateAdoptionModel(
+            data = panelData, sector = sec,
+            actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
+            instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
+            includeLaggedAdoption = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
+            regionMappingFixedEffects = cfg$regionMappingFixedEffects
+          )
+        } else {
+          fit <- estimatePriceStringencyModel(
+            data = panelData, sector = sec,
+            actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
+            instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
+            includeLaggedECP = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
+            regionMappingFixedEffects = cfg$regionMappingFixedEffects
+          )
+        }
+        
+        add_aic(fit, sec_stg, cfg$name, cfg)
+        plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
+        plots_list[[i]] <- plot_forest(fit, plot_title)
+      }
+    }
+    
+    # 2. Render Summary Tables Sub-tab
+    cat("\n### Summary Tables\n\n")
+    
+    for (topic_name in names(topics)) {
+      target_models <- topics[[topic_name]]
       
-      if (!is.null(p)) {
-        cat("\n\n")
-        print(p)
+      sub_df <- all_aics %>%
+        filter(Sector_Stage == sec_stg, Model %in% target_models) %>%
+        arrange(match(Model, target_models)) %>%
+        select(-Sector_Stage) # Drop redundant columns
+        
+      if("ModelNum" %in% names(sub_df)) {
+        sub_df <- sub_df %>% select(-ModelNum)
+      }
+        
+      if(nrow(sub_df) == 0) next
+      
+      # Identify best values for styling
+      best_aic  <- min(sub_df$AIC, na.rm = TRUE)
+      best_aicc <- min(sub_df$AICc, na.rm = TRUE)
+      best_bic  <- min(sub_df$BIC, na.rm = TRUE)
+      best_hqic <- min(sub_df$HQIC, na.rm = TRUE)
+      best_ll   <- max(sub_df$`Log-lik`, na.rm = TRUE)
+      best_r2   <- max(sub_df$`Pseudo-R2`, na.rm = TRUE)
+      best_nsig <- max(sub_df$`N significant`, na.rm = TRUE)
+      
+      # Identify models matching criteria for theoretical robustness
+      idx_all_three <- which(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 & sub_df$`Sig. ActorPower` > 0)
+      idx_at_least_one <- which(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 | sub_df$`Sig. ActorPower` > 0)
+    
+      # Function to generate formatting vectors per column based on priorities
+      get_col_fmt <- function(values, minimize = TRUE) {
+        bg_colors <- rep("white", length(values))
+        bold_flags <- rep(FALSE, length(values))
+        
+        if (topic_name == "Phase 1: Base Model Assumptions") {
+          baseline_val <- values[1]
+          for (j in 2:length(values)) {
+            if (!is.na(values[j]) && !is.na(baseline_val)) {
+              is_better <- if(minimize) values[j] < baseline_val else values[j] > baseline_val
+              if (is_better) {
+                if (j %in% idx_all_three) {
+                  bg_colors[j] <- "#c8e6c9" # Light Green
+                } else if (j %in% idx_at_least_one) {
+                  bg_colors[j] <- "#bbdefb" # Light Blue
+                } else {
+                  bg_colors[j] <- "#fff9c4" # Light Yellow
+                }
+                bold_flags[j] <- TRUE
+              }
+            }
+          }
+        } else {
+          find_best <- function(idx) {
+            if(length(idx) == 0) return(NA)
+            val_subset <- values[idx]
+            if (minimize) min(val_subset, na.rm = TRUE) else max(val_subset, na.rm = TRUE)
+          }
+          
+          best_overall <- if(minimize) min(values, na.rm = TRUE) else max(values, na.rm = TRUE)
+          best_all_three <- find_best(idx_all_three)
+          best_at_least_one <- find_best(idx_at_least_one)
+          
+          if(!is.na(best_overall)) {
+            m <- which(values == best_overall)
+            bg_colors[m] <- "#fff9c4" # Light Yellow
+            bold_flags[m] <- TRUE
+          }
+          if(!is.na(best_at_least_one)) {
+            m <- which(values == best_at_least_one)
+            bg_colors[m] <- "#bbdefb" # Light Blue
+            bold_flags[m] <- TRUE
+          }
+          if(!is.na(best_all_three)) {
+            m <- which(values == best_all_three)
+            bg_colors[m] <- "#c8e6c9" # Light Green
+            bold_flags[m] <- TRUE
+          }
+        }
+        
+        list(bg = bg_colors, color = rep("black", length(values)), bold = bold_flags)
+      }
+      
+      fmt_aic  <- get_col_fmt(sub_df$AIC, minimize = TRUE)
+      fmt_aicc <- get_col_fmt(sub_df$AICc, minimize = TRUE)
+      fmt_bic  <- get_col_fmt(sub_df$BIC, minimize = TRUE)
+      fmt_hqic <- get_col_fmt(sub_df$HQIC, minimize = TRUE)
+      fmt_ll   <- get_col_fmt(sub_df$`Log-lik`, minimize = FALSE)
+      fmt_r2   <- get_col_fmt(sub_df$`Pseudo-R2`, minimize = FALSE)
+      
+      # Warnings (Model Name Highlight)
+      is_warning <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE | sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
+      model_name_bg <- ifelse(is_warning, "#ffebee", "white")
+      model_name_color <- ifelse(is_warning, "#c62828", "black")
+      model_name_bold <- is_warning
+        
+      # Build base table with scroll_box for wide columns
+      k <- kable(sub_df, format = "html", caption = paste("Model Diagnostics:", topic_name)) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
+        
+      # Apply conditional highlighting for the most important metric columns
+      k <- k %>%
+        column_spec(1, background = model_name_bg, color = model_name_color, bold = model_name_bold) %>%
+        column_spec(2, background = fmt_aic$bg, color = fmt_aic$color, bold = fmt_aic$bold) %>%
+        column_spec(3, background = fmt_aicc$bg, color = fmt_aicc$color, bold = fmt_aicc$bold) %>%
+        column_spec(4, background = fmt_bic$bg, color = fmt_bic$color, bold = fmt_bic$bold) %>%
+        column_spec(5, background = fmt_hqic$bg, color = fmt_hqic$color, bold = fmt_hqic$bold) %>%
+        column_spec(6, background = fmt_ll$bg, color = fmt_ll$color, bold = fmt_ll$bold) %>%
+        column_spec(7, background = fmt_r2$bg, color = fmt_r2$color, bold = fmt_r2$bold) %>%
+        scroll_box(width = "100%")
+          
+      # Render the table
+      cat(sprintf("\n#### %s\n\n", topic_name))
+      print(k)
+      cat("\n<br>\n")
+      
+      # Print model descriptions
+      desc_df <- data.frame(
+        Model = character(),
+        Description = character(),
+        Assumption = character(),
+        stringsAsFactors = FALSE
+      )
+      
+      for (tm in target_models) {
+        cfg_desc <- ""
+        for (m_idx in seq_along(local_configs)) {
+          cfg <- local_configs[[m_idx]]
+          expected_name <- if (m_idx <= length(model_configs)) paste0(m_idx, ". ", cfg$name) else cfg$name
+          if (expected_name == tm) {
+            cfg_desc <- cfg$description
+            break
+          }
+        }
+        if (cfg_desc != "") {
+          clean_desc <- gsub("^\\*\\*What it does:\\*\\* ", "", cfg_desc)
+          parts <- strsplit(clean_desc, "\\n\\n\\*\\*Assumption:\\*\\* ")[[1]]
+          desc_val <- parts[1]
+          ass_val <- if (length(parts) > 1) parts[2] else "Inherited from individual components."
+          
+          desc_df <- rbind(desc_df, data.frame(
+            Model = tm, 
+            Description = desc_val, 
+            Assumption = ass_val, 
+            stringsAsFactors = FALSE
+          ))
+        }
+      }
+      
+      if (nrow(desc_df) > 0) {
+        print(kable(desc_df, format = "html", escape = FALSE) %>%
+          kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11, full_width = TRUE) %>%
+          column_spec(1, bold = TRUE, width = "15em") %>%
+          column_spec(2, width = "35em") %>%
+          column_spec(3, width = "35em"))
+      }
+      cat("\n<br>\n")
+    }
+    
+    # 3. Render Forest Plots Sub-tab
+    cat("\n### Forest Plots {.tabset}\n\n")
+    
+    for (i in seq_along(local_configs)) {
+      if (!is.null(plots_list[[i]])) {
+        cat(sprintf("\n#### %s. %s\n\n", i, local_configs[[i]]$name))
+        cat(local_configs[[i]]$description, "\n\n")
+        print(plots_list[[i]])
         cat("\n\n")
       }
     }
+    
+    # 4. Render Combo Configuration Sub-tab for this Sector/Stage
+    cat("\n### Combo Configuration\n\n")
+    local_combos <- combo_summary_df[combo_summary_df$Sector_Stage == sec_stg, ]
+    if(nrow(local_combos) > 0) {
+      print(kable(local_combos, format = "html") %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11) %>%
+        scroll_box(width = "100%"))
+    } else {
+      cat("No combos were generated for this sector/stage.")
+    }
+    cat("\n\n")
+    
   }
 }
 ```
 
-## Summary and Best Model Choice
-
-By stepping through these configurations, we systematically evaluate the structural foundations of the Hurdle Model.
-
-```{r summary-table, echo=FALSE, results='asis'}
-# Split the data into separate tables for each stage/sector combination
-for (sec_stg in unique(all_aics$Sector_Stage)) {
-  sub_df <- all_aics %>%
-    filter(Sector_Stage == sec_stg) %>%
-    mutate(ModelNum = as.integer(stringr::str_extract(Model, "^[0-9]+"))) %>%
-    arrange(ModelNum) %>%
-    select(-Sector_Stage, -ModelNum) # Drop redundant columns
-    
-  # Identify best values for styling
-  best_aic  <- min(sub_df$AIC, na.rm = TRUE)
-  best_aicc <- min(sub_df$AICc, na.rm = TRUE)
-  best_bic  <- min(sub_df$BIC, na.rm = TRUE)
-  best_hqic <- min(sub_df$HQIC, na.rm = TRUE)
-  best_ll   <- max(sub_df$`Log-lik`, na.rm = TRUE)
-  best_r2   <- max(sub_df$`Pseudo-R2`, na.rm = TRUE)
-  best_nsig <- max(sub_df$`N significant`, na.rm = TRUE)
-  
-  # Identify models matching criteria for theoretical robustness
-  idx_all_three <- which(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 & sub_df$`Sig. ActorPower` > 0)
-  idx_at_least_one <- which(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 | sub_df$`Sig. ActorPower` > 0)
-
-  # Function to generate formatting vectors per column based on priorities
-  get_col_fmt <- function(values, minimize = TRUE) {
-    bg_colors <- rep("white", length(values))
-    bold_flags <- rep(FALSE, length(values))
-    
-    find_best <- function(idx) {
-      if(length(idx) == 0) return(NA)
-      val_subset <- values[idx]
-      if (minimize) min(val_subset, na.rm = TRUE) else max(val_subset, na.rm = TRUE)
-    }
-    
-    best_overall <- if(minimize) min(values, na.rm = TRUE) else max(values, na.rm = TRUE)
-    best_all_three <- find_best(idx_all_three)
-    best_at_least_one <- find_best(idx_at_least_one)
-    
-    # 3. Best overall (Lowest Priority for override)
-    if(!is.na(best_overall)) {
-      m <- which(values == best_overall)
-      bg_colors[m] <- "#fff9c4" # Light Yellow
-      bold_flags[m] <- TRUE
-    }
-    # 2. Best at least one
-    if(!is.na(best_at_least_one)) {
-      m <- which(values == best_at_least_one)
-      bg_colors[m] <- "#bbdefb" # Light Blue
-      bold_flags[m] <- TRUE
-    }
-    # 1. Best all three (Highest Priority)
-    if(!is.na(best_all_three)) {
-      m <- which(values == best_all_three)
-      bg_colors[m] <- "#c8e6c9" # Light Green
-      bold_flags[m] <- TRUE
-    }
-    
-    list(bg = bg_colors, color = rep("black", length(values)), bold = bold_flags)
-  }
-  
-  fmt_aic  <- get_col_fmt(sub_df$AIC, minimize = TRUE)
-  fmt_aicc <- get_col_fmt(sub_df$AICc, minimize = TRUE)
-  fmt_bic  <- get_col_fmt(sub_df$BIC, minimize = TRUE)
-  fmt_hqic <- get_col_fmt(sub_df$HQIC, minimize = TRUE)
-  fmt_ll   <- get_col_fmt(sub_df$`Log-lik`, minimize = FALSE)
-  fmt_r2   <- get_col_fmt(sub_df$`Pseudo-R2`, minimize = FALSE)
-  
-  # Warnings (Model Name Highlight)
-  is_warning <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE | sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
-  model_name_bg <- ifelse(is_warning, "#ffebee", "white")
-  model_name_color <- ifelse(is_warning, "#c62828", "black")
-  model_name_bold <- is_warning
-    
-  # Build base table with scroll_box for wide columns
-  k <- kable(sub_df, format = "html", caption = paste("Model Diagnostics:", sec_stg)) %>%
-    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
-    
-  # Apply conditional highlighting for the most important metric columns
-  k <- k %>%
-    column_spec(1, background = model_name_bg, color = model_name_color, bold = model_name_bold) %>%
-    column_spec(2, background = fmt_aic$bg, color = fmt_aic$color, bold = fmt_aic$bold) %>%
-    column_spec(3, background = fmt_aicc$bg, color = fmt_aicc$color, bold = fmt_aicc$bold) %>%
-    column_spec(4, background = fmt_bic$bg, color = fmt_bic$color, bold = fmt_bic$bold) %>%
-    column_spec(5, background = fmt_hqic$bg, color = fmt_hqic$color, bold = fmt_hqic$bold) %>%
-    column_spec(6, background = fmt_ll$bg, color = fmt_ll$color, bold = fmt_ll$bold) %>%
-    column_spec(7, background = fmt_r2$bg, color = fmt_r2$color, bold = fmt_r2$bold) %>%
-    scroll_box(width = "100%")
-      
-  # Render the table
-  cat("\n### ", sec_stg, "\n\n")
-  print(k)
-  cat("\n<br>\n")
-}
-```
-
-### Diagnostic Metrics Guide
+# Diagnostic Metrics Guide
 
 * **AIC (Akaike Information Criterion):** *Lower is better.* Measures goodness of fit while penalizing for the number of parameters.
 * **AICc:** *Lower is better.* AIC corrected for smaller sample sizes.
@@ -516,7 +800,7 @@ for (sec_stg in unique(all_aics$Sector_Stage)) {
 * **Max |Z|:** *Lower is better.* The maximum absolute Z-score among the predictors.
 * **Converged:** *TRUE is better.* Indicates if the optimization algorithm reached a solution.
 
-### Highlight Legend (Ranking Columns)
+## Highlight Legend (Ranking Columns)
 
 * <span style="background-color: #c8e6c9; padding: 2px 4px; font-weight: bold;">Light Green</span>: **Best Model with All Three Theories** (Lowest AIC among models that have at least one significant interaction, one significant institutional quality, and one significant actor power term).
 * <span style="background-color: #bbdefb; padding: 2px 4px; font-weight: bold;">Light Blue</span>: **Best Model with At Least One Theory** (Lowest AIC among models that have significant coefficients for at least one of those three theoretical clusters).
@@ -525,7 +809,7 @@ for (sec_stg in unique(all_aics$Sector_Stage)) {
 
 *(Note: Ranking colors overwrite each other in priority. Green overwrites Blue and Yellow, Blue overwrites Yellow).*
 
-### Key Conclusions
+# Key Conclusions
 1. **Split Variables** better capture the asymmetric lobbying pressures of Incumbents vs. Innovators.
 2. **Advanced Controls** (Energy Intensity, Urban Share) consistently reveal cleaner estimates by controlling for macro-structural confounders.
 3. **Heterogeneous Region Effects** (`interactRegionFE`) show that Actor Power operates fundamentally differently inside the EU compared to the OECD or the rest of the world.
