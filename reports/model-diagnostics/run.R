@@ -30,8 +30,8 @@ render_report <- function(
     modelDir      = getPfmConfig("modelDir", "../../models"),
     cacheDir      = getPfmConfig("cacheDir", ""),
     gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
-    outputFile    = "../../output/IAM_PFM_report.html",
-    assetDir      = "../../output/IAM_PFM_report") {
+    outputFile    = "output/IAM_PFM_report.html",
+    assetDir      = "output/IAM_PFM_report") {
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/model-diagnostics/IAM_PFM_report.Rmd")

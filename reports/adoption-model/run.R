@@ -30,8 +30,8 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 render_report <- function(
     cacheDir           = getPfmConfig("cacheDir", ""),
     gdxPath            = getPfmConfig("gdxPath", "../../fulldata.gdx"),
-    outputFile         = "../../output/adoption_model.html",
-    assetDir           = "../../output/adoption_model",
+    outputFile         = "output/adoption_model.html",
+    assetDir           = "output/adoption_model",
     modelName          = getPfmConfig("modelName", "Baseline + Rule of Law"),
     instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)"),
     controlDrivers     = c("GDP per Capita"),

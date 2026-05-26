@@ -21,7 +21,7 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 render_report <- function(
     cacheDir      = getPfmConfig("cacheDir", ""),
     gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
-    outputFile    = "../../output/panel_data_input.html") {
+    outputFile    = "output/panel_data_input.html") {
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/panel-data-input/panel-data-input.Rmd")

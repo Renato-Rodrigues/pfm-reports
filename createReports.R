@@ -38,7 +38,16 @@ if (length(args) > 0) {
     selection <- "0"
   }
 } else {
-  selection <- readline(prompt = sprintf("Select option [0-%d]: ", length(report_dirs)))
+  if (interactive()) {
+    selection <- readline(prompt = sprintf("Select option [0-%d] (default 0): ", length(report_dirs)))
+  } else {
+    cat(sprintf("Select option [0-%d] (default 0): ", length(report_dirs)))
+    flush.console()
+    selection <- tryCatch(readLines("stdin", n = 1), error = function(e) "")
+  }
+  if (length(selection) == 0 || trimws(selection) == "") {
+    selection <- "0"
+  }
 }
 idx       <- suppressWarnings(as.integer(trimws(selection)))
 
@@ -156,15 +165,15 @@ if (idx == 0) {
   cache_dir       <- prompt_path("cacheDir (madrat cache)", getPfmConfig("cacheDir", ""))
   gdx_path        <- prompt_path("gdxPath (fulldata.gdx)", getPfmConfig("gdxPath", "../../fulldata.gdx"))
   
-  # Dynamically determine the outputFile based on whether the report run.R uses "../../output" or "output"
+  # Dynamically determine the outputFile
   default_out <- if (chosen == "adoption-model") {
-    "../../output/adoption_model.html"
+    "output/adoption_model.html"
   } else if (chosen == "model-selection") {
-    "../../output/model_selection.html"
+    "output/model_selection.html"
   } else if (chosen == "model-diagnostics") {
-    "../../output/IAM_PFM_report.html"
+    "output/IAM_PFM_report.html"
   } else {
-    "../../output/panel_data_input.html"
+    "output/panel_data_input.html"
   }
   
   output_file     <- prompt_path("outputFile", default_out)

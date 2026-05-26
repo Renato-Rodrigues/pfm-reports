@@ -12,8 +12,8 @@ render_report <- function(
     modelDir      = getPfmConfig("modelDir", "../../models"),
     cacheDir      = getPfmConfig("cacheDir", ""),
     gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
-    outputFile    = "../../output/model_selection.html",
-    assetDir      = "../../output/model_selection") {
+    outputFile    = "output/model_selection.html",
+    assetDir      = "output/model_selection") {
 
   root        <- find_rstudio_root_file()
   rmd_path    <- file.path(root, "reports/model-selection/model-selection.Rmd")
