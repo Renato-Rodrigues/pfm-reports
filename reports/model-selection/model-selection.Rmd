@@ -141,9 +141,31 @@ model_configs <- list(
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
   list(
-    name = "Institutional Quality - Accountability",
+    name = "Institutional Quality - Diagonal Accountability",
     phases = "Phase 2: Institutional Quality",
-    description = "**What it does:** Introduces VDem institutional quality Accountability indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
+    description = "**What it does:** Introduces VDem Diagonal Accountability indicator (Media & CSOs monitoring).\n\n**Assumption:** Non-electoral public scrutiny exposes incumbent lobbying.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = c("Government Effectiveness (WGI)", "Diagonal Accountability (VDem)"), 
+    controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
+  ),
+  list(
+    name = "Institutional Quality - Diagonal & Vertical Accountability",
+    phases = "Phase 2: Institutional Quality",
+    description = "**What it does:** Introduces VDem Diagonal & Vertical Accountability indicators.\n\n**Assumption:** Combines media scrutiny with electoral pressure at the ballot box.",
+    actorPowerDrivers = "Actor Power Index", 
+    actorPowerIndex = "Actor Power Index",
+    instQualityDrivers = c("Government Effectiveness (WGI)", "Diagonal Accountability (VDem)", "Vertical Accountability (VDem)"), 
+    controlDrivers = "GDP per Capita",
+    includeLagged = FALSE, interactRegionFE = FALSE,
+    regionMappingFixedEffects = "regionmappingH12.csv"
+  ),
+  list(
+    name = "Institutional Quality - Full Accountability",
+    phases = "Phase 2: Institutional Quality",
+    description = "**What it does:** Introduces all three VDem Accountability indicators (Vertical, Horizontal, Diagonal).\n\n**Assumption:** Test full interactive accountability system.",
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
