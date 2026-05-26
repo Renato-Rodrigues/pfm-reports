@@ -133,7 +133,7 @@ tidy_magpie <- function(mag_obj, period_label = "Historical") {
 key_regions <- c("USA", "CHA", "DEU", "IND", "JPN", "BRA", "RUS", "ZAF")
 ```
 
-```{r load_data, cache=TRUE, include=FALSE}
+```{r load_data, cache=FALSE, include=FALSE}
 panelData <- getPanelDataHistoricalCached(
   aggregate = TRUE, y = 2000:2022,
   outputRegionMappingFile = "regionmapping_54.csv"
@@ -155,7 +155,7 @@ if (has_scenario) {
 df_all <- do.call(rbind, Filter(Negate(is.null), list(df_hist, df_scen)))
 ```
 
-```{r fit_models, cache=TRUE, include=FALSE}
+```{r fit_models, cache=FALSE, include=FALSE}
 fit_bulk <- estimateAdoptionModel(
   data                      = panelData,
   sector                    = "Bulk",

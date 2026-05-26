@@ -160,7 +160,7 @@ if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
 }
 ```
 
-```{r load_data, cache=TRUE, include=FALSE}
+```{r load_data, cache=FALSE, include=FALSE}
 # --- Data Loading ---
 message("Loading historical panel data (raw)...")
 h_agg_raw <- panelDataHistorical(aggregate = TRUE, outputRegionMappingFile = "regionmapping_54.csv", movingAverage = NULL)
