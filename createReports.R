@@ -7,6 +7,12 @@ library(rprojroot)
 source(file.path(find_rstudio_root_file(), "src/r/configHelper.R"))
 
 root         <- find_rstudio_root_file()
+
+# Ensure all required folders exist
+dir.create(file.path(root, "output"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(root, "data"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(root, "models"), showWarnings = FALSE, recursive = TRUE)
+
 reports_dir  <- file.path(root, "reports")
 
 # Discover available reports
