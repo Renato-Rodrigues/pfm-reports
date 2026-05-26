@@ -11,7 +11,7 @@ render_report <- function(
     modelDataFile = "data/modelData.RData",
     modelDir      = getPfmConfig("modelDir", "../../models"),
     cacheDir      = getPfmConfig("cacheDir", ""),
-    gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
+    gdxPath       = getPfmConfig("gdxPath", "data/fulldata.gdx"),
     outputFile    = "output/model_selection.html",
     assetDir      = "output/model_selection") {
 

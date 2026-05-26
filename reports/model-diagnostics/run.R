@@ -29,12 +29,20 @@ render_report <- function(
     modelDataFile = "data/modelData.RData",
     modelDir      = getPfmConfig("modelDir", "../../models"),
     cacheDir      = getPfmConfig("cacheDir", ""),
-    gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
+    gdxPath       = getPfmConfig("gdxPath", "data/fulldata.gdx"),
     outputFile    = "output/IAM_PFM_report.html",
     assetDir      = "output/IAM_PFM_report") {
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/model-diagnostics/IAM_PFM_report.Rmd")
+
+  # Ensure relative paths are made absolute relative to repo root
+  if (nchar(gdxPath) > 0 && !is_absolute_path(gdxPath)) {
+    gdxPath <- file.path(root, gdxPath)
+  }
+  if (nchar(cacheDir) > 0 && !is_absolute_path(cacheDir)) {
+    cacheDir <- file.path(root, cacheDir)
+  }
 
   # Resolve all paths relative to repo root so the Rmd is location-agnostic
   params <- list(

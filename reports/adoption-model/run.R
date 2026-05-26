@@ -29,7 +29,7 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 render_report <- function(
     cacheDir           = getPfmConfig("cacheDir", ""),
-    gdxPath            = getPfmConfig("gdxPath", "../../fulldata.gdx"),
+    gdxPath            = getPfmConfig("gdxPath", "data/fulldata.gdx"),
     outputFile         = "output/adoption_model.html",
     assetDir           = "output/adoption_model",
     modelName          = getPfmConfig("modelName", "Baseline + Rule of Law"),
@@ -42,6 +42,14 @@ render_report <- function(
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/adoption-model/adoption-model.Rmd")
+
+  # Ensure relative paths are made absolute relative to repo root
+  if (nchar(gdxPath) > 0 && !is_absolute_path(gdxPath)) {
+    gdxPath <- file.path(root, gdxPath)
+  }
+  if (nchar(cacheDir) > 0 && !is_absolute_path(cacheDir)) {
+    cacheDir <- file.path(root, cacheDir)
+  }
 
   params <- list(
     cacheDir           = cacheDir,

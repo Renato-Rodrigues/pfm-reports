@@ -20,11 +20,19 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 render_report <- function(
     cacheDir      = getPfmConfig("cacheDir", ""),
-    gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
+    gdxPath       = getPfmConfig("gdxPath", "data/fulldata.gdx"),
     outputFile    = "output/panel_data_input.html") {
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/panel-data-input/panel-data-input.Rmd")
+
+  # Ensure relative paths are made absolute relative to repo root
+  if (nchar(gdxPath) > 0 && !is_absolute_path(gdxPath)) {
+    gdxPath <- file.path(root, gdxPath)
+  }
+  if (nchar(cacheDir) > 0 && !is_absolute_path(cacheDir)) {
+    cacheDir <- file.path(root, cacheDir)
+  }
 
   # Resolve all paths relative to repo root
   params <- list(
