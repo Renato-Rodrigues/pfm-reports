@@ -36,15 +36,25 @@ library(ggplot2)
 library(dplyr)
 library(knitr)
 library(kableExtra)
+library(rprojroot)
+
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 # Configure madrat
+cache_dir <- getPfmConfig("cacheDir", "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default")
+mapping_dir <- gsub("cache/default", "mappings", cache_dir)
 madrat::setConfig(
   forcecache = TRUE,
-  cachefolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default",
-  mappingfolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/mappings"
+  cachefolder = cache_dir,
+  mappingfolder = mapping_dir
 )
 
-options(pfm.modelDir = "../../../models/")
+# Resolve modelDir as an absolute path relative to the project root to prevent relative directory collisions
+model_dir <- getPfmConfig("modelDir", "models")
+if (!rprojroot::is_absolute_path(model_dir)) {
+  model_dir <- file.path(rprojroot::find_rstudio_root_file(), model_dir)
+}
+options(pfm.modelDir = model_dir)
 
 ```
 
@@ -388,7 +398,7 @@ plot_forest <- function(fit, title = "Coefficient Forest Plot") {
 This report details a progressive testing approach to improve the Political Feasibility Module (PFM) two-stage hurdle model. We begin with the standard baseline formulation and add progressive econometric improvements. Success mterics are presented in the Summary and Best Model Choice tab..
 
 
-```{r model-specs, echo=FALSE}
+```{r model-specs, echo=FALSE, results='asis'}
 library(tibble)
 library(purrr)
 
@@ -415,9 +425,39 @@ for (col in names(model_specs_formatted)) {
   }
 }
 
-kable(model_specs_formatted, format = "html", escape = FALSE, caption = "Summary of Tested Model Configurations") %>%
+print(kable(model_specs_formatted, format = "html", escape = FALSE, caption = "Summary of Tested Model Configurations") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), full_width = FALSE, font_size = 12) %>%
-  column_spec(1, bold = TRUE)
+  column_spec(1, bold = TRUE))
+
+# Print model descriptions and assumptions table for the base models
+desc_df <- data.frame(
+  Model = character(),
+  Description = character(),
+  Assumption = character(),
+  stringsAsFactors = FALSE
+)
+
+for (m_idx in seq_along(model_configs)) {
+  cfg <- model_configs[[m_idx]]
+  cfg_desc <- cfg$description
+  clean_desc <- gsub("^\\*\\*What it does:\\*\\* ", "", cfg_desc)
+  parts <- strsplit(clean_desc, "\\n\\n\\*\\*Assumption:\\*\\* ")[[1]]
+  desc_val <- parts[1]
+  ass_val <- if (length(parts) > 1) parts[2] else "Inherited from individual components."
+  
+  desc_df <- rbind(desc_df, data.frame(
+    Model = paste0(m_idx, ". ", cfg$name), 
+    Description = desc_val, 
+    Assumption = ass_val, 
+    stringsAsFactors = FALSE
+  ))
+}
+
+print(kable(desc_df, format = "html", escape = FALSE, caption = "Model Assumptions and Descriptions") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11, full_width = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "15em") %>%
+  column_spec(2, width = "35em") %>%
+  column_spec(3, width = "35em"))
 
 ```
 
@@ -706,47 +746,45 @@ for (stg in stages) {
       print(k)
       cat("\n<br>\n")
       
-      # Print model descriptions
-      desc_df <- data.frame(
-        Model = character(),
-        Description = character(),
-        Assumption = character(),
-        stringsAsFactors = FALSE
-      )
-      
-      for (tm in target_models) {
-        cfg_desc <- ""
-        for (m_idx in seq_along(local_configs)) {
-          cfg <- local_configs[[m_idx]]
-          expected_name <- if (m_idx <= length(model_configs)) paste0(m_idx, ". ", cfg$name) else cfg$name
-          if (expected_name == tm) {
-            cfg_desc <- cfg$description
-            break
+      # Print model descriptions (only for Phase 4: The Final Combinations, with no Assumption column)
+      if (topic_name == "Phase 4: The Final Combinations") {
+        desc_df <- data.frame(
+          Model = character(),
+          Description = character(),
+          stringsAsFactors = FALSE
+        )
+        
+        for (tm in target_models) {
+          cfg_desc <- ""
+          for (m_idx in seq_along(local_configs)) {
+            cfg <- local_configs[[m_idx]]
+            expected_name <- if (m_idx <= length(model_configs)) paste0(m_idx, ". ", cfg$name) else cfg$name
+            if (expected_name == tm) {
+              cfg_desc <- cfg$description
+              break
+            }
+          }
+          if (cfg_desc != "") {
+            clean_desc <- gsub("^\\*\\*What it does:\\*\\* ", "", cfg_desc)
+            parts <- strsplit(clean_desc, "\\n\\n\\*\\*Assumption:\\*\\* ")[[1]]
+            desc_val <- parts[1]
+            
+            desc_df <- rbind(desc_df, data.frame(
+              Model = tm, 
+              Description = desc_val, 
+              stringsAsFactors = FALSE
+            ))
           }
         }
-        if (cfg_desc != "") {
-          clean_desc <- gsub("^\\*\\*What it does:\\*\\* ", "", cfg_desc)
-          parts <- strsplit(clean_desc, "\\n\\n\\*\\*Assumption:\\*\\* ")[[1]]
-          desc_val <- parts[1]
-          ass_val <- if (length(parts) > 1) parts[2] else "Inherited from individual components."
-          
-          desc_df <- rbind(desc_df, data.frame(
-            Model = tm, 
-            Description = desc_val, 
-            Assumption = ass_val, 
-            stringsAsFactors = FALSE
-          ))
+        
+        if (nrow(desc_df) > 0) {
+          print(kable(desc_df, format = "html", escape = FALSE) %>%
+            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11, full_width = TRUE) %>%
+            column_spec(1, bold = TRUE, width = "15em") %>%
+            column_spec(2, width = "70em"))
         }
+        cat("\n<br>\n")
       }
-      
-      if (nrow(desc_df) > 0) {
-        print(kable(desc_df, format = "html", escape = FALSE) %>%
-          kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11, full_width = TRUE) %>%
-          column_spec(1, bold = TRUE, width = "15em") %>%
-          column_spec(2, width = "35em") %>%
-          column_spec(3, width = "35em"))
-      }
-      cat("\n<br>\n")
     }
     
     # 3. Render Forest Plots Sub-tab

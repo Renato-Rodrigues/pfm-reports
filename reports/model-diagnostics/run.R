@@ -23,14 +23,15 @@
 
 library(rmarkdown)
 library(rprojroot)
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 render_report <- function(
     modelDataFile = "data/modelData.RData",
-    modelDir      = "models",
-    cacheDir      = "",
-    gdxPath       = "",
-    outputFile    = "output/IAM_PFM_report.html",
-    assetDir      = "output/IAM_PFM_report") {
+    modelDir      = getPfmConfig("modelDir", "../../models"),
+    cacheDir      = getPfmConfig("cacheDir", ""),
+    gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
+    outputFile    = "../../output/IAM_PFM_report.html",
+    assetDir      = "../../output/IAM_PFM_report") {
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/model-diagnostics/IAM_PFM_report.Rmd")
@@ -59,12 +60,5 @@ render_report <- function(
   invisible(output_path)
 }
 
-# Run immediately when sourced (edit params here or call render_report() with args)
-render_report(
-  modelDataFile = "data/modelData.RData",
-  modelDir      = "models",  # <-- folder where individual .rds model files are saved
-  cacheDir      = "",        # <-- fill in your madrat cache path if recomputing
-  gdxPath       = "",        # <-- fill in path to fulldata.gdx for projections
-  outputFile    = "output/IAM_PFM_report.html",
-  assetDir      = "output/IAM_PFM_report"
-)
+# Run immediately when sourced
+render_report()

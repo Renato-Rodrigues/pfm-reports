@@ -16,11 +16,12 @@
 
 library(rmarkdown)
 library(rprojroot)
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 render_report <- function(
-    cacheDir      = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default",
-    gdxPath       = "c:/Users/renatoro/Desktop/Projects/Elevate/code/fulldata.gdx",
-    outputFile    = "output/panel_data_input.html") {
+    cacheDir      = getPfmConfig("cacheDir", ""),
+    gdxPath       = getPfmConfig("gdxPath", "../../fulldata.gdx"),
+    outputFile    = "../../output/panel_data_input.html") {
 
   root     <- find_rstudio_root_file()
   rmd_path <- file.path(root, "reports/panel-data-input/panel-data-input.Rmd")
@@ -46,8 +47,4 @@ render_report <- function(
 }
 
 # Run immediately when sourced
-render_report(
-  cacheDir      = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default",
-  gdxPath       = "c:/Users/renatoro/Desktop/Projects/Elevate/code/fulldata.gdx",
-  outputFile    = "output/panel_data_input.html"
-)
+render_report()

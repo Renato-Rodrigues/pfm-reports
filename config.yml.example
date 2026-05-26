@@ -1,0 +1,24 @@
+# PFM Reports Configuration Example
+# Copy this file to "config.yml" and customize it to match your system's local paths.
+# "config.yml" is gitignored and will be used by the run scripts and reports if no explicit arguments are passed.
+
+# Path to the madrat local cache directory
+cacheDir: ""
+
+# Path to the REMIND fulldata.gdx file for scenario projections
+gdxPath: "data/fulldata.gdx"
+
+# Folder where individual fitted .rds models are saved/loaded (relative to report root or absolute)
+modelDir: "models"
+
+# Output folder for generated HTML reports (relative to report root or absolute)
+outputDir: "output"
+
+# Default Model Selection config parameters
+modelName: "Baseline + Rule of Law"
+regionMappingFE: "regionmappingH12.csv"
+includeLagged: false
+adoptionThreshold: 0.5
+
+# Dashboard configuration
+dashboardModelsDir: "models"

@@ -1,4 +1,6 @@
 library(pfm)
+library(rprojroot)
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 # Null-coalescing helper (base R has no %||% before 4.4)
 `%||%` <- function(x, y) if (!is.null(x) && nchar(as.character(x)) > 0) x else y
@@ -27,7 +29,10 @@ loadModelData <- function(params) {
 
   # Set pfm.modelDir unconditionally so loadPFMModel() / listPFMModels() work
   # regardless of whether we load from the modelData cache or recompute.
-  modelDir <- params$modelDir %||% "models"
+  modelDir <- params$modelDir %||% getPfmConfig("modelDir", "models")
+  if (!rprojroot::is_absolute_path(modelDir)) {
+    modelDir <- file.path(rprojroot::find_rstudio_root_file(), modelDir)
+  }
   options(pfm.modelDir = modelDir)
   message("PFM model store: ", normalizePath(modelDir, mustWork = FALSE))
 
@@ -37,9 +42,9 @@ loadModelData <- function(params) {
   }
 
   # Configure madrat cache
-  if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
-    madrat::setConfig(forcecache = TRUE, cachefolder = params$cacheDir)
-  }
+  cache_dir <- params$cacheDir %||% getPfmConfig("cacheDir")
+  mapping_dir <- gsub("cache/default", "mappings", cache_dir)
+  madrat::setConfig(forcecache = TRUE, cachefolder = cache_dir, mappingfolder = mapping_dir)
 
   # --- Panel data ---
   panelData <- panelDataHistorical(
@@ -66,17 +71,15 @@ loadModelData <- function(params) {
 
   # Common workflow arguments shared across all six model variants
   .wfArgs <- function(...) {
-    c(
-      list(
-        panelData               = panelData,
-        outputRegionMappingFile = "regionmapping_54.csv",
-        actorPowerIndex         = "Actor Power Index",
-        controlDrivers          = controlDrivers,
-        regionMappingFixedEffects = "regionmapping_EU_OECDp.csv",
-        modelDir                = modelDir
-      ),
-      list(...)
+    defaults <- list(
+      panelData                 = panelData,
+      outputRegionMappingFile   = "regionmapping_54.csv",
+      actorPowerIndex           = "Actor Power Index",
+      controlDrivers            = controlDrivers,
+      regionMappingFixedEffects = "regionmapping_EU_OECDp.csv",
+      modelDir                  = modelDir
     )
+    utils::modifyList(defaults, list(...))
   }
 
   # --- Model selection workflows ---
@@ -119,7 +122,7 @@ loadModelData <- function(params) {
   ))
 
   # --- Scenario projections ---
-  gdx_path <- params$gdxPath %||% ""
+  gdx_path <- params$gdxPath %||% getPfmConfig("gdxPath", "")
   future_mag <- if (nchar(gdx_path) > 0 && file.exists(gdx_path)) {
     panelDataScenario(gdxFile = gdx_path, outputRegionMappingFile = "regionmapping_54.csv")
   } else {

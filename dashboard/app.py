@@ -19,10 +19,41 @@ PFM_REPORTS_ROOT = Path(__file__).parent.parent
 # Config helpers
 # ---------------------------------------------------------------------------
 
+def get_py_config(key: str, default: str = "") -> str:
+    config_path = PFM_REPORTS_ROOT / "config.yml"
+    example_path = PFM_REPORTS_ROOT / "config.yml.example"
+    
+    path = config_path if config_path.exists() else example_path
+    if not path.exists():
+        return default
+        
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    if k.strip() == key:
+                        val = v.strip().strip("'\"")
+                        return val
+    except Exception:
+        pass
+    return default
+
+
 def load_config() -> dict:
     if CONFIG_PATH.exists():
         with open(CONFIG_PATH) as f:
             return json.load(f)
+    
+    fallback_dir = get_py_config("dashboardModelsDir", "")
+    if fallback_dir:
+        cfg = {"models_dir": fallback_dir}
+        save_config(cfg)
+        return cfg
+        
     return {"models_dir": ""}
 
 

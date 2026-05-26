@@ -6,6 +6,7 @@
 data/
 
 # Rendered output
+models/
 output/
 *.html
 
@@ -27,3 +28,6 @@ dashboard/data/
 .venv/
 venv/
 env/
+
+# User config file
+config.yml

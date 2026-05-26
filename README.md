@@ -6,54 +6,69 @@ Welcome to the `pfm-reports` directory. This folder is dedicated to **R Markdown
 
 ## 📚 Available Reports
 
-### 1. `model-selection.Rmd`
-**What it is for:** 
-This report is a deep-dive into the econometric assumptions behind the PFM Hurdle Models (Logit Adoption & Gamma Stringency). It tests 6 progressive model specifications:
-1. **Baseline**: Single `Actor Power Index`
-2. **Split Variables**: Evaluates asymmetric lobbying by separating Innovators and Incumbents
-3. **Advanced Controls**: Adds macro-structural controls like `Energy Intensity` and `Urban Population Share`
-4. **Non-Linear Dynamics**: Tests if wealth has diminishing returns using `GDP per Capita Sq`
-5. **Heterogeneous Regions**: Tests if Actor Power operates differently across global blocks (EU vs OECD) by interacting power indices with Region Fixed Effects
-6. **Path Dependency**: Tests institutional inertia by adding lagged adoption/stringency to the fully specified heterogeneous regions model.
+The directory contains four core analytical R Markdown reports:
 
-**Why use it:** 
-Run this report whenever you update your core `iamHistoricalData` or want to validate the statistical justification for choosing one model structure over another. The report outputs the Akaike Information Criterion (AIC) for every stage and sector across all 6 configurations.
+### 1. Model Diagnostics (`reports/model-diagnostics/IAM_PFM_report.Rmd`)
+* **What it is for:** The core feasibility diagnostics report. It fits the baseline political feasibility model formulations across diffuse/bulk sectors and hurdle/stringency stages. It computes in-sample statistics, country-level regressions, and out-of-sample projections using REMIND scenarios.
+* **Why use it:** Run this first to generate the consolidated shared data cache (`data/modelData.RData`) consumed by other reports and the Python dashboard.
 
----
+### 2. Model Selection (`reports/model-selection/model-selection.Rmd`)
+* **What it is for:** An econometric progressive specification testing report. It fits 12 base formulations and dynamically generated combination models to compare metrics (AIC, BIC, Pseudo-R²) across base assumptions, institutional variables, and regional effects.
+* **Why use it:** Run this to justify model changes, evaluate asymmetric lobbying (splitting actors), macroeconomic controls, Rule of Law indices, and fixed effects.
 
-### 2. `panel-data-input.Rmd`
-**What it is for:**
-This report provides a detailed inspection, validation, and visualization of the trainer and projection panel data inputs. It compares institutional quality drivers, actor power drivers/indexes, and socioeconomic controls before regional aggregation (country-level) and after regional aggregation (region-level mapping to 54 clusters) for both historical (2000–2022) and scenario (2005–2150) datasets.
+### 3. Adoption Model (`reports/adoption-model/adoption-model.Rmd`)
+* **What it is for:** A detailed assessment of policy adoption, specifically calibrating alternative probability thresholds (e.g., 5%, 10%, 25%, 35%, 50%) for the hurdle stage, mapping spatial adoption, and graphing regional timelines.
+* **Why use it:** Run this to evaluate geographical adoption patterns, calibrate triggers, and analyze policy transition speeds.
 
-**Why use it:**
-Run this report whenever you update raw inputs or run a new REMIND scenario to verify that the aggregation weights preserve global totals, verify variance preservation across aggregation scales, and perform continuity stitching diagnoses at the historical-to-scenario boundary (2022/2025).
+### 4. Panel Data Input (`reports/panel-data-input/panel-data-input.Rmd`)
+* **What it is for:** Detailed inspection and validation of historical and scenario panel data.
+* **Why use it:** Run this to verify that country-to-region aggregations preserve variance and that historical and projection data stitch together smoothly at the boundary year.
 
 ---
 
-## 🚀 How to Run the Reports
+## 🚀 How to Run the Reports (Consolidated Builder)
 
-R Markdown files combine narrative text with executable R code. To execute the code and generate the final document, you must **"Knit"** or **Render** the file.
+We provide a central launcher script (`createReports.R`) at the root of `pfm-reports` that automates compiling the reports. It reads default paths dynamically from `config.yml` (copy from `config.yml.example` to customize).
 
-### Method A: Using RStudio (Recommended)
-1. Open the `.Rmd` file (e.g., `model-selection.Rmd`) in RStudio.
-2. At the top of the editor window, look for the **"Knit"** button (it has an icon of a ball of yarn).
-3. Click **Knit** (or use the shortcut `Ctrl+Shift+K`).
-4. RStudio will run all the code chunks in the background and generate an `.html` file in this same directory. The file will automatically pop up in a viewer window.
+### Method A: Parallel Build (Recommended)
+You can compile **all 4 reports in parallel** using background workers. This runs extremely fast and handles cache population automatically.
 
-### Method B: Using the R Console
-If you prefer running commands directly in the R console without using the RStudio interface:
+* **Via Command Line / Terminal:**
+  ```bash
+  # Run from the pfm-reports folder
+  Rscript createReports.R 0
+  ```
+  *(You can also use `Rscript createReports.R --parallel` or `Rscript createReports.R all`)*
+
+* **Via R Console / RStudio:**
+  ```R
+  source("createReports.R")
+  # Select option [0] when prompted
+  ```
+
+### Method B: Single Report (Interactive CLI)
+You can build a specific report and customize its paths interactively.
+
+* **Via R Console / RStudio:**
+  ```R
+  source("createReports.R")
+  # Select the report index [1-4] when prompted
+  # Press Enter to accept the default configuration shown in brackets
+  ```
+
+* **Via CLI:**
+  ```bash
+  Rscript createReports.R 1   # Builds adoption-model
+  Rscript createReports.R 2   # Builds model-diagnostics
+  Rscript createReports.R 3   # Builds model-selection
+  Rscript createReports.R 4   # Builds panel-data-input
+  ```
+
+### Method C: Manual Render (R Console)
+If you prefer to render a single report manually without the launcher:
 ```R
-# Make sure the rmarkdown package is installed
-if (!require(rmarkdown)) install.packages("rmarkdown")
-
-# Render the report
-rmarkdown::render("pfm-reports/reports/model-selection/model-selection.Rmd")
-```
-
-### Method C: From the Command Line / Terminal
-You can generate the report directly from your operating system's terminal:
-```bash
-Rscript -e "rmarkdown::render('pfm-reports/reports/model-selection/model-selection.Rmd')"
+library(rmarkdown)
+rmarkdown::render("reports/model-selection/model-selection.Rmd", output_dir = "output")
 ```
 
 ---
@@ -123,12 +138,21 @@ The **Active model** dropdown in the left sidebar controls which model is shown 
 ---
 
 ## 📝 Creating New Reports
-If you wish to create a new report in the future (e.g., `PFM_Projection_Analysis.Rmd`), simply place it in this folder. Be sure to configure `madrat` in the setup chunk of your new report to ensure data loading works seamlessly:
+If you wish to create a new report in the future (e.g., `reports/my-new-report/my-new-report.Rmd`), simply place it in a subdirectory under `reports/`. 
+
+To ensure it doesn't contain hardcoded paths, use the dynamic configuration helper `getPfmConfig` in your setup chunk:
 
 ```R
+library(rprojroot)
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
+
+# Configure madrat with user-defined cache directory
+cache_dir <- getPfmConfig("cacheDir", "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default")
+mapping_dir <- gsub("cache/default", "mappings", cache_dir)
+
 madrat::setConfig(
   forcecache = TRUE,
-  cachefolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default",
-  mappingfolder = "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/mappings"
+  cachefolder = cache_dir,
+  mappingfolder = mapping_dir
 )
 ```
