@@ -51,7 +51,7 @@ madrat::setConfig(
 
 # Resolve modelDir as an absolute path relative to the project root to prevent relative directory collisions
 model_dir <- getPfmConfig("modelDir", "models")
-if (!rprojroot::is_absolute_path(model_dir)) {
+if (!is_absolute_path(model_dir)) {
   model_dir <- file.path(rprojroot::find_rstudio_root_file(), model_dir)
 }
 options(pfm.modelDir = model_dir)
@@ -204,7 +204,7 @@ model_configs <- list(
 ```{r loading data, include=FALSE}
 
 # 1. Load Data
-panelData <- panelDataHistorical(
+panelData <- getPanelDataHistoricalCached(
   aggregate = TRUE, y = 2000:2022,
   outputRegionMappingFile = "regionmapping_54.csv"
 )

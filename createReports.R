@@ -170,7 +170,9 @@ if (idx == 0) {
   
   local({
     source(report_run, local = TRUE)
-    render_report(
+    
+    # Dynamically filter arguments to match the render_report signature
+    all_params <- list(
       modelDataFile = model_data_file,
       modelDir      = model_dir,
       cacheDir      = cache_dir,
@@ -178,5 +180,10 @@ if (idx == 0) {
       outputFile    = output_file,
       assetDir      = asset_dir
     )
+    
+    valid_names <- formalArgs(render_report)
+    params_to_pass <- all_params[names(all_params) %in% valid_names]
+    
+    do.call(render_report, params_to_pass)
   })
 }

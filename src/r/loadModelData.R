@@ -30,7 +30,7 @@ loadModelData <- function(params) {
   # Set pfm.modelDir unconditionally so loadPFMModel() / listPFMModels() work
   # regardless of whether we load from the modelData cache or recompute.
   modelDir <- params$modelDir %||% getPfmConfig("modelDir", "models")
-  if (!rprojroot::is_absolute_path(modelDir)) {
+  if (!is_absolute_path(modelDir)) {
     modelDir <- file.path(rprojroot::find_rstudio_root_file(), modelDir)
   }
   options(pfm.modelDir = modelDir)
@@ -47,7 +47,7 @@ loadModelData <- function(params) {
   madrat::setConfig(forcecache = TRUE, cachefolder = cache_dir, mappingfolder = mapping_dir)
 
   # --- Panel data ---
-  panelData <- panelDataHistorical(
+  panelData <- getPanelDataHistoricalCached(
     aggregate = TRUE, y = 2000:2022,
     outputRegionMappingFile = "regionmapping_54.csv"
   )
@@ -124,7 +124,7 @@ loadModelData <- function(params) {
   # --- Scenario projections ---
   gdx_path <- params$gdxPath %||% getPfmConfig("gdxPath", "")
   future_mag <- if (nchar(gdx_path) > 0 && file.exists(gdx_path)) {
-    panelDataScenario(gdxFile = gdx_path, outputRegionMappingFile = "regionmapping_54.csv")
+    getPanelDataScenarioCached(gdxFile = gdx_path, aggregate = TRUE, outputRegionMappingFile = "regionmapping_54.csv")
   } else {
     NULL
   }

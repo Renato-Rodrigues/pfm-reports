@@ -106,9 +106,12 @@ model_vars_input <- c(
   model_controlDrivers
 )
 
-has_scenario <- !is.null(params$gdxPath) &&
-                nchar(params$gdxPath) > 0 &&
-                file.exists(params$gdxPath)
+# Resolve gdxPath as an absolute path relative to the project root if it is relative
+gdx_path <- params$gdxPath
+if (!is.null(gdx_path) && nchar(gdx_path) > 0 && !is_absolute_path(gdx_path)) {
+  gdx_path <- file.path(rprojroot::find_rstudio_root_file(), gdx_path)
+}
+has_scenario <- !is.null(gdx_path) && nchar(gdx_path) > 0 && file.exists(gdx_path)
 
 tidy_magpie <- function(mag_obj, period_label = "Historical") {
   if (is.null(mag_obj)) return(NULL)
@@ -131,7 +134,7 @@ key_regions <- c("USA", "CHA", "DEU", "IND", "JPN", "BRA", "RUS", "ZAF")
 ```
 
 ```{r load_data, cache=TRUE, include=FALSE}
-panelData <- panelDataHistorical(
+panelData <- getPanelDataHistoricalCached(
   aggregate = TRUE, y = 2000:2022,
   outputRegionMappingFile = "regionmapping_54.csv"
 )
@@ -141,8 +144,9 @@ df_hist <- tidy_magpie(panelData, "Historical")
 future_mag <- NULL
 df_scen    <- NULL
 if (has_scenario) {
-  future_mag <- panelDataScenario(
-    gdxFile = params$gdxPath,
+  future_mag <- getPanelDataScenarioCached(
+    gdxFile = gdx_path,
+    aggregate = TRUE,
     outputRegionMappingFile = "regionmapping_54.csv"
   )
   df_scen <- tidy_magpie(future_mag, "Scenario")
