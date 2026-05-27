@@ -18,7 +18,7 @@ output:
   html_document:
     toc: true
     toc_float: true
-    toc_depth: 3
+    toc_depth: 1
     theme: flatly
     highlight: tango
     number_sections: true
@@ -75,6 +75,7 @@ library(knitr)
 library(kableExtra)
 library(scales)
 
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/forestPlot.R"))
 
@@ -745,6 +746,234 @@ p_r2 + p_aic + plot_layout(guides = "collect") & theme(legend.position = "bottom
 
 ---
 
+# Historical Model Fit {.tabset}
+
+```{r hist-fit-helper, include=FALSE}
+build_hist_fit <- function(fit, sector, data) {
+  df <- pfm::preparePanelData(
+    data                      = data,
+    sector                    = sector,
+    actorPowerDrivers         = NULL,
+    actorPowerIndex           = "Actor Power Index",
+    instQualityDrivers        = model_instQualityDrivers,
+    controlDrivers            = model_controlDrivers,
+    regionMappingFixedEffects = model_regionMappingFE,
+    lag                       = 1
+  )
+  df$adoption_raw <- as.integer(df$ecp > 0)
+
+  needed_vars <- intersect(all.vars(fit$model$formula), colnames(df))
+  ok          <- complete.cases(df[, needed_vars, drop = FALSE])
+  df$fitted_prob <- NA_real_
+  pred <- tryCatch(
+    predict(fit$model, newdata = df[ok, ], type = "link"),
+    error = function(e) NULL
+  )
+  if (!is.null(pred)) df$fitted_prob[ok] <- 1 / (1 + exp(-as.numeric(pred)))
+  df
+}
+
+hist_fit_bulk    <- build_hist_fit(fit_bulk,    "Bulk",    panelData)
+hist_fit_diffuse <- build_hist_fit(fit_diffuse, "Diffuse", panelData)
+
+# --- Trajectory plot (adopted or non-adopted regions) ---
+make_traj_plot <- function(df, sector_name, adopted_group = TRUE) {
+  col_sector  <- if (sector_name == "Bulk") col_bulk else col_diffuse
+  group_label <- if (adopted_group) "Adopted" else "Non-Adopted"
+
+  ever_adopted <- df %>%
+    group_by(region) %>%
+    summarise(adopted = any(adoption_raw == 1, na.rm = TRUE), .groups = "drop")
+
+  regs <- ever_adopted %>% filter(adopted == adopted_group) %>% pull(region)
+  df_f <- df %>% filter(region %in% regs)
+  if (nrow(df_f) == 0) return(NULL)
+
+  n_regs <- length(unique(df_f$region))
+  ncols  <- min(6L, n_regs)
+
+  ggplot(df_f, aes(x = year)) +
+    geom_step(aes(y = adoption_raw, color = "Actual adoption (0/1)"),
+              linewidth = 0.7, alpha = 0.6) +
+    geom_line(aes(y = fitted_prob, color = "Model fitted probability"),
+              linewidth = 1.0, na.rm = TRUE) +
+    facet_wrap(~region, ncol = ncols) +
+    scale_color_manual(
+      values = c("Actual adoption (0/1)" = "grey55",
+                 "Model fitted probability" = col_sector),
+      name = NULL
+    ) +
+    scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0(sector_name, " — ", group_label, " Regions: In-Sample Fit"),
+      subtitle = "Grey step = actual adoption (0/1); solid = model fitted probability",
+      x = "Year", y = "Probability / Adoption"
+    ) +
+    theme_report() +
+    theme(legend.position = "bottom")
+}
+
+# --- Density plot of predicted probabilities by actual outcome ---
+make_density_plot <- function(df, sector_name) {
+  df_clean <- df %>%
+    filter(!is.na(fitted_prob)) %>%
+    mutate(outcome = factor(
+      ifelse(adoption_raw == 1, "Adopted", "Not Adopted"),
+      levels = c("Adopted", "Not Adopted")
+    ))
+
+  ggplot(df_clean, aes(x = fitted_prob, fill = outcome, color = outcome)) +
+    geom_density(alpha = 0.4, linewidth = 0.8) +
+    scale_fill_manual(values  = c("Adopted" = "#E74C3C", "Not Adopted" = "#3498DB"),
+                      name = "Actual Outcome") +
+    scale_color_manual(values = c("Adopted" = "#E74C3C", "Not Adopted" = "#3498DB"),
+                       name = "Actual Outcome") +
+    scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0("Model Fit: Adoption Probability (", sector_name, ")"),
+      subtitle = "Distribution of predicted probabilities for actual outcomes",
+      x        = "Predicted Probability of Adopting a Carbon Price",
+      y        = "Density",
+      caption  = paste0(
+        "Figure: Fit of the Logit (adoption) model component.\n",
+        "Shows predicted probability distributions for actual adoption outcomes.\n",
+        "Colors indicate the observed outcome (adopted vs not adopted)."
+      )
+    ) +
+    theme_report() +
+    theme(legend.position = "right",
+          plot.caption = element_text(hjust = 0, size = 8, color = "grey40"))
+}
+
+# --- Adoption timeline (Gantt chart) ---
+make_timeline_plot <- function(df, sector_name, threshold) {
+  col_sector <- if (sector_name == "Bulk") col_bulk else col_diffuse
+
+  adopted_regs <- df %>%
+    group_by(region) %>%
+    filter(any(adoption_raw == 1, na.rm = TRUE)) %>%
+    ungroup()
+
+  actual <- adopted_regs %>%
+    filter(adoption_raw == 1) %>%
+    group_by(region) %>%
+    summarise(start_year = min(year), end_year = max(year), .groups = "drop")
+
+  predicted <- adopted_regs %>%
+    filter(!is.na(fitted_prob), fitted_prob >= threshold) %>%
+    group_by(region) %>%
+    summarise(pred_year = min(year), .groups = "drop")
+
+  timeline <- actual %>%
+    left_join(predicted, by = "region") %>%
+    arrange(start_year, region)
+
+  timeline$region <- factor(timeline$region, levels = rev(timeline$region))
+
+  ggplot(timeline, aes(y = region)) +
+    geom_segment(aes(x = start_year, xend = end_year, yend = region,
+                     color = "Real Adoption"),
+                 linewidth = 5, alpha = 0.45, lineend = "round") +
+    geom_point(aes(x = pred_year, color = "Predicted Adoption"),
+               size = 3, na.rm = TRUE) +
+    scale_color_manual(
+      values = c("Real Adoption" = "grey55", "Predicted Adoption" = col_sector),
+      name = NULL
+    ) +
+    labs(
+      title    = paste0("Carbon Price Adoption: Real vs Predicted (",
+                        sector_name, ", threshold = ", threshold, ")"),
+      subtitle = "Grey bar = actual adoption period; dot = first year model predicts adoption",
+      x = "Year", y = NULL,
+      caption  = paste0(
+        "Note: Predicted adoption based on probability > ", threshold, ".\n",
+        "Logit model only predicts adoption probability, not price levels."
+      )
+    ) +
+    theme_report() +
+    theme(legend.position = "bottom",
+          plot.caption = element_text(hjust = 0, size = 8, color = "grey40"))
+}
+```
+
+## Bulk {.tabset}
+
+### Adopted Regions
+
+```{r hist-traj-bulk-adopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_bulk, "Bulk", adopted_group = TRUE)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "hist_fit_bulk_adopted.png"), p, width = 14, height = 10, dpi = 300)
+}
+```
+
+### Non-Adopted Regions
+
+```{r hist-traj-bulk-nonadopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_bulk, "Bulk", adopted_group = FALSE)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "hist_fit_bulk_nonadopted.png"), p, width = 14, height = 10, dpi = 300)
+}
+```
+
+### Probability Distribution
+
+```{r hist-density-bulk, echo=FALSE, fig.width=10, fig.height=6}
+p <- make_density_plot(hist_fit_bulk, "Bulk")
+print(p)
+ggsave(file.path(plotOutputDir, "hist_density_bulk.png"), p, width = 10, height = 6, dpi = 300)
+```
+
+### Adoption Timeline
+
+```{r hist-timeline-bulk, echo=FALSE, fig.width=11, fig.height=9}
+p <- make_timeline_plot(hist_fit_bulk, "Bulk", adoption_threshold)
+print(p)
+ggsave(file.path(plotOutputDir, "hist_timeline_bulk.png"), p, width = 11, height = 9, dpi = 300)
+```
+
+## Diffuse {.tabset}
+
+### Adopted Regions
+
+```{r hist-traj-diffuse-adopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_diffuse, "Diffuse", adopted_group = TRUE)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "hist_fit_diffuse_adopted.png"), p, width = 14, height = 10, dpi = 300)
+}
+```
+
+### Non-Adopted Regions
+
+```{r hist-traj-diffuse-nonadopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_diffuse, "Diffuse", adopted_group = FALSE)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "hist_fit_diffuse_nonadopted.png"), p, width = 14, height = 10, dpi = 300)
+}
+```
+
+### Probability Distribution
+
+```{r hist-density-diffuse, echo=FALSE, fig.width=10, fig.height=6}
+p <- make_density_plot(hist_fit_diffuse, "Diffuse")
+print(p)
+ggsave(file.path(plotOutputDir, "hist_density_diffuse.png"), p, width = 10, height = 6, dpi = 300)
+```
+
+### Adoption Timeline
+
+```{r hist-timeline-diffuse, echo=FALSE, fig.width=11, fig.height=9}
+p <- make_timeline_plot(hist_fit_diffuse, "Diffuse", adoption_threshold)
+print(p)
+ggsave(file.path(plotOutputDir, "hist_timeline_diffuse.png"), p, width = 11, height = 9, dpi = 300)
+```
+
+---
+
 # Future Projections {.tabset}
 
 ```{r proj-check, echo=FALSE, results='asis'}
@@ -898,6 +1127,73 @@ render_timeline_table <- function(tl_df, sector_name) {
   ))
   cat("\n\n")
 }
+
+make_full_gantt_plot <- function(hist_df, proj_df, sector_name, threshold) {
+  col_sector <- if (sector_name == "Bulk") col_bulk else col_diffuse
+
+  hist_actual <- hist_df %>%
+    filter(adoption_raw == 1) %>%
+    group_by(region) %>%
+    summarise(hist_start = min(year), hist_end = max(year), .groups = "drop")
+
+  proj_adoption <- if (!is.null(proj_df) && nrow(proj_df) > 0) {
+    proj_df %>%
+      group_by(region) %>%
+      summarise(
+        proj_year = ifelse(any(prob >= threshold, na.rm = TRUE),
+                           min(year[prob >= threshold], na.rm = TRUE), NA_real_),
+        .groups = "drop"
+      )
+  } else {
+    data.frame(region = character(0), proj_year = numeric(0))
+  }
+
+  all_regions <- unique(c(as.character(hist_df$region),
+                           if (!is.null(proj_df)) as.character(proj_df$region)))
+  gantt <- data.frame(region = all_regions, stringsAsFactors = FALSE) %>%
+    left_join(hist_actual,    by = "region") %>%
+    left_join(proj_adoption,  by = "region") %>%
+    filter(!is.na(hist_start) | !is.na(proj_year)) %>%
+    mutate(
+      sort_key = case_when(
+        !is.na(hist_start) ~ as.numeric(hist_start),
+        !is.na(proj_year)  ~ as.numeric(proj_year) + 1000,
+        TRUE               ~ Inf
+      )
+    ) %>%
+    arrange(sort_key) %>%
+    mutate(region = factor(region, levels = rev(region)))
+
+  max_hist_year <- max(hist_df$year, na.rm = TRUE)
+
+  ggplot(gantt, aes(y = region)) +
+    geom_segment(
+      data = gantt %>% filter(!is.na(hist_start)),
+      aes(x = hist_start, xend = pmax(hist_end, max_hist_year), yend = region,
+          color = "Historical Adoption"),
+      linewidth = 4, alpha = 0.55, lineend = "round"
+    ) +
+    geom_segment(
+      data = gantt %>% filter(!is.na(proj_year)),
+      aes(x = proj_year, xend = 2150, yend = region,
+          color = "Projected Adoption"),
+      linewidth = 3, alpha = 0.35, lineend = "round"
+    ) +
+    scale_color_manual(
+      values = c("Historical Adoption" = "grey55", "Projected Adoption" = col_sector),
+      name = NULL
+    ) +
+    labs(
+      title    = paste0(sector_name, " Carbon Price Adoption: Historical + Projected"),
+      subtitle = paste0("Grey = observed adoption period; Colour = projected onset (prob ≥ ", threshold, ")"),
+      x = "Year", y = NULL
+    ) +
+    theme_report() +
+    theme(
+      legend.position  = "bottom",
+      axis.text.y      = element_text(size = 7)
+    )
+}
 ```
 
 ### Bulk
@@ -911,12 +1207,36 @@ if (has_scenario && !is.null(proj_bulk)) {
 }
 ```
 
+### Bulk Gantt
+
+```{r timeline-gantt-bulk, echo=FALSE, fig.width=12, fig.height=16}
+if (has_scenario && !is.null(proj_bulk)) {
+  p <- make_full_gantt_plot(hist_fit_bulk, proj_bulk, "Bulk", adoption_threshold)
+  print(p)
+  ggsave(file.path(plotOutputDir, "gantt_full_bulk.png"), p, width = 12, height = 16, dpi = 300)
+} else {
+  cat("> Scenario data not available.")
+}
+```
+
 ### Diffuse
 
 ```{r timeline-diffuse, echo=FALSE, results='asis'}
 if (has_scenario && !is.null(proj_diffuse)) {
   tl_diffuse <- compute_timeline(proj_diffuse, adoption_threshold)
   render_timeline_table(tl_diffuse, "Diffuse")
+} else {
+  cat("> Scenario data not available.")
+}
+```
+
+### Diffuse Gantt
+
+```{r timeline-gantt-diffuse, echo=FALSE, fig.width=12, fig.height=16}
+if (has_scenario && !is.null(proj_diffuse)) {
+  p <- make_full_gantt_plot(hist_fit_diffuse, proj_diffuse, "Diffuse", adoption_threshold)
+  print(p)
+  ggsave(file.path(plotOutputDir, "gantt_full_diffuse.png"), p, width = 12, height = 16, dpi = 300)
 } else {
   cat("> Scenario data not available.")
 }
