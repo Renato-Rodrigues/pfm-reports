@@ -150,6 +150,9 @@ col_cnt <- "#FDAE61"  # Country-level
 col_bulk <- "#2C7BB6"
 col_diffuse <- "#D7191C"
 
+# Key regions — mirrors adoption-model report for consistent comparisons
+key_regions <- c("USA", "CHA", "DEU", "IND", "JPN", "BRA", "RUS", "ZAF")
+
 # Configure madrat
 if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
   madrat::setConfig(
@@ -386,9 +389,7 @@ if (has_scenario) {
     filter(variable %in% c("Government Effectiveness (WGI)", "Rule of Law (WGI)", "Voice and Accountability (WGI)", "Rule of Law (VDem)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)")) %>%
     filter(aggregation == "Aggregated")
   
-  # Select a few major regions for clarity
-  regions_to_plot <- c("DEU", "USA", "CHA", "CHN", "IND", "EU28", "OECD", "NEU", "AFR", "LAM", "ASI")
-  df_iq_select <- df_iq_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHA", "CHN", "IND"))
+  df_iq_select <- df_iq_all %>% filter(region %in% key_regions)
   
   ggplot(df_iq_select, aes(x = year, y = value, color = region, linetype = period)) +
     geom_line(linewidth = 1.2) +
@@ -472,9 +473,7 @@ if (has_scenario) {
     filter(variable %in% c("VRE share", "Electrification", "Actor Power Index|Bulk", "Actor Power Index|Diffuse", "Incumbent Power|Bulk", "Innovator Power|Bulk", "Innovator Power|Diffuse")) %>%
     filter(aggregation == "Aggregated")
   
-  # Select illustrative regions
-  regions_to_plot <- c("DEU", "USA", "CHA", "CHN", "IND", "EU28", "OECD", "AFR", "LAM", "ASI")
-  df_ap_select <- df_ap_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHA", "CHN", "IND"))
+  df_ap_select <- df_ap_all %>% filter(region %in% key_regions)
   
   ggplot(df_ap_select, aes(x = year, y = value, color = region, linetype = period)) +
     geom_line(linewidth = 1.2) +
@@ -557,9 +556,7 @@ if (has_scenario) {
     filter(variable %in% c("GDP per Capita", "Population", "Urban Population Share")) %>%
     filter(aggregation == "Aggregated")
   
-  # Select illustrative regions
-  regions_to_plot <- c("DEU", "USA", "CHA", "CHN", "IND", "EU28", "OECD", "AFR", "LAM", "ASI")
-  df_ctrl_select <- df_ctrl_all %>% filter(region %in% regions_to_plot | region %in% c("EUR", "USA", "CHA", "CHN", "IND"))
+  df_ctrl_select <- df_ctrl_all %>% filter(region %in% key_regions)
   
   ggplot(df_ctrl_select, aes(x = year, y = value, color = region, linetype = period)) +
     geom_line(linewidth = 1.2) +
@@ -595,9 +592,7 @@ if (has_scenario) {
     filter(variable %in% key_vars) %>%
     filter(aggregation == "Aggregated")
   
-  # Representative regions covering diverse profiles
-  stitch_regions <- c("USA", "CHA", "CHN", "IND", "DEU", "EUR")
-  df_stitch_sel <- df_stitch %>% filter(region %in% stitch_regions)
+  df_stitch_sel <- df_stitch %>% filter(region %in% key_regions)
   
   ggplot(df_stitch_sel, aes(x = year, y = value, color = region)) +
     geom_line(aes(linetype = period), linewidth = 1.2) +
