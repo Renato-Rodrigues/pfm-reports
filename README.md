@@ -6,21 +6,25 @@ Welcome to the `pfm-reports` directory. This folder is dedicated to **R Markdown
 
 ## 📚 Available Reports
 
-The directory contains four core analytical R Markdown reports:
+The directory contains five core analytical R Markdown reports:
 
-### 1. Model Diagnostics (`reports/model-diagnostics/IAM_PFM_report.Rmd`)
-* **What it is for:** The core feasibility diagnostics report. It fits the baseline political feasibility model formulations across diffuse/bulk sectors and hurdle/stringency stages. It computes in-sample statistics, country-level regressions, and out-of-sample projections using REMIND scenarios.
-* **Why use it:** Run this first to generate the consolidated shared data cache (`data/modelData.RData`) consumed by other reports and the Python dashboard.
-
-### 2. Model Selection (`reports/model-selection/model-selection.Rmd`)
-* **What it is for:** An econometric progressive specification testing report. It fits 12 base formulations and dynamically generated combination models to compare metrics (AIC, BIC, Pseudo-R²) across base assumptions, institutional variables, and regional effects.
-* **Why use it:** Run this to justify model changes, evaluate asymmetric lobbying (splitting actors), macroeconomic controls, Rule of Law indices, and fixed effects.
-
-### 3. Adoption Model (`reports/adoption-model/adoption-model.Rmd`)
+### 1. Adoption Model (`reports/adoption-model/adoption-model.Rmd`)
 * **What it is for:** A detailed assessment of policy adoption, specifically calibrating alternative probability thresholds (e.g., 5%, 10%, 25%, 35%, 50%) for the hurdle stage, mapping spatial adoption, and graphing regional timelines.
 * **Why use it:** Run this to evaluate geographical adoption patterns, calibrate triggers, and analyze policy transition speeds.
 
-### 4. Panel Data Input (`reports/panel-data-input/panel-data-input.Rmd`)
+### 2. Downscale (`reports/downscale/downscale.Rmd`)
+* **What it is for:** Diagnostic report for the IPF (Iterative Proportional Fitting) country-level downscaling of REMIND regional energy variables. Shows reaggregation consistency, country composition over time, historical alignment, fuel mix evolution, and country-level driver snapshots.
+* **Why use it:** Run this to verify that downscaled country values reaggregate exactly to REMIND regional targets, and to inspect how the historical country energy mix is preserved in projected years.
+
+### 3. Model Diagnostics (`reports/model-diagnostics/IAM_PFM_report.Rmd`)
+* **What it is for:** The core feasibility diagnostics report. It fits the baseline political feasibility model formulations across diffuse/bulk sectors and hurdle/stringency stages. It computes in-sample statistics, country-level regressions, and out-of-sample projections using REMIND scenarios.
+* **Why use it:** Run this first to generate the consolidated shared data cache (`data/modelData.RData`) consumed by other reports and the Python dashboard.
+
+### 4. Model Selection (`reports/model-selection/model-selection.Rmd`)
+* **What it is for:** An econometric progressive specification testing report. It fits 12 base formulations and dynamically generated combination models to compare metrics (AIC, BIC, Pseudo-R²) across base assumptions, institutional variables, and regional effects.
+* **Why use it:** Run this to justify model changes, evaluate asymmetric lobbying (splitting actors), macroeconomic controls, Rule of Law indices, and fixed effects.
+
+### 5. Panel Data Input (`reports/panel-data-input/panel-data-input.Rmd`)
 * **What it is for:** Detailed inspection and validation of historical and scenario panel data.
 * **Why use it:** Run this to verify that country-to-region aggregations preserve variance and that historical and projection data stitch together smoothly at the boundary year.
 
@@ -31,7 +35,7 @@ The directory contains four core analytical R Markdown reports:
 We provide a central launcher script (`createReports.R`) at the root of `pfm-reports` that automates compiling the reports. It reads default paths dynamically from `config.yml` (copy from `config.yml.example` to customize).
 
 ### Method A: Parallel Build (Recommended)
-You can compile **all 4 reports in parallel** using background workers. This runs extremely fast and handles cache population automatically.
+You can compile **all 5 reports in parallel** using background workers. This runs extremely fast and handles cache population automatically.
 
 * **Via Command Line / Terminal:**
   ```bash
@@ -52,16 +56,17 @@ You can build a specific report and customize its paths interactively.
 * **Via R Console / RStudio:**
   ```R
   source("createReports.R")
-  # Select the report index [1-4] when prompted
+  # Select the report index [1-5] when prompted
   # Press Enter to accept the default configuration shown in brackets
   ```
 
 * **Via CLI:**
   ```bash
   Rscript createReports.R 1   # Builds adoption-model
-  Rscript createReports.R 2   # Builds model-diagnostics
-  Rscript createReports.R 3   # Builds model-selection
-  Rscript createReports.R 4   # Builds panel-data-input
+  Rscript createReports.R 2   # Builds downscale
+  Rscript createReports.R 3   # Builds model-diagnostics
+  Rscript createReports.R 4   # Builds model-selection
+  Rscript createReports.R 5   # Builds panel-data-input
   ```
 
 ### Method C: Manual Render (R Console)

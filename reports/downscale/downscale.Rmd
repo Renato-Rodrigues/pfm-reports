@@ -1,0 +1,781 @@
+---
+title: "REMIND Country-Level Downscaling Report"
+subtitle: "IPF Disaggregation — Consistency, Composition, and Historical Alignment"
+author: "Political Feasibility Module"
+date: "`r Sys.Date()`"
+params:
+  cacheDir: "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default"
+  gdxPath:  "c:/Users/renatoro/Desktop/Projects/Elevate/code/fulldata.gdx"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 1
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: hide
+    fig_width: 11
+    fig_height: 6
+---
+
+<style>
+  body { background-color: #f5f7fa; color: #333; }
+  .main-container { max-width: 97% !important; }
+  .toc-content { padding-left: 0px !important; }
+  h1, h2, h3 { color: #2C3E50; font-weight: 700; }
+  .nav-tabs { font-weight: bold; margin-bottom: 20px; border-bottom: 2px solid #2C3E50; }
+  .nav-tabs > li.active > a,
+  .nav-tabs > li.active > a:focus,
+  .nav-tabs > li.active > a:hover {
+    background-color: #2C3E50; color: #fff;
+    border: 1px solid #2C3E50; border-bottom-color: transparent;
+  }
+  .tab-content {
+    padding: 25px; border: 1px solid #ddd; border-top: none;
+    border-radius: 0 0 6px 6px; background-color: #fff;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE,
+                      fig.align = "center", dev = "svg")
+
+library(pfm)
+library(mrpfm)
+library(magclass)
+library(madrat)
+library(gdx)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(scales)
+library(plotly)
+library(knitr)
+library(kableExtra)
+
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
+
+# ── Resolve paths ──────────────────────────────────────────────────────────────
+gdx_path   <- params$gdxPath
+cache_dir  <- params$cacheDir
+root       <- rprojroot::find_rstudio_root_file()
+
+if (nchar(cache_dir) > 0) {
+  mapping_dir <- gsub("cache/default", "mappings", cache_dir)
+  setConfig(forcecache = TRUE, cachefolder = cache_dir, mappingfolder = mapping_dir)
+} else {
+  setConfig(forcecache = TRUE)
+}
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+mag2long <- function(m) {
+  arr <- as.array(m)
+  dn  <- dimnames(arr)
+  expand.grid(
+    region   = dn[[1]],
+    year     = as.integer(sub("^y", "", dn[[2]])),
+    variable = dn[[3]],
+    stringsAsFactors = FALSE
+  ) |> transform(value = as.vector(arr))
+}
+
+fuel_label <- c(
+  pecoal = "Coal", peoil = "Oil", pegas = "Gas",
+  pewin  = "Wind", pesol = "Solar", peur = "Nuclear",
+  pehyd  = "Hydro", pegeo = "Geothermal", petotal = "PE Total",
+  wind   = "Wind", solar = "Solar", seel = "Electricity",
+  fe_indst_fossil = "Industry Fossil FE", fe_indst = "Industry FE",
+  fe_seel = "Electricity FE", fe_total = "FE Total"
+)
+
+region_label <- c(
+  EUR = "Europe", USA = "USA", CHA = "China+", IND = "India",
+  OAS = "Other Asia", LAM = "Latin America", SSA = "Sub-Saharan Africa",
+  MEA = "Middle East & N. Africa", REF = "Reforming Economies",
+  CAZ = "Canada/AUS/NZ", NEU = "Non-EU Developed", JPN = "Japan"
+)
+
+fuel_colors <- c(
+  Coal = "#5d4037", Oil = "#8d6e63", Gas = "#f57c00",
+  Wind = "#42a5f5", Solar = "#fdd835", Nuclear = "#9c27b0",
+  Hydro = "#1565c0", Geothermal = "#43a047",
+  Electricity = "#26c6da", Other = "#b0bec5",
+  `PE Total` = "#37474f", `FE Total` = "#455a64",
+  `Industry FE` = "#78909c", `Industry Fossil FE` = "#6d4c41",
+  `Electricity FE` = "#00acc1", `Wind ` = "#42a5f5", `Solar ` = "#fdd835"
+)
+```
+
+```{r load-data, cache=FALSE}
+# ── Downscaled country data (cached) ──────────────────────────────────────────
+ds_cache   <- file.path(root, "data", "downscale_country.rds")
+state_now  <- get_library_state()
+gdx_mtime  <- if (file.exists(gdx_path)) file.info(gdx_path)$mtime else NA
+
+downscale_country <- local({
+  if (file.exists(ds_cache)) {
+    obj <- readRDS(ds_cache)
+    gdx_ok   <- !is.na(gdx_mtime) && !is.na(obj$gdx_mtime) &&
+                 obj$gdx_mtime >= gdx_mtime
+    state_ok <- identical(obj$state, state_now)
+    if (gdx_ok && state_ok) {
+      message("Loading downscale_country from cache")
+      return(obj$data)
+    }
+    message("Cache stale — recomputing downscale_country")
+  }
+  data <- suppressWarnings(downscaleREMINDResults(
+    gdxFile = gdx_path, aggregate = FALSE,
+    gdxRegionMappingFile = "regionmappingH12.csv",
+    outputRegionMappingFile = "regionmappingH12.csv"
+  ))
+  dir.create(dirname(ds_cache), showWarnings = FALSE, recursive = TRUE)
+  saveRDS(list(data = data, state = state_now, gdx_mtime = gdx_mtime), ds_cache)
+  data
+})
+
+# ── REMIND regional targets (fast — from GDX) ─────────────────────────────────
+year_list <- c(seq(2005, 2060, 5), seq(2070, 2110, 10), 2130, 2150)
+
+prodPe <- suppressWarnings(
+  gdx::readGDX(gdx_path, "vm_prodPe", field = "l",
+               react = "silent", restore_zeros = FALSE)
+)[, year_list, ]
+
+peVars <- c("pecoal","peoil","pegas","pewin","pesol","peur","pehyd","pegeo","petotal")
+seVars <- c("wind","solar","seel")
+feVars <- c("fe_indst_fossil","fe_indst","fe_seel","fe_total")
+all_vars <- c(peVars, seVars, feVars)
+
+remind_reg <- new.magpie(getItems(prodPe, 1), year_list, all_vars, fill = 0)
+remind_reg[,, peVars[peVars != "petotal"]] <- prodPe[,, peVars[peVars != "petotal"]]
+remind_reg[,, "petotal"] <- setNames(dimSums(prodPe, dim = 3), "petotal")
+prodSe <- suppressWarnings(
+  gdx::readGDX(gdx_path, "vm_prodSe", field = "l",
+               react = "silent", restore_zeros = FALSE)
+)[, year_list, ]
+remind_reg[,, "wind"]  <- dimSums(prodSe[,, c("windon","windoff")], dim = 3, na.rm = TRUE)
+remind_reg[,, "solar"] <- dimSums(prodSe[,, c("spv","csp")],        dim = 3, na.rm = TRUE)
+remind_reg[,, "seel"]  <- dimSums(prodSe[,, "seel"],                 dim = 3, na.rm = TRUE)
+demFe <- suppressWarnings(
+  gdx::readGDX(gdx_path, "vm_demFeSector", field = "l",
+               react = "silent", restore_zeros = FALSE)
+)[, year_list, ]
+remind_reg[,, "fe_indst_fossil"] <- dimSums(demFe[,,"indst"][,,c("seliqfos","segafos","sesofos")], dim=3, na.rm=TRUE)
+remind_reg[,, "fe_indst"]        <- dimSums(demFe[,,"indst"],  dim = 3, na.rm = TRUE)
+remind_reg[,, "fe_seel"]         <- dimSums(demFe[,,"seel"],   dim = 3, na.rm = TRUE)
+remind_reg[,, "fe_total"]        <- dimSums(demFe,             dim = 3, na.rm = TRUE)
+
+# ── Historical prior ───────────────────────────────────────────────────────────
+hist_data <- suppressWarnings(iamHistoricalData(gdxRegionMappingFile = "regionmappingH12.csv"))
+hist_data[hist_data < 0] <- 0
+
+# ── Mapping ────────────────────────────────────────────────────────────────────
+mapping <- toolGetMapping("regionmappingH12.csv", type = "regional", where = "mappingfolder")
+```
+
+```{r derived-dfs, cache=FALSE}
+# REMIND GDX stores energy in TWa (terawatt-years); iamHistoricalData() uses EJ/yr.
+# Convert all GDX-derived values to EJ/yr so every data frame is on the same scale.
+twa2ej <- 31.536  # 1 TWa = 31.536 EJ
+
+# Long data frames for plotting
+df_remind  <- mag2long(remind_reg) |>
+  mutate(value = value * twa2ej,
+         label = region_label[region],
+         fuel  = fuel_label[variable])
+
+df_country <- mag2long(downscale_country) |>
+  mutate(value = value * twa2ej) |>
+  left_join(mapping, by = c("region" = "CountryCode")) |>
+  mutate(fuel = fuel_label[variable])
+
+# Reaggregated: sum countries → region
+df_reagg <- df_country |>
+  group_by(RegionCode, year, variable, fuel) |>
+  summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
+  rename(region = RegionCode) |>
+  mutate(label = region_label[region])
+
+# Historical (long)
+df_hist <- mag2long(hist_data) |>
+  left_join(mapping, by = c("region" = "CountryCode")) |>
+  mutate(fuel = fuel_label[variable])
+
+# Overlap years: REMIND years inside the historical range
+hist_years  <- sort(unique(df_hist$year))
+remind_years <- sort(unique(df_remind$year))
+overlap_yrs <- intersect(hist_years, remind_years)
+
+last_hist_yr <- max(hist_years)
+```
+
+```{r summary-table}
+data.frame(
+  Item = c("REMIND GDX", "REMIND regions", "REMIND years",
+           "Countries (downscaled)", "Historical years", "Overlap years",
+           "Variables"),
+  Value = c(
+    basename(gdx_path),
+    paste(sort(unique(df_remind$region)), collapse = ", "),
+    paste(range(remind_years), collapse = "–"),
+    length(unique(df_country$region)),
+    paste(range(hist_years), collapse = "–"),
+    paste(range(overlap_yrs), collapse = "–"),
+    paste(length(all_vars), "variables (PE, SE, FE)")
+  )
+) |>
+  kable(col.names = c("Item", "Value"), align = c("l","l")) |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE, position = "left")
+```
+
+---
+
+# Reaggregation Consistency
+
+> **What this shows:** For every REMIND region, year, and variable, the sum of downscaled country values must equal the original REMIND regional target. Points off the 1:1 line indicate IPF constraint violations.
+
+```{r reagg-scatter, fig.height=8, fig.width=11}
+check_vars <- c("petotal", "seel", "fe_total")
+
+df_check <- df_reagg |>
+  filter(variable %in% check_vars) |>
+  left_join(df_remind |> select(region, year, variable, remind_val = value),
+            by = c("region","year","variable")) |>
+  filter(!is.na(remind_val), remind_val > 0) |>
+  mutate(fuel = fuel_label[variable])
+
+ggplot(df_check, aes(x = remind_val, y = value, colour = label)) +
+  geom_abline(slope = 1, intercept = 0, colour = "black", linewidth = 0.6) +
+  geom_point(alpha = 0.6, size = 1.5) +
+  facet_wrap(~fuel, scales = "free", ncol = 3) +
+  scale_x_continuous(labels = label_comma()) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(x = "REMIND regional target (EJ/yr)",
+       y = "Sum of downscaled countries (EJ/yr)",
+       colour = "Region",
+       title  = "Reaggregation Check: Sum-of-Countries vs. REMIND Target",
+       subtitle = "All points should lie exactly on the 1:1 line") +
+  theme_report() +
+  theme(legend.position = "right")
+```
+
+```{r reagg-time, fig.height=9, fig.width=11}
+df_cmp <- bind_rows(
+  df_reagg |> filter(variable == "petotal") |>
+    mutate(source = "Sum of countries"),
+  df_remind |> filter(variable == "petotal") |>
+    rename(RegionCode = region) |>
+    mutate(source = "REMIND target", region = RegionCode)
+) |>
+  mutate(label = coalesce(region_label[region], region_label[RegionCode]))
+
+ggplot(df_cmp, aes(x = year, y = value, colour = source, linetype = source)) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~label, scales = "free_y", ncol = 4) +
+  scale_colour_manual(values = c("REMIND target" = "#e74c3c",
+                                  "Sum of countries" = "#2980b9"),
+                      name = NULL) +
+  scale_linetype_manual(values = c("REMIND target" = "solid",
+                                    "Sum of countries" = "dashed"),
+                        name = NULL) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(x = NULL, y = "Primary Energy (EJ/yr)",
+       title  = "Primary Energy Total: REMIND Target vs. Sum of Downscaled Countries",
+       subtitle = "Lines should overlap perfectly — dashed (countries) drawn over solid (REMIND)") +
+  theme_report() +
+  theme(legend.position = "bottom")
+```
+
+---
+
+# Country Composition Over Time {.tabset}
+
+> **What this shows:** How the total primary energy splits across countries within each REMIND region, from the historical period through 2150. The shaded grey band marks the historical range. Historical actual values are shown as faint lines; downscaled (IPF) values as coloured areas.
+
+```{r composition-helper}
+make_composition_plot <- function(reg_code, var_name = "petotal", top_n = 9) {
+  reg_label <- region_label[[reg_code]]
+  ctrs <- mapping$CountryCode[mapping$RegionCode == reg_code]
+
+  # Country-level downscaled
+  ds_sub <- df_country |>
+    filter(RegionCode == reg_code, variable == var_name, !is.na(value))
+
+  # Pick top countries by peak value (ignoring last hist year to avoid recency bias)
+  top_ctrs <- ds_sub |>
+    group_by(region) |>
+    summarise(peak = max(value, na.rm = TRUE)) |>
+    slice_max(peak, n = top_n, with_ties = FALSE) |>
+    pull(region)
+
+  ds_grp <- ds_sub |>
+    mutate(ctr_grp = if_else(region %in% top_ctrs, region, "Other")) |>
+    group_by(year, ctr_grp) |>
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
+    mutate(ctr_grp = factor(ctr_grp,
+      levels = c(rev(top_ctrs[top_ctrs %in% unique(ds_sub$region)]), "Other")))
+
+  # Historical actuals for this region
+  hist_sub <- df_hist |>
+    filter(RegionCode == reg_code, variable == var_name, !is.na(value), value > 0)
+  hist_reg <- hist_sub |>
+    group_by(year) |>
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop")
+
+  lvls   <- levels(ds_grp$ctr_grp)
+  n_lvls <- length(lvls)
+  pal    <- c(scales::hue_pal()(n_lvls - 1L), "grey70")
+
+  ymax <- max(c(ds_grp$value, hist_reg$value), na.rm = TRUE) * 1.05
+
+  ggplot() +
+    annotate("rect",
+      xmin = min(hist_years), xmax = last_hist_yr,
+      ymin = 0, ymax = ymax * 1.1,
+      fill = "#ecf0f1", alpha = 0.6) +
+    geom_line(data = hist_reg,
+      aes(x = year, y = value),
+      colour = "grey30", linewidth = 1.2, linetype = "solid") +
+    geom_area(data = ds_grp,
+      aes(x = year, y = value, fill = ctr_grp),
+      alpha = 0.75, position = "stack") +
+    geom_vline(xintercept = last_hist_yr, linetype = "dashed",
+               colour = "#2C3E50", linewidth = 0.7) +
+    annotate("text", x = last_hist_yr + 1, y = ymax * 0.97,
+             label = paste0("← Historical | Projected →"),
+             hjust = 0, size = 3.5, colour = "grey40") +
+    scale_fill_manual(values = setNames(pal, lvls),
+                      name = "Country") +
+    scale_x_continuous(breaks = c(2010, 2030, 2050, 2075, 2100, 2150)) +
+    scale_y_continuous(labels = label_comma(), expand = expansion(mult = c(0, 0.05))) +
+    labs(x = NULL,
+         y = paste0(fuel_label[[var_name]], " (EJ/yr)"),
+         title = paste0(reg_label, " — ", fuel_label[[var_name]],
+                        ": Country Composition"),
+         subtitle = paste0(
+           "Stacked area = downscaled (IPF); grey line = historical sum; ",
+           "grey band = historical period")) +
+    theme_report() +
+    theme(legend.position = "right",
+          legend.text     = element_text(size = 11))
+}
+```
+
+```{r comp-eur, fig.height=6}
+make_composition_plot("EUR", "petotal")
+```
+
+## EUR {.unnumbered}
+
+```{r comp-eur-tabs, fig.height=5}
+gridExtra::grid.arrange(
+  make_composition_plot("EUR", "pewin")  + theme(legend.position = "none"),
+  make_composition_plot("EUR", "pesol")  + theme(legend.position = "none"),
+  make_composition_plot("EUR", "pegas")  + theme(legend.position = "none"),
+  make_composition_plot("EUR", "pecoal") + theme(legend.position = "none"),
+  ncol = 2
+)
+```
+
+## CHA {.unnumbered}
+
+```{r comp-cha, fig.height=9}
+gridExtra::grid.arrange(
+  make_composition_plot("CHA", "petotal"),
+  make_composition_plot("CHA", "pewin")  + theme(legend.position = "none"),
+  make_composition_plot("CHA", "pecoal") + theme(legend.position = "none"),
+  ncol = 1
+)
+```
+
+## OAS {.unnumbered}
+
+```{r comp-oas, fig.height=9}
+gridExtra::grid.arrange(
+  make_composition_plot("OAS", "petotal"),
+  make_composition_plot("OAS", "pecoal") + theme(legend.position = "none"),
+  make_composition_plot("OAS", "pegas")  + theme(legend.position = "none"),
+  ncol = 1
+)
+```
+
+## LAM {.unnumbered}
+
+```{r comp-lam, fig.height=9}
+gridExtra::grid.arrange(
+  make_composition_plot("LAM", "petotal"),
+  make_composition_plot("LAM", "pehyd")  + theme(legend.position = "none"),
+  make_composition_plot("LAM", "pegas")  + theme(legend.position = "none"),
+  ncol = 1
+)
+```
+
+## SSA {.unnumbered}
+
+```{r comp-ssa, fig.height=6}
+gridExtra::grid.arrange(
+  make_composition_plot("SSA", "petotal"),
+  make_composition_plot("SSA", "pecoal") + theme(legend.position = "none"),
+  ncol = 1
+)
+```
+
+## MEA {.unnumbered}
+
+```{r comp-mea, fig.height=9}
+gridExtra::grid.arrange(
+  make_composition_plot("MEA", "petotal"),
+  make_composition_plot("MEA", "peoil")  + theme(legend.position = "none"),
+  make_composition_plot("MEA", "pegas")  + theme(legend.position = "none"),
+  ncol = 1
+)
+```
+
+---
+
+# Historical Alignment
+
+> **What this shows:** In years where both REMIND and historical data overlap (typically 2005–2020), how closely do downscaled country values track historical actuals? Perfect alignment would put every point on the 1:1 line; departures reflect the IPF forcing country values to match REMIND regional aggregates, which may differ from the sum of national statistical data.
+
+```{r hist-align-scatter, fig.height=8, fig.width=11}
+key_pe <- c("pecoal","peoil","pegas","pewin","pesol","petotal")
+
+df_align <- df_country |>
+  filter(variable %in% key_pe, year %in% overlap_yrs) |>
+  rename(country = region) |>
+  left_join(
+    df_hist |>
+      filter(variable %in% key_pe, year %in% overlap_yrs) |>
+      rename(country = region, hist_value = value) |>
+      select(country, year, variable, hist_value),
+    by = c("country","year","variable")
+  ) |>
+  filter(!is.na(hist_value), !is.na(value)) |>
+  mutate(fuel = fuel_label[variable])
+
+ggplot(df_align |> filter(variable != "petotal"),
+       aes(x = hist_value, y = value, colour = fuel)) +
+  geom_abline(slope = 1, intercept = 0, colour = "black", linewidth = 0.5) +
+  geom_point(alpha = 0.35, size = 1.2) +
+  facet_wrap(~fuel, scales = "free", ncol = 3) +
+  scale_colour_manual(values = fuel_colors, guide = "none") +
+  scale_x_continuous(labels = label_comma()) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(x = "Historical actual (EJ/yr)",
+       y = "Downscaled IPF value (EJ/yr)",
+       title  = "Historical Alignment — Downscaled vs. Actual (overlap years)",
+       subtitle = paste0(
+         "Each point = one country × year (", paste(overlap_yrs, collapse=", "), "). ",
+         "Points on the 1:1 line = perfect alignment.")) +
+  theme_report()
+```
+
+```{r hist-align-corr}
+cor_tbl <- df_align |>
+  filter(value > 0 | hist_value > 0) |>
+  group_by(fuel) |>
+  summarise(
+    n          = n(),
+    R2         = round(cor(hist_value, value, use = "complete.obs")^2, 3),
+    mean_ratio = round(mean(value / pmax(hist_value, 1e-9), na.rm = TRUE), 3),
+    .groups    = "drop"
+  ) |>
+  arrange(desc(R2))
+
+cor_tbl |>
+  kable(col.names = c("Fuel", "N (country×year)", "R²", "Mean(downscaled/historical)"),
+        align     = c("l","r","r","r"),
+        caption   = "Correlation between downscaled country values and historical actuals in overlap years") |>
+  kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                full_width = FALSE, position = "left") |>
+  column_spec(3, color = ifelse(cor_tbl$R2 > 0.9, "darkgreen",
+                         ifelse(cor_tbl$R2 > 0.7, "darkorange", "darkred")))
+```
+
+```{r hist-align-pctchange, fig.height=7, fig.width=11}
+df_ratio <- df_align |>
+  filter(hist_value > 0.001, variable != "petotal") |>
+  mutate(pct_diff = 100 * (value - hist_value) / hist_value) |>
+  group_by(fuel, RegionCode) |>
+  summarise(mean_pct = median(pct_diff, na.rm = TRUE), .groups = "drop") |>
+  mutate(label = region_label[RegionCode])
+
+ggplot(df_ratio, aes(x = reorder(label, mean_pct), y = mean_pct, fill = mean_pct > 0)) +
+  geom_col(alpha = 0.8, width = 0.7) +
+  geom_hline(yintercept = 0, linewidth = 0.5) +
+  coord_flip() +
+  facet_wrap(~fuel, ncol = 3, scales = "fixed") +
+  scale_fill_manual(values = c("TRUE" = "#2980b9", "FALSE" = "#e74c3c"), guide = "none") +
+  scale_y_continuous(labels = label_percent(scale = 1)) +
+  labs(x = NULL, y = "Median % deviation (downscaled − historical)",
+       title  = "IPF Adjustment Magnitude by Region",
+       subtitle = "Blue = IPF scaled UP vs. historical; Red = scaled DOWN to match REMIND aggregates") +
+  theme_report() +
+  theme(strip.text = element_text(size = 11))
+```
+
+---
+
+# Fuel Mix Evolution {.tabset}
+
+> **What this shows:** How each REMIND region's fuel mix (shares of PE, SE, and FE) evolves from 2005 to 2150. Shares are computed from downscaled country sums and compared against REMIND-implied shares (they should match exactly). Dashed grey vertical line = end of historical period.
+
+```{r shares-helper}
+# Extract a ggplot legend as a grob for shared-legend layouts
+get_legend <- function(p) {
+  g       <- ggplotGrob(p)
+  leg_idx <- which(g$layout$name == "guide-box")
+  if (length(leg_idx) == 0L) return(grid::nullGrob())
+  g$grobs[[leg_idx]]
+}
+
+make_share_plot <- function(reg_code, num_vars, denom_var, y_label = "Share") {
+  reg_label <- region_label[[reg_code]]
+  ctrs <- mapping$CountryCode[mapping$RegionCode == reg_code]
+
+  # Shares from downscaled countries (summed to region, then ratio)
+  ds_sums <- df_country |>
+    filter(RegionCode == reg_code, variable %in% c(num_vars, denom_var)) |>
+    group_by(year, variable) |>
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
+    pivot_wider(names_from = variable, values_from = value)
+
+  # Build share columns
+  denom_vals <- ds_sums[[denom_var]]
+  share_long <- lapply(num_vars, function(v) {
+    data.frame(
+      year    = ds_sums$year,
+      fuel    = fuel_label[[v]],
+      share   = ds_sums[[v]] / pmax(denom_vals, 1e-12),
+      source  = "Downscaled (IPF)"
+    )
+  }) |> bind_rows()
+
+  # Shares from REMIND aggregates directly
+  remind_vals <- df_remind |>
+    filter(region == reg_code, variable %in% c(num_vars, denom_var)) |>
+    pivot_wider(names_from = variable, values_from = value)
+  denom_rem <- remind_vals[[denom_var]]
+  remind_share_long <- lapply(num_vars, function(v) {
+    data.frame(
+      year    = remind_vals$year,
+      fuel    = fuel_label[[v]],
+      share   = remind_vals[[v]] / pmax(denom_rem, 1e-12),
+      source  = "REMIND aggregate"
+    )
+  }) |> bind_rows()
+
+  all_shares <- bind_rows(share_long, remind_share_long)
+
+  ggplot(all_shares, aes(x = year, y = share, colour = fuel, linetype = source)) +
+    geom_line(linewidth = 0.9, alpha = 0.85) +
+    geom_vline(xintercept = last_hist_yr, linetype = "dashed",
+               colour = "grey50", linewidth = 0.6) +
+    scale_linetype_manual(
+      values  = c("Downscaled (IPF)" = "solid", "REMIND aggregate" = "22"),
+      name    = NULL) +
+    scale_colour_manual(values = fuel_colors, name = "Fuel", na.value = "grey50") +
+    scale_y_continuous(labels = label_percent(), limits = c(0, NA)) +
+    scale_x_continuous(breaks = c(2010, 2030, 2050, 2075, 2100, 2150)) +
+    labs(x = NULL, y = y_label,
+         title = paste0(reg_label, " — ", y_label),
+         subtitle = "Solid = downscaled (IPF); Dashed = REMIND aggregate (should overlap)") +
+    theme_report() +
+    theme(legend.position = "none")
+}
+```
+
+## Primary Energy {.unnumbered}
+
+```{r shares-pe, fig.height=18}
+pe_fuels <- c("pecoal","peoil","pegas","pewin","pesol","peur","pehyd","pegeo")
+
+pe_plots <- lapply(c("EUR","CHA","OAS","LAM","SSA","MEA"), function(r) {
+  make_share_plot(r, pe_fuels, "petotal", "Share of Primary Energy")
+})
+pe_leg <- get_legend(
+  make_share_plot("EUR", pe_fuels, "petotal", "Share of Primary Energy") +
+    theme(legend.position = "bottom")
+)
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = pe_plots, ncol = 2, nrow = 3),
+  pe_leg,
+  nrow = 2, heights = c(17, 1)
+)
+```
+
+## Secondary Electricity {.unnumbered}
+
+```{r shares-se, fig.height=18}
+se_plots <- lapply(c("EUR","CHA","OAS","LAM","SSA","MEA"), function(r) {
+  make_share_plot(r, c("wind","solar"), "seel", "VRE Share of Electricity")
+})
+se_leg <- get_legend(
+  make_share_plot("EUR", c("wind","solar"), "seel", "VRE Share of Electricity") +
+    theme(legend.position = "bottom")
+)
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = se_plots, ncol = 2, nrow = 3),
+  se_leg,
+  nrow = 2, heights = c(17, 1)
+)
+```
+
+## Final Energy Industry {.unnumbered}
+
+```{r shares-fe, fig.height=18}
+fe_plots <- lapply(c("EUR","CHA","OAS","LAM","SSA","MEA"), function(r) {
+  make_share_plot(r, c("fe_indst_fossil"), "fe_indst", "Fossil Share of Industry FE")
+})
+fe_leg <- get_legend(
+  make_share_plot("EUR", c("fe_indst_fossil"), "fe_indst", "Fossil Share of Industry FE") +
+    theme(legend.position = "bottom")
+)
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = fe_plots, ncol = 2, nrow = 3),
+  fe_leg,
+  nrow = 2, heights = c(17, 1)
+)
+```
+
+---
+
+# Country-Level Driver Snapshots {.tabset}
+
+> **What this shows:** Ranked bar charts of the five actor-power driver variables at country level for selected years. These are the variables that feed into the Political Feasibility Model's Actor Power Index.
+
+```{r driver-vars}
+driver_vars <- list(
+  "VRE Share"               = list(num = c("wind","solar"), denom = "seel"),
+  "Coal PE Share"           = list(num = "pecoal",          denom = "petotal"),
+  "Oil/Gas PE Share"        = list(num = c("peoil","pegas"), denom = "petotal"),
+  "Fossil Industry Share"   = list(num = "fe_indst_fossil", denom = "fe_indst"),
+  "Electrification"         = list(num = "fe_seel",         denom = "fe_total")
+)
+
+snap_years <- c(2020, 2050, 2100)
+
+# Compute country-level shares for all driver vars + snapshot years
+compute_driver_shares <- function(driver_name) {
+  spec    <- driver_vars[[driver_name]]
+  num_v   <- spec$num
+  denom_v <- spec$denom
+
+  num_df <- df_country |>
+    filter(variable %in% num_v, year %in% snap_years) |>
+    group_by(region, RegionCode, year) |>
+    summarise(num = sum(value, na.rm = TRUE), .groups = "drop")
+
+  den_df <- df_country |>
+    filter(variable == denom_v, year %in% snap_years) |>
+    select(region, year, denom = value)
+
+  num_df |>
+    left_join(den_df, by = c("region","year")) |>
+    mutate(share  = pmin(1, pmax(0, num / pmax(denom, 1e-12))),
+           driver = driver_name,
+           label  = region_label[RegionCode])
+}
+
+df_drivers <- lapply(names(driver_vars), compute_driver_shares) |> bind_rows()
+```
+
+```{r snapshot-helper}
+make_snapshot <- function(driver_name, yr, top_n = 40) {
+  df <- df_drivers |>
+    filter(driver == driver_name, year == yr, denom > 0.01) |>
+    slice_max(share, n = top_n, with_ties = FALSE) |>
+    mutate(region = reorder(region, share))
+
+  ggplot(df, aes(x = region, y = share, fill = label)) +
+    geom_col(alpha = 0.85, width = 0.75) +
+    coord_flip() +
+    scale_y_continuous(labels = label_percent(), limits = c(0, 1)) +
+    scale_fill_brewer(palette = "Set3", name = "REMIND Region") +
+    labs(x = NULL, y = driver_name,
+         title = paste0(driver_name, " — Top Countries, ", yr)) +
+    theme_report() +
+    theme(axis.text.y = element_text(size = 8),
+          legend.position = "none")
+}
+```
+
+## VRE Share {.unnumbered}
+
+```{r snap-vre, fig.height=15, fig.width=11}
+vre_snaps <- lapply(snap_years, function(yr) make_snapshot("VRE Share", yr))
+vre_leg   <- get_legend(vre_snaps[[1]] + theme(legend.position = "bottom"))
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = vre_snaps, ncol = 3),
+  vre_leg,
+  nrow = 2, heights = c(14, 1)
+)
+```
+
+## Coal PE Share {.unnumbered}
+
+```{r snap-coal, fig.height=15, fig.width=11}
+coal_snaps <- lapply(snap_years, function(yr) make_snapshot("Coal PE Share", yr))
+coal_leg   <- get_legend(coal_snaps[[1]] + theme(legend.position = "bottom"))
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = coal_snaps, ncol = 3),
+  coal_leg,
+  nrow = 2, heights = c(14, 1)
+)
+```
+
+## Oil/Gas PE Share {.unnumbered}
+
+```{r snap-oilgas, fig.height=15, fig.width=11}
+og_snaps <- lapply(snap_years, function(yr) make_snapshot("Oil/Gas PE Share", yr))
+og_leg   <- get_legend(og_snaps[[1]] + theme(legend.position = "bottom"))
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = og_snaps, ncol = 3),
+  og_leg,
+  nrow = 2, heights = c(14, 1)
+)
+```
+
+## Fossil Industry {.unnumbered}
+
+```{r snap-fossilind, fig.height=15, fig.width=11}
+fi_snaps <- lapply(snap_years, function(yr) make_snapshot("Fossil Industry Share", yr))
+fi_leg   <- get_legend(fi_snaps[[1]] + theme(legend.position = "bottom"))
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = fi_snaps, ncol = 3),
+  fi_leg,
+  nrow = 2, heights = c(14, 1)
+)
+```
+
+## Electrification {.unnumbered}
+
+```{r snap-elec, fig.height=15, fig.width=11}
+el_snaps <- lapply(snap_years, function(yr) make_snapshot("Electrification", yr))
+el_leg   <- get_legend(el_snaps[[1]] + theme(legend.position = "bottom"))
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = el_snaps, ncol = 3),
+  el_leg,
+  nrow = 2, heights = c(14, 1)
+)
+```
+
+---
+
+# Session Info
+
+```{r session, echo=FALSE}
+si <- sessionInfo()
+cat(sprintf("R %s | pfm %s | mrpfm %s | ggplot2 %s\n",
+  getRversion(),
+  tryCatch(as.character(packageVersion("pfm")),   error = function(e) "N/A"),
+  tryCatch(as.character(packageVersion("mrpfm")), error = function(e) "N/A"),
+  as.character(packageVersion("ggplot2"))
+))
+cat("GDX:", gdx_path, "\n")
+```

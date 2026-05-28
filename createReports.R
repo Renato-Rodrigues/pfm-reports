@@ -168,6 +168,8 @@ if (idx == 0) {
   # Dynamically determine the outputFile
   default_out <- if (chosen == "adoption-model") {
     "output/adoption_model.html"
+  } else if (chosen == "downscale") {
+    "output/downscale.html"
   } else if (chosen == "model-selection") {
     "output/model_selection.html"
   } else if (chosen == "model-diagnostics") {
