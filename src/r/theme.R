@@ -66,5 +66,5 @@ ext_instQualityDrivers_all <- c(ext_instQualityDrivers, ext_vdemDrivers)
 ext_controlDrivers <- c(
   "Population", "GDP per Capita", "Land Area",
   "Urban Population Share", "Gini Income Inequality Coefficient",
-  "Gender Inequality Index", "Energy Intensity"
+  "Gender Inequality Index", "Energy Intensity", "Hydro Nuclear Share"
 )

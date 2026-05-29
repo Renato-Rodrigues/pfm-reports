@@ -87,8 +87,10 @@ fuel_label <- c(
   pewin  = "Wind", pesol = "Solar", peur = "Nuclear",
   pehyd  = "Hydro", pegeo = "Geothermal", petotal = "PE Total",
   wind   = "Wind", solar = "Solar", seel = "Electricity",
+  seliqbio = "Transport Biofuels",
   fe_indst_fossil = "Industry Fossil FE", fe_indst = "Industry FE",
-  fe_seel = "Electricity FE", fe_total = "FE Total"
+  fe_seel = "Electricity FE", fe_total = "FE Total",
+  fe_trans = "Transport FE", fe_trans_bio = "Biofuel Transport FE"
 )
 
 region_label <- c(
@@ -105,7 +107,10 @@ fuel_colors <- c(
   Electricity = "#26c6da", Other = "#b0bec5",
   `PE Total` = "#37474f", `FE Total` = "#455a64",
   `Industry FE` = "#78909c", `Industry Fossil FE` = "#6d4c41",
-  `Electricity FE` = "#00acc1", `Wind ` = "#42a5f5", `Solar ` = "#fdd835"
+  `Electricity FE` = "#00acc1", `Wind ` = "#42a5f5", `Solar ` = "#fdd835",
+  `Transport Biofuels` = "#66bb6a",
+  `Transport FE`       = "#26a69a",
+  `Biofuel Transport FE` = "#9ccc65"
 )
 ```
 
@@ -146,8 +151,8 @@ prodPe <- suppressWarnings(
 )[, year_list, ]
 
 peVars <- c("pecoal","peoil","pegas","pewin","pesol","peur","pehyd","pegeo","petotal")
-seVars <- c("wind","solar","seel")
-feVars <- c("fe_indst_fossil","fe_indst","fe_seel","fe_total")
+seVars <- c("wind","solar","seel","seliqbio")
+feVars <- c("fe_indst_fossil","fe_indst","fe_seel","fe_total","fe_trans","fe_trans_bio")
 all_vars <- c(peVars, seVars, feVars)
 
 remind_reg <- new.magpie(getItems(prodPe, 1), year_list, all_vars, fill = 0)
@@ -157,9 +162,10 @@ prodSe <- suppressWarnings(
   gdx::readGDX(gdx_path, "vm_prodSe", field = "l",
                react = "silent", restore_zeros = FALSE)
 )[, year_list, ]
-remind_reg[,, "wind"]  <- dimSums(prodSe[,, c("windon","windoff")], dim = 3, na.rm = TRUE)
-remind_reg[,, "solar"] <- dimSums(prodSe[,, c("spv","csp")],        dim = 3, na.rm = TRUE)
-remind_reg[,, "seel"]  <- dimSums(prodSe[,, "seel"],                 dim = 3, na.rm = TRUE)
+remind_reg[,, "wind"]    <- dimSums(prodSe[,, c("windon","windoff")], dim = 3, na.rm = TRUE)
+remind_reg[,, "solar"]   <- dimSums(prodSe[,, c("spv","csp")],        dim = 3, na.rm = TRUE)
+remind_reg[,, "seel"]    <- dimSums(prodSe[,, "seel"],                 dim = 3, na.rm = TRUE)
+remind_reg[,, "seliqbio"] <- dimSums(prodSe[,, "seliqbio"],            dim = 3, na.rm = TRUE)
 demFe <- suppressWarnings(
   gdx::readGDX(gdx_path, "vm_demFeSector", field = "l",
                react = "silent", restore_zeros = FALSE)
@@ -168,6 +174,8 @@ remind_reg[,, "fe_indst_fossil"] <- dimSums(demFe[,,"indst"][,,c("seliqfos","seg
 remind_reg[,, "fe_indst"]        <- dimSums(demFe[,,"indst"],  dim = 3, na.rm = TRUE)
 remind_reg[,, "fe_seel"]         <- dimSums(demFe[,,"seel"],   dim = 3, na.rm = TRUE)
 remind_reg[,, "fe_total"]        <- dimSums(demFe,             dim = 3, na.rm = TRUE)
+remind_reg[,, "fe_trans"]        <- dimSums(demFe[,,"trans"],                   dim = 3, na.rm = TRUE)
+remind_reg[,, "fe_trans_bio"]    <- dimSums(demFe[,,"trans"][,,"seliqbio"],     dim = 3, na.rm = TRUE)
 
 # ── Historical prior ───────────────────────────────────────────────────────────
 hist_data <- suppressWarnings(iamHistoricalData(gdxRegionMappingFile = "regionmappingH12.csv"))
@@ -306,6 +314,14 @@ make_composition_plot <- function(reg_code, var_name = "petotal", top_n = 9) {
   ds_sub <- df_country |>
     filter(RegionCode == reg_code, variable == var_name, !is.na(value))
 
+  if (nrow(ds_sub) == 0) {
+    return(ggplot() +
+      annotate("text", x = 0.5, y = 0.5, hjust = 0.5, vjust = 0.5, size = 5, colour = "grey50",
+               label = paste0(fuel_label[[var_name]], ": no downscaled data for ", reg_label)) +
+      theme_void() +
+      labs(title = paste0(reg_label, " — ", fuel_label[[var_name]], ": No data")))
+  }
+
   # Pick top countries by peak value (ignoring last hist year to avoid recency bias)
   top_ctrs <- ds_sub |>
     group_by(region) |>
@@ -395,32 +411,35 @@ gridExtra::grid.arrange(
 
 ## OAS {.unnumbered}
 
-```{r comp-oas, fig.height=9}
+```{r comp-oas, fig.height=12}
 gridExtra::grid.arrange(
   make_composition_plot("OAS", "petotal"),
-  make_composition_plot("OAS", "pecoal") + theme(legend.position = "none"),
-  make_composition_plot("OAS", "pegas")  + theme(legend.position = "none"),
+  make_composition_plot("OAS", "pecoal")    + theme(legend.position = "none"),
+  make_composition_plot("OAS", "pegas")     + theme(legend.position = "none"),
+  make_composition_plot("OAS", "seliqbio")  + theme(legend.position = "none"),
   ncol = 1
 )
 ```
 
 ## LAM {.unnumbered}
 
-```{r comp-lam, fig.height=9}
+```{r comp-lam, fig.height=12}
 gridExtra::grid.arrange(
   make_composition_plot("LAM", "petotal"),
-  make_composition_plot("LAM", "pehyd")  + theme(legend.position = "none"),
-  make_composition_plot("LAM", "pegas")  + theme(legend.position = "none"),
+  make_composition_plot("LAM", "pehyd")     + theme(legend.position = "none"),
+  make_composition_plot("LAM", "pegas")     + theme(legend.position = "none"),
+  make_composition_plot("LAM", "seliqbio")  + theme(legend.position = "none"),
   ncol = 1
 )
 ```
 
 ## SSA {.unnumbered}
 
-```{r comp-ssa, fig.height=6}
+```{r comp-ssa, fig.height=9}
 gridExtra::grid.arrange(
   make_composition_plot("SSA", "petotal"),
-  make_composition_plot("SSA", "pecoal") + theme(legend.position = "none"),
+  make_composition_plot("SSA", "pecoal")    + theme(legend.position = "none"),
+  make_composition_plot("SSA", "seliqbio")  + theme(legend.position = "none"),
   ncol = 1
 )
 ```
@@ -545,9 +564,10 @@ make_share_plot <- function(reg_code, num_vars, denom_var, y_label = "Share") {
     summarise(value = sum(value, na.rm = TRUE), .groups = "drop") |>
     pivot_wider(names_from = variable, values_from = value)
 
-  # Build share columns
-  denom_vals <- ds_sums[[denom_var]]
+  # Build share columns (guard against variables absent from downscaled data)
+  denom_vals <- if (denom_var %in% names(ds_sums)) ds_sums[[denom_var]] else rep(NA_real_, nrow(ds_sums))
   share_long <- lapply(num_vars, function(v) {
+    if (!v %in% names(ds_sums)) return(data.frame())
     data.frame(
       year    = ds_sums$year,
       fuel    = fuel_label[[v]],
@@ -643,6 +663,23 @@ gridExtra::grid.arrange(
 )
 ```
 
+## Transport Biofuels {.unnumbered}
+
+```{r shares-trans-bio, fig.height=18}
+tb_plots <- lapply(c("EUR","CHA","OAS","LAM","SSA","MEA"), function(r) {
+  make_share_plot(r, c("fe_trans_bio"), "fe_trans", "Biofuel Share of Transport FE")
+})
+tb_leg <- get_legend(
+  make_share_plot("EUR", c("fe_trans_bio"), "fe_trans", "Biofuel Share of Transport FE") +
+    theme(legend.position = "bottom")
+)
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = tb_plots, ncol = 2, nrow = 3),
+  tb_leg,
+  nrow = 2, heights = c(17, 1)
+)
+```
+
 ---
 
 # Country-Level Driver Snapshots {.tabset}
@@ -655,7 +692,8 @@ driver_vars <- list(
   "Coal PE Share"           = list(num = "pecoal",          denom = "petotal"),
   "Oil/Gas PE Share"        = list(num = c("peoil","pegas"), denom = "petotal"),
   "Fossil Industry Share"   = list(num = "fe_indst_fossil", denom = "fe_indst"),
-  "Electrification"         = list(num = "fe_seel",         denom = "fe_total")
+  "Electrification"         = list(num = "fe_seel",         denom = "fe_total"),
+  "Biofuel Transport Share" = list(num = "fe_trans_bio",    denom = "fe_trans")
 )
 
 snap_years <- c(2020, 2050, 2100)
@@ -761,6 +799,18 @@ el_leg   <- get_legend(el_snaps[[1]] + theme(legend.position = "bottom"))
 gridExtra::grid.arrange(
   gridExtra::arrangeGrob(grobs = el_snaps, ncol = 3),
   el_leg,
+  nrow = 2, heights = c(14, 1)
+)
+```
+
+## Biofuel Transport Share {.unnumbered}
+
+```{r snap-bio-trans, fig.height=15, fig.width=11}
+bt_snaps <- lapply(snap_years, function(yr) make_snapshot("Biofuel Transport Share", yr))
+bt_leg   <- get_legend(bt_snaps[[1]] + theme(legend.position = "bottom"))
+gridExtra::grid.arrange(
+  gridExtra::arrangeGrob(grobs = bt_snaps, ncol = 3),
+  bt_leg,
   nrow = 2, heights = c(14, 1)
 )
 ```

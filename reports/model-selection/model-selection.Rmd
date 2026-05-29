@@ -70,7 +70,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -81,7 +81,7 @@ model_configs <- list(
     actorPowerDrivers = c("Innovator Power", "Incumbent Power"), 
     actorPowerIndex = c("Innovator Power", "Incumbent Power"),
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -92,7 +92,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share"),
+    controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -103,7 +103,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita Sq"),
+    controlDrivers = c("GDP per Capita Sq", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -114,7 +114,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = TRUE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -125,7 +125,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = TRUE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -136,7 +136,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)"), 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -147,7 +147,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Diagonal Accountability (VDem)"), 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -158,7 +158,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Diagonal Accountability (VDem)", "Vertical Accountability (VDem)"), 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -169,7 +169,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -180,7 +180,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = FALSE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmappingH12.csv"
   ),
@@ -191,7 +191,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = TRUE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
   ),
@@ -202,7 +202,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = TRUE, interactRegionFE = FALSE,
     regionMappingFixedEffects = NULL
   ),
@@ -213,7 +213,7 @@ model_configs <- list(
     actorPowerDrivers = "Actor Power Index", 
     actorPowerIndex = "Actor Power Index",
     instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = "GDP per Capita",
+    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
     includeLagged = TRUE, interactRegionFE = FALSE,
     regionMappingFixedEffects = "regionmapping_54.csv"
   )

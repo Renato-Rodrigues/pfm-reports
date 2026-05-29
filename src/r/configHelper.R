@@ -100,18 +100,21 @@ getPanelDataHistoricalCached <- function(
     aggregate = TRUE,
     y = 2000:2022,
     outputRegionMappingFile = "regionmapping_54.csv",
+    movingAverage = 5,
     forceRecompute = FALSE) {
-  
+
   root <- rprojroot::find_rstudio_root_file()
-  
+
   # Check if we are running standard parameters to use cache, else recompute directly
-  is_standard <- aggregate && identical(y, 2000:2022) && outputRegionMappingFile == "regionmapping_54.csv"
-  
+  is_standard <- aggregate && identical(y, 2000:2022) &&
+    outputRegionMappingFile == "regionmapping_54.csv" && identical(movingAverage, 5)
+
   if (!is_standard) {
     return(pfm::panelDataHistorical(
       aggregate = aggregate,
       y = y,
-      outputRegionMappingFile = outputRegionMappingFile
+      outputRegionMappingFile = outputRegionMappingFile,
+      movingAverage = movingAverage
     ))
   }
   
@@ -138,7 +141,8 @@ getPanelDataHistoricalCached <- function(
   data <- pfm::panelDataHistorical(
     aggregate = aggregate,
     y = y,
-    outputRegionMappingFile = outputRegionMappingFile
+    outputRegionMappingFile = outputRegionMappingFile,
+    movingAverage = movingAverage
   )
   
   # Ensure the directory exists

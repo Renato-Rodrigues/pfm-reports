@@ -9,7 +9,7 @@ params:
   assetDir: "output/adoption_model"
   modelName: "Baseline + Rule of Law"
   instQualityDrivers: !r c("Government Effectiveness (WGI)", "Rule of Law (VDem)")
-  controlDrivers: !r c("GDP per Capita")
+  controlDrivers: !r c("GDP per Capita", "Hydro Nuclear Share")
   regionMappingFE: "regionmappingH12.csv"
   includeLagged: false
   adoptionThreshold: 0.5

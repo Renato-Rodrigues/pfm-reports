@@ -67,7 +67,7 @@ loadModelData <- function(params) {
   instQualityDrivers          <- c("Government Effectiveness (WGI)")
   instQualityDrivers_vdem     <- c("Rule of Law (VDem)", "Vertical Accountability (VDem)")
   instQualityDrivers_combined <- c("Government Effectiveness (WGI)", "Rule of Law (VDem)")
-  controlDrivers              <- c("GDP per Capita", "Population")
+  controlDrivers              <- c("GDP per Capita", "Population", "Hydro Nuclear Share")
 
   # Common workflow arguments shared across all six model variants
   .wfArgs <- function(...) {
