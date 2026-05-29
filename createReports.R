@@ -1,206 +1,263 @@
-# PFM Reports — parallel & interactive build launcher
+# PFM Reports — build launcher
 #
-# Usage: source("createReports.R")  (from within RStudio or an R session at repo root)
-# Or:    Rscript createReports.R    (from a terminal at repo root)
+# CLI usage:
+#   Rscript createReports.R                   # interactive menu (defaults: c1, all except model-diagnostics)
+#   Rscript createReports.R 1,3               # reports 1 and 3, default cache (no prompts)
+#   Rscript createReports.R all               # all reports including model-diagnostics, default cache
+#   Rscript createReports.R a                 # all except model-diagnostics, default cache
+#   Rscript createReports.R 2,4 --madrat      # reports 2+4, also clear madrat caches
+#   Rscript createReports.R --no-clear        # keep caches, run default selection (no prompts)
+#
+# Interactive (RStudio):
+#   source("createReports.R")                 # shows interactive menu
 
 library(rprojroot)
 source(file.path(find_rstudio_root_file(), "src/r/configHelper.R"))
 
-root         <- find_rstudio_root_file()
+root        <- find_rstudio_root_file()
+reports_dir <- file.path(root, "reports")
+utils_dir   <- normalizePath(file.path(root, "..", "utils"))
 
-# Ensure all required folders exist
 dir.create(file.path(root, "output"), showWarnings = FALSE, recursive = TRUE)
-dir.create(file.path(root, "data"), showWarnings = FALSE, recursive = TRUE)
+dir.create(file.path(root, "data"),   showWarnings = FALSE, recursive = TRUE)
 dir.create(file.path(root, "models"), showWarnings = FALSE, recursive = TRUE)
 
-reports_dir  <- file.path(root, "reports")
+rscript_path <- file.path(R.home("bin"),
+                           if (.Platform$OS.type == "windows") "Rscript.exe" else "Rscript")
 
-# Discover available reports
-report_dirs <- list.dirs(reports_dir, recursive = FALSE, full.names = FALSE)
+# ── Discover reports (sorted for stable numbering) ──────────────────────────
+report_dirs <- sort(list.dirs(reports_dir, recursive = FALSE, full.names = FALSE))
 report_dirs <- report_dirs[file.exists(file.path(reports_dir, report_dirs, "run.R"))]
-
-if (length(report_dirs) == 0) {
+if (length(report_dirs) == 0L) {
   stop("No reports found under reports/. Each report needs a run.R file.")
 }
 
+DEFAULT_EXCLUDE <- "model-diagnostics"
+
+# Reports that write to the shared panelDataHistorical.rds cache
+CACHE_USERS <- setdiff(report_dirs, "downscale")
+
+REPORTS_CACHES <- c(
+  "data/panelDataHistorical.rds",
+  "data/panelDataScenario.rds",
+  "data/downscale_country.rds",
+  "data/modelData.RData"
+)
+
+# ── Parse CLI arguments ──────────────────────────────────────────────────────
+args               <- commandArgs(trailingOnly = TRUE)
+cli_selection      <- NULL
+cli_clear          <- NULL    # NULL = not explicitly set; resolved later
+cli_cache_explicit <- FALSE
+
+for (a in args) {
+  if (a %in% c("--madrat", "--all-caches")) {
+    cli_clear          <- "madrat"
+    cli_cache_explicit <- TRUE
+  } else if (a %in% c("--no-clear", "--keep")) {
+    cli_clear          <- "none"
+    cli_cache_explicit <- TRUE
+  } else if (!startsWith(a, "--")) {
+    cli_selection <- a
+  }
+}
+
+# True only when the user typed Rscript createReports.R with no arguments at all
+is_interactive_mode <- length(args) == 0L
+
+# Reads one line from stdin; works in both Rscript (non-interactive) and RStudio
+read_stdin <- function(prompt) {
+  cat(prompt)
+  if (interactive()) readline("") else trimws(readLines("stdin", n = 1L, warn = FALSE))
+}
+
+# ── Print menu ───────────────────────────────────────────────────────────────
 cat("\n=== PFM Reports Builder ===\n\n")
-cat("Available options:\n")
-cat("  [0] Run ALL reports in parallel (Recommended)\n")
+
+cat("Cache options:\n")
+cat("  [c0]  Keep existing data (no clearing)\n")
+cat("  [c1]  Clear report data — panelData, downscale cache, modelData  (default)\n")
+cat("  [c2]  Clear report data + mrpfm madrat caches  (re-downloads source data on next run)\n\n")
+
+cat("Available reports:\n")
+cat(sprintf("  [a]   All except %-20s  (default)\n", DEFAULT_EXCLUDE))
+cat("  [0]   All reports\n")
 for (i in seq_along(report_dirs)) {
-  cat(sprintf("  [%d] Run %s only\n", i, report_dirs[i]))
+  tag <- if (report_dirs[i] == DEFAULT_EXCLUDE) "  <- excluded by default" else ""
+  cat(sprintf("  [%d]   %s%s\n", i, report_dirs[i], tag))
 }
-cat("\n")
+cat("\nComma-separated indices select a subset, e.g. '1,3' runs reports 1 and 3.\n\n")
 
-args <- commandArgs(trailingOnly = TRUE)
-if (length(args) > 0) {
-  selection <- args[1]
-  if (selection == "all" || selection == "--parallel") {
-    selection <- "0"
-  }
-} else {
-  if (interactive()) {
-    selection <- readline(prompt = sprintf("Select option [0-%d] (default 0): ", length(report_dirs)))
-  } else {
-    cat(sprintf("Select option [0-%d] (default 0): ", length(report_dirs)))
-    flush.console()
-    selection <- tryCatch(readLines("stdin", n = 1), error = function(e) "")
-  }
-  if (length(selection) == 0 || trimws(selection) == "") {
-    selection <- "0"
-  }
-}
-idx       <- suppressWarnings(as.integer(trimws(selection)))
-
-if (is.na(idx) || idx < 0 || idx > length(report_dirs)) {
-  stop("Invalid selection.")
+# ── Resolve cache mode ───────────────────────────────────────────────────────
+resolve_cache_mode <- function() {
+  if (cli_cache_explicit) return(cli_clear)
+  if (!is_interactive_mode) return("reports")   # default when args provided
+  ans <- read_stdin("Cache option [c0/c1/c2, default c1]: ")
+  switch(ans, c0 = "none", c1 = "reports", c2 = "madrat", "reports")
 }
 
-rscript_path <- file.path(R.home("bin"), "Rscript")
-if (.Platform$OS.type == "windows") {
-  rscript_path <- file.path(R.home("bin"), "Rscript.exe")
-}
+cache_mode <- resolve_cache_mode()
 
-if (idx == 0) {
-  # --- Parallel Mode ---
-  cat("\n=== Starting Parallel Build ===\n\n")
-  
-  # Ensure the data cache exists first to avoid race conditions
-  model_data_path <- file.path(root, "data/modelData.RData")
-  if (!file.exists(model_data_path)) {
-    cat("[INFO] Shared data cache 'data/modelData.RData' is missing.\n")
-    cat("Running 'model-diagnostics' first to populate the cache...\n")
-    
-    diag_run <- file.path(reports_dir, "model-diagnostics", "run.R")
-    
-    # We run it synchronously and print to console
-    cat("--------------------------------------------------\n")
-    status <- system2(rscript_path, diag_run, wait = TRUE)
-    cat("--------------------------------------------------\n")
-    
-    if (status != 0) {
-      stop("Failed to build 'model-diagnostics' sequentially. Parallel build aborted.")
+# ── Resolve report selection ─────────────────────────────────────────────────
+resolve_reports <- function() {
+  raw <- cli_selection
+  if (is.null(raw)) {
+    if (!is_interactive_mode) {
+      raw <- "a"
+    } else {
+      raw <- read_stdin(sprintf(
+        "Reports [comma-separated 1-%d, 'a'=all-except-diagnostics, '0'=all, default a]: ",
+        length(report_dirs)
+      ))
+      if (!nzchar(raw)) raw <- "a"
     }
-    cat("[INFO] Data cache populated successfully.\n\n")
   }
-  
-  cat("Spawning parallel R workers for reports...\n")
-  
+  raw <- trimws(tolower(raw))
+
+  if (raw %in% c("a", "")) return(setdiff(report_dirs, DEFAULT_EXCLUDE))
+  if (raw == "0" || raw == "all") return(report_dirs)
+
+  parts <- trimws(unlist(strsplit(raw, "[,\\s]+")))
+  idxs  <- suppressWarnings(as.integer(parts))
+  bad   <- is.na(idxs) | idxs < 1L | idxs > length(report_dirs)
+  if (any(bad)) {
+    stop(sprintf(
+      "Invalid selection '%s'. Use comma-separated numbers 1-%d, 'a', or '0'.",
+      raw, length(report_dirs)
+    ))
+  }
+  unique(report_dirs[idxs])
+}
+
+chosen <- resolve_reports()
+
+cat(sprintf("Cache mode  : %s\n", switch(cache_mode,
+  none    = "keep existing data",
+  reports = "clear report data only",
+  madrat  = "clear report data + madrat caches"
+)))
+cat(sprintf("Reports     : %s\n\n", paste(chosen, collapse = ", ")))
+
+# ── Clear caches ─────────────────────────────────────────────────────────────
+if (cache_mode != "none") {
+  cat("--- Clearing report data caches ---\n")
+  for (rel in REPORTS_CACHES) {
+    p <- file.path(root, rel)
+    if (file.exists(p)) {
+      file.remove(p)
+      cat(sprintf("  Deleted: %s\n", basename(p)))
+    }
+  }
+
+  if (cache_mode == "madrat") {
+    cat("\n--- Clearing mrpfm madrat caches ---\n")
+    clear_script <- file.path(utils_dir, "clearCache.R")
+    if (file.exists(clear_script)) {
+      system2(rscript_path, c(clear_script, "--madrat", "--force"), wait = TRUE)
+    } else {
+      cat(sprintf("[WARNING] clearCache.R not found at: %s\n", clear_script))
+    }
+  }
+  cat("\n")
+}
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+if (length(chosen) == 1L) {
+
+  # ── Single report ──────────────────────────────────────────────────────────
+  cat(sprintf("Building: %s\n\n", chosen))
+  status <- system2(rscript_path, file.path(reports_dir, chosen, "run.R"), wait = TRUE)
+  if (status == 0L) cat("\nDone.\n") else stop(sprintf("'%s' failed.", chosen))
+
+} else {
+
+  # ── Multiple reports: seed shared caches first, then run in parallel ───────
+  cat("=== Parallel build ===\n\n")
+
+  # Seed panelDataHistorical and panelDataScenario before launching workers to
+  # prevent multiple processes from trying to write the same .rds simultaneously.
+  need_seed <- cache_mode != "none" && any(chosen %in% CACHE_USERS)
+
+  if (need_seed) {
+    cat("[Seed] Building shared panel data caches...\n")
+
+    gdx_path   <- getPfmConfig("gdxPath", "")
+    cache_dir  <- getPfmConfig("cacheDir", "")
+    mapping_dir <- if (nzchar(cache_dir)) gsub("cache/default$", "mappings", cache_dir) else ""
+
+    seed_lines <- c(
+      sprintf("setwd('%s')", gsub("\\\\", "/", root)),
+      if (nzchar(cache_dir) && dir.exists(cache_dir)) {
+        sprintf(
+          "madrat::setConfig(forcecache=TRUE, cachefolder='%s', mappingfolder='%s')",
+          gsub("\\\\", "/", cache_dir),
+          gsub("\\\\", "/", mapping_dir)
+        )
+      } else {
+        "madrat::setConfig(forcecache=TRUE)"
+      },
+      "source('src/r/configHelper.R')",
+      "getPanelDataHistoricalCached(aggregate=TRUE, y=2000:2022, outputRegionMappingFile='regionmapping_54.csv')",
+      if (nzchar(gdx_path) && file.exists(gdx_path)) {
+        sprintf("getPanelDataScenarioCached(gdxFile='%s')",
+                gsub("\\\\", "/", gdx_path))
+      },
+      "cat('[Seed] Panel data caches ready.\\n')"
+    )
+    seed_lines <- seed_lines[!sapply(seed_lines, is.null)]
+
+    seed_file <- tempfile(fileext = ".R")
+    writeLines(seed_lines, seed_file)
+    seed_status <- system2(rscript_path, seed_file, wait = TRUE)
+    unlink(seed_file)
+
+    if (seed_status != 0L) {
+      warning("[Seed] Data seeding failed — parallel reports may hit cache race conditions.")
+    }
+    cat("\n")
+  }
+
+  cat(sprintf("Launching %d reports in parallel...\n\n", length(chosen)))
   library(parallel)
-  
-  # Set up socket cluster
-  num_cores <- min(length(report_dirs), detectCores() - 1)
-  cl <- makeCluster(num_cores)
-  
+  n_cores <- min(length(chosen), max(1L, detectCores() - 1L))
+  cl      <- makeCluster(n_cores)
   clusterExport(cl, c("reports_dir", "rscript_path"), envir = environment())
-  
-  results <- parLapply(cl, report_dirs, function(chosen) {
-    report_run <- file.path(reports_dir, chosen, "run.R")
-    
-    # Run the script using Rscript inside the worker
-    t0 <- Sys.time()
-    out <- tryCatch({
-      res <- system2(rscript_path, report_run, stdout = TRUE, stderr = TRUE)
-      status <- attr(res, "status")
-      if (is.null(status)) status <- 0
-      list(status = status, output = res, error = NULL)
-    }, error = function(e) {
-      list(status = -1, output = NULL, error = e$message)
-    })
-    t1 <- Sys.time()
-    
+
+  results <- parLapply(cl, chosen, function(rep_name) {
+    t0     <- Sys.time()
+    out    <- tryCatch(
+      system2(rscript_path, file.path(reports_dir, rep_name, "run.R"),
+              stdout = TRUE, stderr = TRUE),
+      error = function(e) structure(e$message, status = -1L)
+    )
+    status <- attr(out, "status")
+    if (is.null(status)) status <- 0L
     list(
-      report   = chosen,
-      status   = if (out$status == 0) "Success" else "Failed",
-      duration = round(difftime(t1, t0, units = "secs"), 1),
-      output   = out$output,
-      error    = out$error
+      report   = rep_name,
+      ok       = status == 0L,
+      duration = round(difftime(Sys.time(), t0, units = "secs"), 1),
+      output   = out
     )
   })
-  
   stopCluster(cl)
-  
-  # Print Summary Table
+
   cat("\n=================== BUILD SUMMARY ===================\n")
-  for (res in results) {
-    status_str <- sprintf("%-8s", res$status)
-    duration_str <- sprintf("%s seconds", res$duration)
-    cat(sprintf("  %-20s : %s (Took %s)\n", res$report, status_str, duration_str))
+  for (r in results) {
+    cat(sprintf("  %-25s  %s  (%s s)\n",
+                r$report,
+                if (r$ok) "OK    " else "FAILED",
+                r$duration))
   }
   cat("=====================================================\n\n")
-  
-  # Print logs for any failures
-  failures <- Filter(function(r) r$status == "Failed", results)
-  if (length(failures) > 0) {
-    cat("Detailed logs for failures:\n\n")
+
+  failures <- Filter(function(r) !r$ok, results)
+  if (length(failures) > 0L) {
+    cat("Failure details:\n\n")
     for (f in failures) {
-      cat(sprintf("--- %s Failure Log ---\n", f$report))
-      if (!is.null(f$error)) {
-        cat("Error:", f$error, "\n")
-      }
-      if (!is.null(f$output)) {
-        cat(paste(f$output, collapse = "\n"), "\n")
-      }
-      cat("----------------------------------\n\n")
+      cat(sprintf("--- %s ---\n", f$report))
+      cat(paste(tail(f$output, 25L), collapse = "\n"), "\n\n")
     }
   } else {
-    cat("All reports successfully compiled!\n")
+    cat("All reports compiled successfully.\n")
   }
-  
-} else {
-  # --- Single Report Mode (Interactive) ---
-  chosen <- report_dirs[idx]
-  cat(sprintf("\nBuilding: %s\n\n", chosen))
-  
-  prompt_path <- function(label, default = "") {
-    msg <- if (nchar(default) > 0) sprintf("%s [%s]: ", label, default) else sprintf("%s: ", label)
-    val <- trimws(readline(prompt = msg))
-    if (nchar(val) == 0) default else val
-  }
-  
-  cat("--- Parameters ---\n")
-  cat("(Press Enter to accept the default shown in brackets)\n\n")
-  
-  model_data_file <- prompt_path("modelDataFile", "data/modelData.RData")
-  model_dir       <- prompt_path("modelDir (PFM model store)", getPfmConfig("modelDir", "../../models"))
-  cache_dir       <- prompt_path("cacheDir (madrat cache)", getPfmConfig("cacheDir", ""))
-  gdx_path        <- prompt_path("gdxPath (fulldata.gdx)", getPfmConfig("gdxPath", "../../fulldata.gdx"))
-  
-  # Dynamically determine the outputFile
-  default_out <- if (chosen == "adoption-model") {
-    "output/adoption_model.html"
-  } else if (chosen == "downscale") {
-    "output/downscale.html"
-  } else if (chosen == "model-selection") {
-    "output/model_selection.html"
-  } else if (chosen == "model-diagnostics") {
-    "output/IAM_PFM_report.html"
-  } else {
-    "output/panel_data_input.html"
-  }
-  
-  output_file     <- prompt_path("outputFile", default_out)
-  asset_dir       <- prompt_path("assetDir", gsub(".html$", "", output_file))
-  
-  cat("\n--- Starting render ---\n\n")
-  
-  report_run <- file.path(reports_dir, chosen, "run.R")
-  
-  local({
-    source(report_run, local = TRUE)
-    
-    # Dynamically filter arguments to match the render_report signature
-    all_params <- list(
-      modelDataFile = model_data_file,
-      modelDir      = model_dir,
-      cacheDir      = cache_dir,
-      gdxPath       = gdx_path,
-      outputFile    = output_file,
-      assetDir      = asset_dir
-    )
-    
-    valid_names <- formalArgs(render_report)
-    params_to_pass <- all_params[names(all_params) %in% valid_names]
-    
-    do.call(render_report, params_to_pass)
-  })
 }
