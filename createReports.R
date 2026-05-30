@@ -161,6 +161,33 @@ if (cache_mode != "none") {
   cat("\n")
 }
 
+# ── Install packages from source (ensures latest algorithm changes are live) ──
+#if (cache_mode != "none") {
+#  cat("--- Installing mrpfm and pfm from source ---\n")
+#  pkg_root <- normalizePath(file.path(root, ".."))
+#  install_lines <- character(0)
+#  for (pkg in c("mrpfm", "pfm")) {
+#    pkg_dir <- file.path(pkg_root, pkg)
+#    if (dir.exists(pkg_dir)) {
+#      install_lines <- c(install_lines,
+#        sprintf("cat('  Installing %s...\\n')", pkg),
+#        sprintf("devtools::install('%s', quiet=TRUE, upgrade='never')",
+#                gsub("\\\\", "/", pkg_dir)),
+#        sprintf("cat('  %s OK\\n')", pkg)
+#      )
+#    } else {
+#      cat(sprintf("  [WARNING] %s source not found: %s\n", pkg, pkg_dir))
+#    }
+#  }
+#  if (length(install_lines) > 0L) {
+#    inst_file <- tempfile(fileext = ".R")
+#    writeLines(install_lines, inst_file)
+#    system2(rscript_path, inst_file, wait = TRUE)
+#    unlink(inst_file)
+#  }
+#  cat("\n")
+#}
+
 # ── Build ─────────────────────────────────────────────────────────────────────
 if (length(chosen) == 1L) {
 

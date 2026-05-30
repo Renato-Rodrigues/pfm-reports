@@ -1,6 +1,6 @@
 ---
 title: "REMIND Country-Level Downscaling Report"
-subtitle: "IPF Disaggregation — Consistency, Composition, and Historical Alignment"
+subtitle: "Carrier-Share Disaggregation — Consistency, Composition, and Historical Alignment"
 author: "Political Feasibility Module"
 date: "`r Sys.Date()`"
 params:
@@ -245,7 +245,7 @@ data.frame(
 
 # Reaggregation Consistency
 
-> **What this shows:** For every REMIND region, year, and variable, the sum of downscaled country values must equal the original REMIND regional target. Points off the 1:1 line indicate IPF constraint violations.
+> **What this shows:** For every REMIND region, year, and variable, the sum of downscaled country values must equal the original REMIND regional target. Points off the 1:1 line indicate reaggregation errors (should be near-zero).
 
 ```{r reagg-scatter, fig.height=8, fig.width=11}
 check_vars <- c("petotal", "seel", "fe_total")
@@ -303,7 +303,7 @@ ggplot(df_cmp, aes(x = year, y = value, colour = source, linetype = source)) +
 
 # Country Composition Over Time {.tabset}
 
-> **What this shows:** How the total primary energy splits across countries within each REMIND region, from the historical period through 2150. The shaded grey band marks the historical range. Historical actual values are shown as faint lines; downscaled (IPF) values as coloured areas.
+> **What this shows:** How the total primary energy splits across countries within each REMIND region, from the historical period through 2150. The shaded grey band marks the historical range. Historical actual values are shown as faint lines; downscaled (share) values as coloured areas.
 
 ```{r composition-helper}
 make_composition_plot <- function(reg_code, var_name = "petotal", top_n = 9) {
@@ -374,7 +374,7 @@ make_composition_plot <- function(reg_code, var_name = "petotal", top_n = 9) {
          title = paste0(reg_label, " — ", fuel_label[[var_name]],
                         ": Country Composition"),
          subtitle = paste0(
-           "Stacked area = downscaled (IPF); grey line = historical sum; ",
+           "Stacked area = downscaled (share); grey line = historical sum; ",
            "grey band = historical period")) +
     theme_report() +
     theme(legend.position = "right",
@@ -459,7 +459,7 @@ gridExtra::grid.arrange(
 
 # Historical Alignment
 
-> **What this shows:** In years where both REMIND and historical data overlap (typically 2005–2020), how closely do downscaled country values track historical actuals? Perfect alignment would put every point on the 1:1 line; departures reflect the IPF forcing country values to match REMIND regional aggregates, which may differ from the sum of national statistical data.
+> **What this shows:** In years where both REMIND and historical data overlap (typically 2005–2020), how closely do downscaled country values track historical actuals? Perfect alignment would put every point on the 1:1 line; departures reflect carrier-share allocation forcing country values to match REMIND regional aggregates, which may differ from the sum of national statistical data.
 
 ```{r hist-align-scatter, fig.height=8, fig.width=11}
 key_pe <- c("pecoal","peoil","pegas","pewin","pesol","petotal")
@@ -486,7 +486,7 @@ ggplot(df_align |> filter(variable != "petotal"),
   scale_x_continuous(labels = label_comma()) +
   scale_y_continuous(labels = label_comma()) +
   labs(x = "Historical actual (EJ/yr)",
-       y = "Downscaled IPF value (EJ/yr)",
+       y = "Downscaled value (EJ/yr)",
        title  = "Historical Alignment — Downscaled vs. Actual (overlap years)",
        subtitle = paste0(
          "Each point = one country × year (", paste(overlap_yrs, collapse=", "), "). ",
@@ -532,8 +532,8 @@ ggplot(df_ratio, aes(x = reorder(label, mean_pct), y = mean_pct, fill = mean_pct
   scale_fill_manual(values = c("TRUE" = "#2980b9", "FALSE" = "#e74c3c"), guide = "none") +
   scale_y_continuous(labels = label_percent(scale = 1)) +
   labs(x = NULL, y = "Median % deviation (downscaled − historical)",
-       title  = "IPF Adjustment Magnitude by Region",
-       subtitle = "Blue = IPF scaled UP vs. historical; Red = scaled DOWN to match REMIND aggregates") +
+       title  = "Share-Adjustment Magnitude by Region",
+       subtitle = "Blue = share-allocation scaled UP vs. historical; Red = scaled DOWN to match REMIND aggregates") +
   theme_report() +
   theme(strip.text = element_text(size = 11))
 ```
@@ -572,7 +572,7 @@ make_share_plot <- function(reg_code, num_vars, denom_var, y_label = "Share") {
       year    = ds_sums$year,
       fuel    = fuel_label[[v]],
       share   = ds_sums[[v]] / pmax(denom_vals, 1e-12),
-      source  = "Downscaled (IPF)"
+      source  = "Downscaled (share)"
     )
   }) |> bind_rows()
 
@@ -597,14 +597,14 @@ make_share_plot <- function(reg_code, num_vars, denom_var, y_label = "Share") {
     geom_vline(xintercept = last_hist_yr, linetype = "dashed",
                colour = "grey50", linewidth = 0.6) +
     scale_linetype_manual(
-      values  = c("Downscaled (IPF)" = "solid", "REMIND aggregate" = "22"),
+      values  = c("Downscaled (share)" = "solid", "REMIND aggregate" = "22"),
       name    = NULL) +
     scale_colour_manual(values = fuel_colors, name = "Fuel", na.value = "grey50") +
     scale_y_continuous(labels = label_percent(), limits = c(0, NA)) +
     scale_x_continuous(breaks = c(2010, 2030, 2050, 2075, 2100, 2150)) +
     labs(x = NULL, y = y_label,
          title = paste0(reg_label, " — ", y_label),
-         subtitle = "Solid = downscaled (IPF); Dashed = REMIND aggregate (should overlap)") +
+         subtitle = "Solid = downscaled (share); Dashed = REMIND aggregate (should overlap)") +
     theme_report() +
     theme(legend.position = "none")
 }
