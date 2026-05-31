@@ -1,15 +1,18 @@
 # PFM Reports — build launcher
 #
 # CLI usage:
-#   Rscript createReports.R                   # interactive menu (defaults: c1, all except model-diagnostics)
-#   Rscript createReports.R 1,3               # reports 1 and 3, default cache (no prompts)
-#   Rscript createReports.R all               # all reports including model-diagnostics, default cache
-#   Rscript createReports.R a                 # all except model-diagnostics, default cache
-#   Rscript createReports.R 2,4 --madrat      # reports 2+4, also clear madrat caches
-#   Rscript createReports.R --no-clear        # keep caches, run default selection (no prompts)
+#   Rscript createReports.R                        # interactive menu (defaults: c1, all except model-diagnostics)
+#   Rscript createReports.R 1,3                    # reports 1 and 3, default cache (no prompts)
+#   Rscript createReports.R all                    # all reports including model-diagnostics, default cache
+#   Rscript createReports.R a                      # all except model-diagnostics, default cache
+#   Rscript createReports.R 2,4 --madrat           # reports 2+4, also clear madrat caches
+#   Rscript createReports.R --no-clear             # keep caches, run default selection (no prompts)
+#   Rscript createReports.R 2 --country=IND        # country-adoption for India (name auto-resolved)
+#   Rscript createReports.R 2 --country=IND,BRA,DEU  # multiple countries in parallel
+#   Rscript createReports.R 2 --country=ZAF --countryName="South Africa"
 #
 # Interactive (RStudio):
-#   source("createReports.R")                 # shows interactive menu
+#   source("createReports.R")                      # shows interactive menu with country prompt
 
 library(rprojroot)
 source(file.path(find_rstudio_root_file(), "src/r/configHelper.R"))
@@ -49,6 +52,8 @@ args               <- commandArgs(trailingOnly = TRUE)
 cli_selection      <- NULL
 cli_clear          <- NULL    # NULL = not explicitly set; resolved later
 cli_cache_explicit <- FALSE
+cli_country        <- NULL
+cli_country_name   <- NULL
 
 for (a in args) {
   if (a %in% c("--madrat", "--all-caches")) {
@@ -57,10 +62,16 @@ for (a in args) {
   } else if (a %in% c("--no-clear", "--keep")) {
     cli_clear          <- "none"
     cli_cache_explicit <- TRUE
+  } else if (startsWith(a, "--country=")) {
+    cli_country        <- toupper(trimws(sub("^--country=", "", a)))
+  } else if (startsWith(a, "--countryName=")) {
+    cli_country_name   <- trimws(sub("^--countryName=", "", a))
   } else if (!startsWith(a, "--")) {
     cli_selection <- a
   }
 }
+
+COUNTRY_NAMES <- getRegionNames()
 
 # True only when the user typed Rscript createReports.R with no arguments at all
 is_interactive_mode <- length(args) == 0L
@@ -131,12 +142,83 @@ resolve_reports <- function() {
 
 chosen <- resolve_reports()
 
+# ── Resolve countries for country-adoption report ────────────────────────────
+report_extra_args <- list()
+
+if ("country-adoption" %in% chosen) {
+  # Collect raw ISO codes from CLI or interactive prompt
+  if (!is.null(cli_country)) {
+    raw_isos <- toupper(trimws(strsplit(cli_country, ",")[[1]]))
+  } else if (is_interactive_mode) {
+    cat("\nCountry Adoption report:\n")
+    raw_input <- read_stdin("  ISO3 code(s), comma-separated [default BRA]: ")
+    raw_isos  <- if (nzchar(trimws(raw_input))) {
+      toupper(trimws(strsplit(raw_input, ",")[[1]]))
+    } else {
+      "BRA"
+    }
+  } else {
+    raw_isos <- "BRA"
+  }
+
+  # Resolve display name for each code
+  country_pairs <- lapply(raw_isos, function(iso) {
+    looked_up <- if (iso %in% names(COUNTRY_NAMES)) COUNTRY_NAMES[[iso]] else NULL
+    name <- if (!is.null(looked_up)) {
+      looked_up
+    } else if (!is.null(cli_country_name) && length(raw_isos) == 1L) {
+      cli_country_name   # --countryName only used for single-country CLI
+    } else if (is_interactive_mode) {
+      raw_name <- read_stdin(sprintf("  Display name for '%s' [default %s]: ", iso, iso))
+      if (nzchar(trimws(raw_name))) trimws(raw_name) else iso
+    } else {
+      iso
+    }
+    list(country = iso, countryName = name)
+  })
+
+  if (is_interactive_mode) {
+    cat(sprintf("  Resolved  : %s\n",
+      paste(sapply(country_pairs, function(p) sprintf("%s (%s)", p$countryName, p$country)),
+            collapse = ", ")))
+  }
+
+  # Store as a list of arg vectors — one per country
+  report_extra_args[["country-adoption"]] <- lapply(country_pairs, function(p) {
+    c(paste0("--country=", p$country), paste0("--countryName=", p$countryName))
+  })
+}
+
 cat(sprintf("Cache mode  : %s\n", switch(cache_mode,
   none    = "keep existing data",
   reports = "clear report data only",
   madrat  = "clear report data + madrat caches"
 )))
-cat(sprintf("Reports     : %s\n\n", paste(chosen, collapse = ", ")))
+cat(sprintf("Reports     : %s\n", paste(chosen, collapse = ", ")))
+if ("country-adoption" %in% chosen) {
+  cat(sprintf("Countries   : %s\n",
+    paste(sapply(country_pairs, function(p) sprintf("%s (%s)", p$countryName, p$country)),
+          collapse = ", ")))
+}
+cat("\n")
+
+# ── Expand to flat task list (one entry per report/country combination) ───────
+tasks <- list()
+for (rep_name in chosen) {
+  extra_list <- report_extra_args[[rep_name]]
+  if (is.null(extra_list)) {
+    tasks <- c(tasks, list(list(report = rep_name, label = rep_name, extra = NULL)))
+  } else {
+    for (extra in extra_list) {
+      iso   <- sub("^--country=", "", extra[1])
+      tasks <- c(tasks, list(list(
+        report = rep_name,
+        label  = sprintf("%s[%s]", rep_name, iso),
+        extra  = extra
+      )))
+    }
+  }
+}
 
 # ── Clear caches ─────────────────────────────────────────────────────────────
 if (cache_mode != "none") {
@@ -189,16 +271,17 @@ if (cache_mode != "none") {
 #}
 
 # ── Build ─────────────────────────────────────────────────────────────────────
-if (length(chosen) == 1L) {
+if (length(tasks) == 1L) {
 
-  # ── Single report ──────────────────────────────────────────────────────────
-  cat(sprintf("Building: %s\n\n", chosen))
-  status <- system2(rscript_path, file.path(reports_dir, chosen, "run.R"), wait = TRUE)
-  if (status == 0L) cat("\nDone.\n") else stop(sprintf("'%s' failed.", chosen))
+  # ── Single task ────────────────────────────────────────────────────────────
+  task <- tasks[[1]]
+  cat(sprintf("Building: %s\n\n", task$label))
+  status <- system2(rscript_path, c(file.path(reports_dir, task$report, "run.R"), task$extra), wait = TRUE)
+  if (status == 0L) cat("\nDone.\n") else stop(sprintf("'%s' failed.", task$label))
 
 } else {
 
-  # ── Multiple reports: seed shared caches first, then run in parallel ───────
+  # ── Multiple tasks: seed shared caches first, then run in parallel ─────────
   cat("=== Parallel build ===\n\n")
 
   # Seed panelDataHistorical and panelDataScenario before launching workers to
@@ -244,23 +327,23 @@ if (length(chosen) == 1L) {
     cat("\n")
   }
 
-  cat(sprintf("Launching %d reports in parallel...\n\n", length(chosen)))
+  cat(sprintf("Launching %d tasks in parallel...\n\n", length(tasks)))
   library(parallel)
-  n_cores <- min(length(chosen), max(1L, detectCores() - 1L))
+  n_cores <- min(length(tasks), max(1L, detectCores() - 1L))
   cl      <- makeCluster(n_cores)
   clusterExport(cl, c("reports_dir", "rscript_path"), envir = environment())
 
-  results <- parLapply(cl, chosen, function(rep_name) {
-    t0     <- Sys.time()
-    out    <- tryCatch(
-      system2(rscript_path, file.path(reports_dir, rep_name, "run.R"),
+  results <- parLapply(cl, tasks, function(task) {
+    t0  <- Sys.time()
+    out <- tryCatch(
+      system2(rscript_path, c(file.path(reports_dir, task$report, "run.R"), task$extra),
               stdout = TRUE, stderr = TRUE),
       error = function(e) structure(e$message, status = -1L)
     )
     status <- attr(out, "status")
     if (is.null(status)) status <- 0L
     list(
-      report   = rep_name,
+      report   = task$label,
       ok       = status == 0L,
       duration = round(difftime(Sys.time(), t0, units = "secs"), 1),
       output   = out
@@ -270,7 +353,7 @@ if (length(chosen) == 1L) {
 
   cat("\n=================== BUILD SUMMARY ===================\n")
   for (r in results) {
-    cat(sprintf("  %-25s  %s  (%s s)\n",
+    cat(sprintf("  %-30s  %s  (%s s)\n",
                 r$report,
                 if (r$ok) "OK    " else "FAILED",
                 r$duration))
@@ -285,6 +368,6 @@ if (length(chosen) == 1L) {
       cat(paste(tail(f$output, 25L), collapse = "\n"), "\n\n")
     }
   } else {
-    cat("All reports compiled successfully.\n")
+    cat("All tasks compiled successfully.\n")
   }
 }

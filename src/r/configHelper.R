@@ -37,6 +37,65 @@ getPfmConfig <- function(key, default = NULL) {
   return(val)
 }
 
+#' Build a display-name lookup for the 54 panel regions
+#'
+#' Reads the region mapping used by panelDataHistorical, returns a named
+#' character vector (names = region codes, values = display names). Single-country
+#' regions use the country name from the mapping; the 14 aggregate regions use
+#' hardcoded descriptive labels.
+#'
+#' @param regionMappingFile Character. Mapping file passed to toolGetMapping.
+#' @return Named character vector: region_code → display_name.
+#' @export
+getRegionNames <- function(regionMappingFile = "regionmapping_54.csv") {
+  aggregate_labels <- c(
+    AFC_other = "Sub-Saharan Africa (Other)",
+    ANZ       = "Australia & New Zealand",
+    BELUX     = "Belgium & Luxembourg",
+    CAS       = "Central Asia",
+    CHA       = "China & Periphery",
+    ECE_other = "Central Eastern Europe (Other)",
+    ECS       = "South-Eastern Europe",
+    MEA_other = "Middle East (Other)",
+    NAF_other = "North Africa (Other)",
+    NEN_other = "Non-EU Northern Europe",
+    NES_EU    = "Non-EU Southern Europe",
+    OAS_other = "Other Asia",
+    OLA       = "Other Latin America",
+    SEA_other = "Southeast Asia (Other)"
+  )
+
+  # Override verbose ISO names for specific single-country regions
+  name_overrides <- c(
+    COD = "DR Congo",
+    IRN = "Iran",
+    KOR = "South Korea",
+    RUS = "Russia",
+    VNM = "Vietnam"
+  )
+
+  m <- tryCatch(
+    madrat::toolGetMapping(regionMappingFile, type = "regional", where = "mappingfolder"),
+    error = function(e) NULL
+  )
+  if (is.null(m)) return(aggregate_labels)
+
+  single <- m[m$CountryCode == m$RegionCode, c("RegionCode", "X")]
+  single_vec <- stats::setNames(single$X, single$RegionCode)
+
+  region_codes <- sort(unique(m$RegionCode))
+  result <- stats::setNames(
+    ifelse(region_codes %in% names(aggregate_labels),
+           aggregate_labels[region_codes],
+           single_vec[region_codes]),
+    region_codes
+  )
+  # Apply friendly overrides for verbose ISO country names
+  override_idx <- names(result) %in% names(name_overrides)
+  result[override_idx] <- name_overrides[names(result)[override_idx]]
+  result
+}
+
 #' Check whether a file path is absolute
 #'
 #' @param path Character. The path to check.

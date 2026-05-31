@@ -1,0 +1,2383 @@
+---
+title: "`r params$countryName` — Carbon Pricing Adoption: Term Contribution Analysis"
+subtitle: "Decomposing the drivers of adoption probability over time — `r params$modelName`"
+author: "Political Feasibility Module"
+date: "`r Sys.Date()`"
+params:
+  country: "BRA"
+  countryName: "Brazil"
+  cacheDir: "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default"
+  gdxPath: "c:/Users/renatoro/Desktop/Projects/Elevate/code/fulldata.gdx"
+  assetDir: "output/country_adoption"
+  modelName: "Baseline + Rule of Law"
+  instQualityDrivers: !r c("Government Effectiveness (WGI)", "Rule of Law (VDem)")
+  controlDrivers: !r c("GDP per Capita", "Hydro Nuclear Share")
+  regionMappingFE: "regionmappingH12.csv"
+  includeLagged: false
+  adoptionThreshold: 0.5
+  waterfallYears: !r c(2000, 2005, 2010, 2015, 2019, 2022)
+  futureWaterfallYears: !r c(2030, 2040, 2050, 2070, 2100)
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 2
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: hide
+    fig_width: 11
+    fig_height: 6
+---
+
+<style>
+  body { background-color: #f5f7fa; color: #333; }
+  .main-container { max-width: 95% !important; }
+  h1, h2, h3 { color: #2C3E50; font-weight: 700; }
+  .nav-tabs {
+    font-weight: bold; margin-bottom: 20px;
+    border-bottom: 2px solid #2C3E50;
+  }
+  .nav-tabs > li.active > a,
+  .nav-tabs > li.active > a:focus,
+  .nav-tabs > li.active > a:hover {
+    background-color: #2C3E50; color: #fff;
+    border: 1px solid #2C3E50; border-bottom-color: transparent;
+  }
+  .tab-content {
+    padding: 25px; border: 1px solid #ddd; border-top: none;
+    border-radius: 0 0 6px 6px; background-color: #fff;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  }
+  .card {
+    background-color: #fff; border-radius: 8px;
+    border: 1px solid #eef2f5; box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+    margin-bottom: 25px;
+  }
+  .card-header {
+    background-color: #f8fafc; border-bottom: 1px solid #eef2f5;
+    padding: 12px 20px; font-weight: bold; font-size: 1.1em; color: #2C3E50;
+  }
+  .card-body { padding: 20px; }
+  .metric-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .metric-box {
+    flex: 1; min-width: 160px; background: #fff; border-radius: 8px;
+    padding: 16px 20px; border-left: 4px solid; text-align: center;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+  }
+  .metric-value { font-size: 2em; font-weight: bold; line-height: 1.2; }
+  .metric-label { font-size: 0.85em; color: #555; margin-top: 4px; }
+  .callout {
+    border-left: 4px solid; padding: 10px 16px;
+    margin-bottom: 14px; border-radius: 0 4px 4px 0;
+  }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.align = "center", dev = "svg"
+)
+
+library(pfm)
+library(magclass)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(patchwork)
+
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
+
+`%||%` <- function(x, y) if (!is.null(x) && length(x) > 0 && nchar(as.character(x[1])) > 0) x else y
+
+country_code <- params$country
+country_name <- params$countryName
+
+model_instQualityDrivers <- params$instQualityDrivers
+model_controlDrivers     <- params$controlDrivers
+model_regionMappingFE    <- if (is.null(params$regionMappingFE) ||
+                                  nchar(as.character(params$regionMappingFE)) == 0)
+                              NULL else params$regionMappingFE
+model_includeLagged  <- isTRUE(params$includeLagged)
+adoption_threshold   <- as.numeric(params$adoptionThreshold)
+waterfall_years        <- as.integer(params$waterfallYears)
+future_waterfall_years <- as.integer(params$futureWaterfallYears)
+
+gdx_path <- params$gdxPath
+if (!is.null(gdx_path) && nchar(gdx_path) > 0 && !is_absolute_path(gdx_path)) {
+  gdx_path <- file.path(rprojroot::find_rstudio_root_file(), gdx_path)
+}
+has_scenario <- !is.null(gdx_path) && nchar(gdx_path) > 0 && file.exists(gdx_path)
+
+plotOutputDir <- file.path(params$assetDir, "plots", country_code)
+if (!dir.exists(plotOutputDir)) dir.create(plotOutputDir, recursive = TRUE)
+
+# ── Extended colour palette ──────────────────────────────────────────────────
+col_group_ext <- c(
+  col_group,
+  "Intercept"          = "#95a5a6",
+  "Total"              = "#2C3E50"
+)
+
+# ── Group ordering (determines stacking order) ───────────────────────────────
+group_order <- c(
+  "Intercept", "Region Fixed Effects", "Time Trend",
+  "Actor Power", "Institutional Quality", "Interaction",
+  "Controls", "Other"
+)
+
+# ── Term → group classification ──────────────────────────────────────────────
+classify_term <- function(terms) {
+  iq_safe   <- make.names(model_instQualityDrivers)
+  ctrl_safe <- make.names(model_controlDrivers)
+  vapply(terms, function(t) {
+    if (t == "(Intercept)")                                    return("Intercept")
+    if (t == "timeTrend")                                      return("Time Trend")
+    if (grepl("^regionFE", t))                                 return("Region Fixed Effects")
+    if (grepl("_x_", t))                                      return("Interaction")
+    if (t %in% iq_safe)                                        return("Institutional Quality")
+    if (t %in% ctrl_safe)                                      return("Controls")
+    if (grepl("Actor\\.Power|Innovator\\.Power|Incumbent\\.Power", t)) return("Actor Power")
+    "Other"
+  }, character(1))
+}
+
+# ── Term → human-readable label ─────────────────────────────────────────────
+term_to_label <- function(terms) {
+  all_named <- c("Actor Power Index", model_instQualityDrivers, model_controlDrivers)
+  s2d       <- setNames(all_named, make.names(all_named))
+  vapply(terms, function(t) {
+    if (t == "(Intercept)") return("Intercept")
+    if (t == "timeTrend")   return("Time Trend")
+    if (grepl("^regionFE", t)) return(paste0("FE: ", sub("^regionFE", "", t)))
+    if (grepl("_x_", t)) {
+      parts <- strsplit(t, "_x_")[[1]]
+      p1 <- if (parts[1] %in% names(s2d)) s2d[[parts[1]]] else parts[1]
+      p2 <- if (parts[2] %in% names(s2d)) s2d[[parts[2]]] else parts[2]
+      p2 <- gsub("Government Effectiveness \\(WGI\\)", "Gov. Eff.", p2)
+      p2 <- gsub("Rule of Law \\(VDem\\)",             "Rule of Law", p2)
+      p2 <- gsub("Vertical Accountability \\(VDem\\)", "Vert. Acc.", p2)
+      return(paste0("API × ", p2))
+    }
+    if (t %in% names(s2d)) return(s2d[[t]])
+    t
+  }, character(1))
+}
+
+# ── Build per-term log-odds contributions (wide) ─────────────────────────────
+# Returns a data.frame with one row per year for the selected country.
+# Columns: one per model term (log-odds contribution = beta * x) + meta columns.
+#
+# Uses manual term evaluation instead of model.matrix() to avoid factor-level
+# errors: when data is filtered to a single country, regionFE only has one level
+# present, and model.matrix() drops the expected dummy columns. Here we decode
+# factor dummies directly from the coefficient name pattern (regionFE<LEVEL>).
+build_contributions <- function(fit, df_panel) {
+  m          <- fit$model
+  df_country <- df_panel[df_panel$region == country_code, , drop = FALSE]
+  if (nrow(df_country) == 0) return(NULL)
+
+  needed <- intersect(all.vars(m$formula), colnames(df_country))
+  df_ok  <- df_country[complete.cases(df_country[, needed, drop = FALSE]), , drop = FALSE]
+  if (nrow(df_ok) == 0) return(NULL)
+
+  beta        <- coef(m)
+  n           <- nrow(df_ok)
+  contrib_mat <- matrix(0, nrow = n, ncol = length(beta),
+                        dimnames = list(NULL, names(beta)))
+
+  for (term_name in names(beta)) {
+    b <- beta[[term_name]]
+    if (term_name == "(Intercept)") {
+      contrib_mat[, term_name] <- b
+    } else if (grepl("^regionFE", term_name)) {
+      # Factor dummy: 1 if this country's FE group matches the level in the name
+      fe_level <- sub("^regionFE", "", term_name)
+      contrib_mat[, term_name] <- b * as.integer(as.character(df_ok$regionFE) == fe_level)
+    } else if (term_name %in% colnames(df_ok)) {
+      contrib_mat[, term_name] <- b * df_ok[[term_name]]
+    }
+    # Terms absent from df_ok remain 0 (already initialised)
+  }
+
+  df_out          <- as.data.frame(contrib_mat)
+  df_out$year     <- df_ok$year
+  df_out$ecp      <- df_ok$ecp
+  df_out$adoption <- as.integer(df_ok$ecp > 0)
+  df_out$eta      <- rowSums(contrib_mat)
+  df_out$prob     <- plogis(df_out$eta)
+  df_out
+}
+
+# ── Reshape to long ──────────────────────────────────────────────────────────
+to_long <- function(contrib_wide) {
+  if (is.null(contrib_wide)) return(NULL)
+  meta_cols <- c("year", "ecp", "adoption", "eta", "prob")
+  term_cols <- setdiff(colnames(contrib_wide), meta_cols)
+  long <- pivot_longer(contrib_wide,
+    cols     = all_of(term_cols),
+    names_to = "term_raw", values_to = "contribution"
+  )
+  long$term_group <- classify_term(long$term_raw)
+  long$term_label <- term_to_label(long$term_raw)
+  long
+}
+
+# ── Aggregate by group ────────────────────────────────────────────────────────
+to_grouped <- function(contrib_long) {
+  if (is.null(contrib_long)) return(NULL)
+  contrib_long %>%
+    group_by(year, ecp, adoption, prob, eta, term_group) %>%
+    summarise(contribution = sum(contribution), .groups = "drop") %>%
+    mutate(term_group = factor(term_group, levels = group_order))
+}
+
+# ── Compute diverging stacking positions ─────────────────────────────────────
+# Returns df with ymin/ymax for geom_rect-based diverging stacked bar.
+add_stack_pos <- function(df, fill_col = "term_group") {
+  df %>%
+    group_by(year) %>%
+    arrange(year, match(as.character(!!sym(fill_col)), group_order)) %>%
+    mutate(
+      cum_pos = { p <- pmax(0, contribution); cumsum(p) - p },
+      cum_neg = { n <- pmin(0, contribution); cumsum(n) - n },
+      ymin    = ifelse(contribution >= 0, cum_pos,             cum_neg + contribution),
+      ymax    = ifelse(contribution >= 0, cum_pos + contribution, cum_neg)
+    ) %>%
+    ungroup()
+}
+```
+
+```{r load_data, cache=FALSE, include=FALSE}
+panelData <- getPanelDataHistoricalCached(
+  aggregate = TRUE, y = 2000:2022,
+  outputRegionMappingFile = "regionmapping_54.csv"
+)
+
+future_mag <- NULL
+if (has_scenario) {
+  future_mag <- getPanelDataScenarioCached(
+    gdxFile = gdx_path, aggregate = TRUE,
+    outputRegionMappingFile = "regionmapping_54.csv"
+  )
+}
+```
+
+```{r fit_models, cache=FALSE, include=FALSE}
+fit_bulk <- estimateAdoptionModel(
+  data                      = panelData,
+  sector                    = "Bulk",
+  actorPowerDrivers         = NULL,
+  actorPowerIndex           = "Actor Power Index",
+  instQualityDrivers        = model_instQualityDrivers,
+  controlDrivers            = model_controlDrivers,
+  includeLaggedAdoption     = model_includeLagged,
+  interactRegionFE          = FALSE,
+  regionMappingFixedEffects = model_regionMappingFE
+)
+
+fit_diffuse <- estimateAdoptionModel(
+  data                      = panelData,
+  sector                    = "Diffuse",
+  actorPowerDrivers         = NULL,
+  actorPowerIndex           = "Actor Power Index",
+  instQualityDrivers        = model_instQualityDrivers,
+  controlDrivers            = model_controlDrivers,
+  includeLaggedAdoption     = model_includeLagged,
+  interactRegionFE          = FALSE,
+  regionMappingFixedEffects = model_regionMappingFE
+)
+
+# Scenario panel data (for future projections if available)
+future_df_bulk    <- NULL
+future_df_diffuse <- NULL
+if (!is.null(future_mag)) {
+  future_df_bulk <- preparePanelData(
+    data                      = future_mag,
+    sector                    = "Bulk",
+    actorPowerDrivers         = NULL,
+    actorPowerIndex           = "Actor Power Index",
+    instQualityDrivers        = model_instQualityDrivers,
+    controlDrivers            = model_controlDrivers,
+    regionMappingFixedEffects = model_regionMappingFE,
+    lag                       = 1
+  )
+  future_df_diffuse <- preparePanelData(
+    data                      = future_mag,
+    sector                    = "Diffuse",
+    actorPowerDrivers         = NULL,
+    actorPowerIndex           = "Actor Power Index",
+    instQualityDrivers        = model_instQualityDrivers,
+    controlDrivers            = model_controlDrivers,
+    regionMappingFixedEffects = model_regionMappingFE,
+    lag                       = 1
+  )
+}
+```
+
+```{r build_contributions, include=FALSE}
+# ── Historical panel data.frames ─────────────────────────────────────────────
+hist_bulk_df <- pfm::preparePanelData(
+  data                      = panelData,
+  sector                    = "Bulk",
+  actorPowerDrivers         = NULL,
+  actorPowerIndex           = "Actor Power Index",
+  instQualityDrivers        = model_instQualityDrivers,
+  controlDrivers            = model_controlDrivers,
+  regionMappingFixedEffects = model_regionMappingFE,
+  lag                       = 1
+)
+hist_diffuse_df <- pfm::preparePanelData(
+  data                      = panelData,
+  sector                    = "Diffuse",
+  actorPowerDrivers         = NULL,
+  actorPowerIndex           = "Actor Power Index",
+  instQualityDrivers        = model_instQualityDrivers,
+  controlDrivers            = model_controlDrivers,
+  regionMappingFixedEffects = model_regionMappingFE,
+  lag                       = 1
+)
+
+country_in_data <- country_code %in% unique(hist_bulk_df$region)
+
+# ── Per-term contributions (wide + long + grouped) ───────────────────────────
+contrib_bulk_wide    <- build_contributions(fit_bulk,    hist_bulk_df)
+contrib_diffuse_wide <- build_contributions(fit_diffuse, hist_diffuse_df)
+
+contrib_bulk_long    <- to_long(contrib_bulk_wide)
+contrib_diffuse_long <- to_long(contrib_diffuse_wide)
+
+contrib_bulk_grp    <- to_grouped(contrib_bulk_long)
+contrib_diffuse_grp <- to_grouped(contrib_diffuse_long)
+
+# ── Scenario contributions (if available) ────────────────────────────────────
+scen_bulk_wide    <- if (!is.null(future_df_bulk))    build_contributions(fit_bulk,    future_df_bulk)    else NULL
+scen_diffuse_wide <- if (!is.null(future_df_diffuse)) build_contributions(fit_diffuse, future_df_diffuse) else NULL
+scen_bulk_grp     <- to_grouped(to_long(scen_bulk_wide))
+scen_diffuse_grp  <- to_grouped(to_long(scen_diffuse_wide))
+
+# ── YoY deltas ───────────────────────────────────────────────────────────────
+compute_yoy <- function(contrib_grp) {
+  if (is.null(contrib_grp)) return(NULL)
+  contrib_grp %>%
+    arrange(year) %>%
+    group_by(term_group) %>%
+    mutate(delta = contribution - lag(contribution, 1)) %>%
+    ungroup() %>%
+    filter(!is.na(delta))
+}
+
+yoy_bulk    <- compute_yoy(contrib_bulk_grp)
+yoy_diffuse <- compute_yoy(contrib_diffuse_grp)
+
+# ── Overlap years and future-only scenario data ───────────────────────────────
+# Years present in historical data; scenario bars for these years are hidden
+# from all bar charts to avoid stacking historical and projected values together.
+hist_years <- if (!is.null(contrib_bulk_grp)) sort(unique(contrib_bulk_grp$year)) else integer(0)
+
+overlap_years_bulk    <- if (!is.null(scen_bulk_grp))
+  sort(intersect(hist_years, unique(scen_bulk_grp$year))) else integer(0)
+overlap_years_diffuse <- if (!is.null(scen_diffuse_grp))
+  sort(intersect(hist_years, unique(scen_diffuse_grp$year))) else integer(0)
+
+# Scenario grouped/long data with historical years removed (all bar charts use these)
+scen_bulk_plot    <- if (!is.null(scen_bulk_grp))
+  filter(scen_bulk_grp,    !year %in% hist_years) else NULL
+scen_diffuse_plot <- if (!is.null(scen_diffuse_grp))
+  filter(scen_diffuse_grp, !year %in% hist_years) else NULL
+
+scen_bulk_long_plot    <- if (!is.null(scen_bulk_wide))
+  filter(to_long(scen_bulk_wide),    !year %in% hist_years) else NULL
+scen_diffuse_long_plot <- if (!is.null(scen_diffuse_wide))
+  filter(to_long(scen_diffuse_wide), !year %in% hist_years) else NULL
+
+# YoY computed on full scenario (so the first future delta is relative to the
+# last historical-period scenario row), then display-filtered to future years.
+yoy_scen_bulk    <- compute_yoy(scen_bulk_grp)
+yoy_scen_diffuse <- compute_yoy(scen_diffuse_grp)
+yoy_scen_bulk_plot    <- if (!is.null(yoy_scen_bulk))
+  filter(yoy_scen_bulk,    !year %in% hist_years) else NULL
+yoy_scen_diffuse_plot <- if (!is.null(yoy_scen_diffuse))
+  filter(yoy_scen_diffuse, !year %in% hist_years) else NULL
+
+# ── Scenario timestep (from future-only data) ─────────────────────────────────
+scen_timestep <- if (!is.null(scen_bulk_plot) && length(unique(scen_bulk_plot$year)) > 1) {
+  min(diff(sort(unique(scen_bulk_plot$year))))
+} else if (!is.null(scen_bulk_grp) && length(unique(scen_bulk_grp$year)) > 1) {
+  min(diff(sort(unique(scen_bulk_grp$year))))
+} else 5L
+
+# ── Combined historical + scenario (scenario overlap years removed) ────────────
+hist_boundary_year <- if (!is.null(contrib_bulk_wide)) max(contrib_bulk_wide$year) else 2022L
+
+combined_bulk_grp <- if (!is.null(contrib_bulk_grp) || !is.null(scen_bulk_plot)) {
+  bind_rows(
+    if (!is.null(contrib_bulk_grp)) contrib_bulk_grp %>% mutate(period = "Historical"),
+    if (!is.null(scen_bulk_plot))   scen_bulk_plot   %>% mutate(period = "Scenario")
+  )
+} else NULL
+
+combined_diffuse_grp <- if (!is.null(contrib_diffuse_grp) || !is.null(scen_diffuse_plot)) {
+  bind_rows(
+    if (!is.null(contrib_diffuse_grp)) contrib_diffuse_grp %>% mutate(period = "Historical"),
+    if (!is.null(scen_diffuse_plot))   scen_diffuse_plot   %>% mutate(period = "Scenario")
+  )
+} else NULL
+
+# ── Helper: latest year summary ──────────────────────────────────────────────
+latest_year <- if (!is.null(contrib_bulk_wide)) max(contrib_bulk_wide$year) else 2022
+
+summary_bulk <- if (!is.null(contrib_bulk_grp)) {
+  contrib_bulk_grp %>% filter(year == latest_year)
+} else NULL
+
+summary_diffuse <- if (!is.null(contrib_diffuse_grp)) {
+  contrib_diffuse_grp %>% filter(year == latest_year)
+} else NULL
+
+prob_bulk_latest    <- if (!is.null(summary_bulk))    unique(summary_bulk$prob)    else NA
+prob_diffuse_latest <- if (!is.null(summary_diffuse)) unique(summary_diffuse$prob) else NA
+adopted_bulk    <- if (!is.null(summary_bulk))    unique(summary_bulk$adoption)    else NA
+adopted_diffuse <- if (!is.null(summary_diffuse)) unique(summary_diffuse$adoption) else NA
+
+top_driver_bulk <- if (!is.null(summary_bulk)) {
+  summary_bulk %>% filter(contribution == max(contribution)) %>%
+    pull(term_group) %>% first()
+} else "N/A"
+top_barrier_bulk <- if (!is.null(summary_bulk)) {
+  summary_bulk %>% filter(contribution == min(contribution)) %>%
+    pull(term_group) %>% first()
+} else "N/A"
+```
+
+---
+
+# Executive Summary
+
+```{r exec-summary, echo=FALSE, results='asis'}
+callout <- function(msg, color = col_warn, bg = "#fef9e7") {
+  cat(sprintf(
+    '<div class="callout" style="border-color:%s;background:%s;"><strong>%s</strong></div>\n',
+    color, bg, msg
+  ))
+}
+
+metric_box <- function(value, label, color) {
+  cat(sprintf(paste0(
+    '<div class="metric-box" style="border-left:4px solid %s;background:#fff;',
+    'border-radius:8px;padding:16px 20px;text-align:center;',
+    'box-shadow:0 2px 4px rgba(0,0,0,0.06);flex:1;min-width:150px;">',
+    '<div style="font-size:1.8em;font-weight:bold;color:%s;">%s</div>',
+    '<div style="font-size:0.85em;color:#555;margin-top:4px;">%s</div>',
+    '</div>\n'
+  ), color, color, value, label))
+}
+
+fmt_pct  <- function(p) if (is.na(p)) "—" else sprintf("%.1f%%", p * 100)
+col_prob <- function(p, thresh) {
+  if (is.na(p))          return(col_warn)
+  if (p >= thresh)       return(col_good)
+  if (p >= thresh / 2)   return(col_warn)
+  col_bad
+}
+
+if (!country_in_data) {
+  callout(sprintf("&#9888; %s (%s) not found in panel data. Check the region code.",
+                  country_name, country_code))
+} else if (is.null(contrib_bulk_grp) && is.null(contrib_diffuse_grp)) {
+  callout(sprintf(
+    "&#9888; Contribution data could not be computed for %s. Check R console for errors.",
+    country_name
+  ))
+} else {
+  cat('<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px;">\n')
+  metric_box(fmt_pct(prob_bulk_latest),
+    paste0("Pr(Adoption) Bulk &mdash; ", latest_year),
+    col_prob(prob_bulk_latest, adoption_threshold))
+  metric_box(fmt_pct(prob_diffuse_latest),
+    paste0("Pr(Adoption) Diffuse &mdash; ", latest_year),
+    col_prob(prob_diffuse_latest, adoption_threshold))
+  metric_box(
+    ifelse(isTRUE(adopted_bulk    == 1L), "Adopted", "Not Adopted"),
+    paste0("Bulk Status &mdash; ", latest_year),
+    ifelse(isTRUE(adopted_bulk    == 1L), col_good, col_bad))
+  metric_box(
+    ifelse(isTRUE(adopted_diffuse == 1L), "Adopted", "Not Adopted"),
+    paste0("Diffuse Status &mdash; ", latest_year),
+    ifelse(isTRUE(adopted_diffuse == 1L), col_good, col_bad))
+  metric_box(top_driver_bulk,  "Top Positive Driver (Bulk)", col_good)
+  metric_box(top_barrier_bulk, "Top Negative Term (Bulk)",   col_bad)
+  cat('</div>\n')
+}
+```
+
+This report decomposes the **`r params$modelName`** adoption model prediction for **`r country_name`** into per-term log-odds contributions. Each term's contribution is the product of its estimated coefficient and the country's observed value for that variable: **β × x(t)**. Contributions are additive on the **log-odds scale** and sum to the model's linear predictor **η**, from which the adoption probability P = plogis(η) is derived.
+
+**How to read these charts:**
+- Bars **above zero** on the log-odds axis push probability toward adoption.
+- Bars **below zero** push probability away from adoption.
+- The **Total probability line** (separate panel) shows the implied Pr(Adoption).
+
+---
+
+# Bulk Sector {.tabset}
+
+```{r bulk-check, echo=FALSE, results='asis'}
+if (is.null(contrib_bulk_grp)) {
+  cat(sprintf(
+    '<div class="callout" style="border-color:%s;background:#fef9e7;">',
+    col_warn
+  ))
+  cat(sprintf('<strong>%s not found in Bulk panel data.</strong></div>', country_name))
+}
+```
+
+## Log-odds Contributions
+
+Log-odds contribution of each term group over time. Positive contributions (above the baseline) support adoption; negative contributions oppose it. The **dashed line** is the sum of all contributions (the linear predictor η).
+
+```{r bulk-stacked-bar, echo=FALSE, fig.height=6, fig.width=12}
+if (!is.null(contrib_bulk_grp)) {
+  df_pos <- add_stack_pos(contrib_bulk_grp)
+
+  p <- ggplot(df_pos, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.45, xmax = year + 0.45,
+      ymin = ymin, ymax = ymax
+    )) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_line(
+      data = contrib_bulk_grp %>% distinct(year, eta),
+      aes(x = year, y = eta, fill = NULL),
+      color = "#2C3E50", linewidth = 0.9, linetype = "dashed"
+    ) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group",
+                      breaks = names(col_group_ext)) +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Log-odds Contributions by Term Group"),
+      subtitle = "Stacked bars = β × x(t) per group; dashed line = total linear predictor η",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "bulk_stacked_bar.png"), p, width = 12, height = 6, dpi = 300)
+}
+```
+
+## Stacked Area
+
+Smooth area version of the grouped log-odds decomposition. Each band shows the contribution from a term group.
+
+```{r bulk-area-chart, echo=FALSE, fig.height=6, fig.width=12}
+if (!is.null(contrib_bulk_grp)) {
+  df_area <- add_stack_pos(contrib_bulk_grp)
+
+  p <- ggplot(df_area, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.42, xmax = year + 0.42,
+      ymin = ymin, ymax = ymax
+    ), alpha = 0.85) +
+    geom_step(
+      data = contrib_bulk_grp %>% distinct(year, eta),
+      aes(x = year, y = eta, fill = NULL),
+      color = "#2C3E50", linewidth = 1.1, linetype = "dashed", direction = "mid"
+    ) +
+    geom_smooth(
+      data = contrib_bulk_grp %>% distinct(year, eta),
+      aes(x = year, y = eta, fill = NULL),
+      color = "#2C3E50", linewidth = 1.0, method = "loess", se = FALSE,
+      linetype = "solid", alpha = 0.5
+    ) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Term Contribution Area Chart"),
+      subtitle = "Each band = group contribution; dashed step = raw η; smooth curve = LOESS trend",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "bulk_area_chart.png"), p, width = 12, height = 6, dpi = 300)
+}
+```
+
+## Probability Trajectory
+
+Total model-implied adoption probability over time alongside the actual adoption status (grey step) and the adoption threshold.
+
+```{r bulk-prob-line, echo=FALSE, fig.height=5, fig.width=12}
+if (!is.null(contrib_bulk_wide)) {
+  df_traj <- contrib_bulk_wide %>%
+    select(year, prob, adoption) %>%
+    distinct()
+
+  p <- ggplot(df_traj, aes(x = year)) +
+    geom_step(aes(y = adoption, color = "Actual adoption (0/1)"),
+              linewidth = 0.8, alpha = 0.55, direction = "hv") +
+    geom_line(aes(y = prob, color = "Model Pr(Adoption)"),
+              linewidth = 1.4) +
+    geom_point(aes(y = prob, color = "Model Pr(Adoption)"),
+               size = 2.5) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+               color = "grey50", linewidth = 0.7) +
+    annotate("text", x = min(df_traj$year) + 0.3,
+             y = adoption_threshold + 0.025,
+             label = paste0("Threshold: ", adoption_threshold),
+             color = "grey40", size = 3.5, hjust = 0) +
+    scale_color_manual(
+      values = c("Actual adoption (0/1)" = "grey55",
+                 "Model Pr(Adoption)"    = col_bulk),
+      name = NULL
+    ) +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Adoption Probability Trajectory"),
+      subtitle = paste0("Solid = model predicted probability; step = actual adoption status; dashed = threshold ", adoption_threshold),
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "bulk_prob_trajectory.png"), p, width = 12, height = 5, dpi = 300)
+}
+```
+
+## Year-over-Year Changes
+
+Year-over-year **change** in each group's contribution (Δ(β × x) = β × Δx). This shows which terms drove the change in adoption probability from one year to the next.
+
+```{r bulk-yoy-bar, echo=FALSE, fig.height=6, fig.width=12}
+if (!is.null(yoy_bulk) && nrow(yoy_bulk) > 0) {
+  df_yoy <- add_stack_pos(
+    yoy_bulk %>% select(-contribution) %>% rename(contribution = delta),
+    fill_col = "term_group"
+  ) %>%
+    mutate(term_group = factor(term_group, levels = group_order))
+
+  # Total delta line
+  df_total_delta <- yoy_bulk %>%
+    group_by(year) %>%
+    summarise(total_delta = sum(delta), .groups = "drop")
+
+  p <- ggplot(df_yoy, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.45, xmax = year + 0.45,
+      ymin = ymin, ymax = ymax
+    )) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_line(data = df_total_delta, aes(x = year, y = total_delta, fill = NULL),
+              color = "#2C3E50", linewidth = 1.0, linetype = "dashed") +
+    geom_point(data = df_total_delta, aes(x = year, y = total_delta, fill = NULL),
+               color = "#2C3E50", size = 2.0) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = seq(2001, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Year-over-Year Change in Log-odds Contributions"),
+      subtitle = "Bars = Δ(β × x) per group from previous year; dashed line = total Δη; positive = pushed toward adoption",
+      x = "Year", y = "Δ Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "bulk_yoy_change.png"), p, width = 12, height = 6, dpi = 300)
+}
+```
+
+### YoY Lollipop — Individual Terms
+
+Lollipop chart of year-over-year changes at individual term level (not grouped). Useful for identifying the specific variable driving each year's shift.
+
+```{r bulk-yoy-lollipop, echo=FALSE, fig.height=7, fig.width=13}
+if (!is.null(contrib_bulk_long)) {
+  yoy_individual <- contrib_bulk_long %>%
+    arrange(year) %>%
+    group_by(term_raw, term_label, term_group) %>%
+    mutate(delta = contribution - lag(contribution, 1)) %>%
+    ungroup() %>%
+    filter(!is.na(delta), abs(delta) > 1e-8)
+
+  if (nrow(yoy_individual) > 0) {
+    p <- ggplot(yoy_individual, aes(x = year, y = delta, color = term_group)) +
+      geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5) +
+      geom_segment(aes(xend = year, yend = 0), linewidth = 0.8, alpha = 0.7) +
+      geom_point(size = 2.5) +
+      facet_wrap(~term_label, scales = "free_y", ncol = 3) +
+      scale_color_manual(values = col_group_ext, name = "Term Group") +
+      scale_x_continuous(breaks = seq(2001, 2022, 4)) +
+      labs(
+        title    = paste0(country_name, " — Bulk Sector: YoY Change per Individual Term"),
+        subtitle = "Each panel shows the annual change in β × x for one model term",
+        x = "Year", y = "Δ Log-odds contribution"
+      ) +
+      theme_report() +
+      theme(legend.position = "bottom")
+
+    print(p)
+    ggsave(file.path(plotOutputDir, "bulk_yoy_lollipop.png"), p, width = 13, height = 7, dpi = 300)
+  }
+}
+```
+
+## Waterfall Analysis {.tabset}
+
+Waterfall charts for selected years. Each bar shows how one term group's contribution lifts or depresses the running log-odds total, starting from zero. The **annotated probability** above each bar shows Pr(Adoption) at that cumulative stage.
+
+```{r bulk-waterfall-helper, include=FALSE}
+make_waterfall <- function(contrib_grp, year_val, sector_name, col_sector) {
+  df_yr <- contrib_grp %>%
+    filter(year == year_val) %>%
+    filter(abs(contribution) > 1e-8 | term_group == "Intercept") %>%
+    arrange(match(as.character(term_group), group_order))
+
+  if (nrow(df_yr) == 0) {
+    return(ggplot() + annotate("text", x = 1, y = 1, label = "No data") + theme_void())
+  }
+
+  # Running cumulative sums for waterfall positioning
+  df_yr <- df_yr %>%
+    mutate(
+      cumend   = cumsum(contribution),
+      cumstart = cumend - contribution,
+      direction = case_when(
+        contribution > 0 ~ "Positive",
+        contribution < 0 ~ "Negative",
+        TRUE             ~ "Zero"
+      )
+    )
+
+  # Implied running probability at each step
+  df_yr$prob_running <- plogis(df_yr$cumend)
+  # Total probability (annotate on last bar)
+  total_prob <- plogis(sum(df_yr$contribution))
+
+  # Add Total bar
+  total_row <- tibble(
+    term_group    = factor("Total", levels = group_order),
+    contribution  = sum(df_yr$contribution),
+    cumend        = sum(df_yr$contribution),
+    cumstart      = 0,
+    direction     = "Total",
+    prob_running  = total_prob
+  )
+  df_wf <- bind_rows(df_yr, total_row)
+  df_wf$x_label <- factor(
+    c(as.character(df_yr$term_group), "Total"),
+    levels = c(as.character(df_yr$term_group), "Total")
+  )
+
+  # Connector segments (link end of bar i to start of bar i+1)
+  n <- nrow(df_wf) - 1  # exclude Total
+  conn_df <- df_wf[seq_len(n), ] %>%
+    mutate(
+      x_from = as.numeric(x_label) + 0.42,
+      x_to   = as.numeric(x_label) + 0.58,
+      y_val  = cumend
+    )
+
+  fill_vals <- c(
+    "Positive" = col_good,
+    "Negative" = col_bad,
+    "Zero"     = "grey80",
+    "Total"    = col_sector
+  )
+
+  ggplot(df_wf) +
+    geom_rect(aes(
+      xmin  = as.numeric(x_label) - 0.42,
+      xmax  = as.numeric(x_label) + 0.42,
+      ymin  = cumstart, ymax = cumend,
+      fill  = direction
+    )) +
+    geom_segment(
+      data = conn_df,
+      aes(x = x_from, xend = x_to, y = y_val, yend = y_val),
+      color = "grey50", linetype = "dashed", linewidth = 0.6
+    ) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_text(aes(
+      x = as.numeric(x_label),
+      y = pmax(cumend, cumstart) + (max(abs(df_wf$cumend), abs(df_wf$cumstart)) * 0.04),
+      label = sprintf("%.1f%%", prob_running * 100)
+    ), size = 3.3, color = "grey25", fontface = "bold") +
+    scale_x_continuous(
+      breaks = seq_len(nrow(df_wf)),
+      labels = levels(df_wf$x_label)
+    ) +
+    scale_fill_manual(values = fill_vals, name = "Direction") +
+    labs(
+      title    = sprintf("%s — %s Sector Waterfall (%d)", country_name, sector_name, year_val),
+      subtitle = sprintf(
+        "Running log-odds as each term is added; percentage = Pr(Adoption) at that stage | Final: %.1f%%",
+        total_prob * 100
+      ),
+      x = NULL, y = "Cumulative log-odds"
+    ) +
+    theme_report() +
+    theme(axis.text.x = element_text(angle = 30, hjust = 1, size = 12))
+}
+```
+
+```{r bulk-waterfalls, echo=FALSE, results='asis', fig.height=6, fig.width=11}
+if (!is.null(contrib_bulk_grp)) {
+  avail_years <- sort(unique(contrib_bulk_grp$year))
+  wf_years    <- intersect(waterfall_years, avail_years)
+
+  for (yr in wf_years) {
+    cat(sprintf("\n### %d\n\n", yr))
+    p <- make_waterfall(contrib_bulk_grp, yr, "Bulk", col_bulk)
+    print(p)
+    ggsave(
+      file.path(plotOutputDir, sprintf("bulk_waterfall_%d.png", yr)),
+      p, width = 11, height = 6, dpi = 300
+    )
+    cat("\n\n")
+  }
+}
+```
+
+## Contribution Heatmap
+
+Heatmap of individual term contributions (log-odds scale). Rows = model terms; columns = years. Red = strong negative contribution; blue = strong positive contribution.
+
+```{r bulk-heatmap, echo=FALSE, fig.height=7, fig.width=13}
+if (!is.null(contrib_bulk_long)) {
+  hm_df <- contrib_bulk_long %>%
+    filter(!term_group %in% c("Region Fixed Effects")) %>%
+    mutate(term_label = factor(term_label))
+
+  max_abs <- max(abs(hm_df$contribution), na.rm = TRUE)
+
+  p <- ggplot(hm_df, aes(x = year, y = term_label, fill = contribution)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    geom_text(aes(
+      label = sprintf("%.2f", contribution),
+      color = abs(contribution) > max_abs * 0.5
+    ), size = 2.8) +
+    scale_fill_gradient2(
+      low      = "#e74c3c",
+      mid      = "white",
+      high     = "#2C7BB6",
+      midpoint = 0,
+      limits   = c(-max_abs, max_abs),
+      labels   = function(x) sprintf("%.2f", x),
+      name     = "Log-odds\ncontribution"
+    ) +
+    scale_color_manual(values = c("FALSE" = "grey25", "TRUE" = "white"), guide = "none") +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Term Contribution Heatmap"),
+      subtitle = "Cell value = β × x(t). Blue = pro-adoption; Red = anti-adoption. FE terms excluded for clarity.",
+      x = "Year", y = NULL
+    ) +
+    theme_report() +
+    theme(
+      axis.text.y  = element_text(size = 11),
+      panel.grid   = element_blank()
+    )
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "bulk_heatmap.png"), p, width = 13, height = 7, dpi = 300)
+}
+```
+
+## Scenario Projection
+
+```{r bulk-scenario, echo=FALSE, fig.height=6, fig.width=13}
+if (!is.null(scen_bulk_wide) && nrow(scen_bulk_wide) > 0) {
+  # combine historical + scenario
+  hist_traj <- contrib_bulk_wide %>% select(year, prob, adoption) %>% distinct() %>%
+    mutate(period = "Historical")
+  scen_traj <- scen_bulk_wide %>% select(year, prob) %>% distinct() %>%
+    mutate(adoption = NA_integer_, period = "Scenario")
+  all_traj <- bind_rows(hist_traj, scen_traj)
+
+  p <- ggplot(all_traj, aes(x = year, y = prob, linetype = period)) +
+    geom_vline(xintercept = max(hist_traj$year), linetype = "dotted", color = "grey50") +
+    geom_line(color = col_bulk, linewidth = 1.3) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed", color = "grey40") +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    scale_linetype_manual(values = c("Historical" = "solid", "Scenario" = "longdash"), name = NULL) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Historical + Scenario Probability"),
+      subtitle = "Dotted vertical = historical boundary; dashed horizontal = adoption threshold",
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p)
+} else {
+  cat("> Scenario data not available or country not in scenario panel.")
+}
+```
+
+## Data Table
+
+Full per-year, per-group contribution table for the Bulk sector.
+
+```{r bulk-table, echo=FALSE}
+if (!is.null(contrib_bulk_grp)) {
+  tbl <- contrib_bulk_grp %>%
+    select(year, term_group, contribution, prob, adoption) %>%
+    pivot_wider(names_from = term_group, values_from = contribution) %>%
+    arrange(year) %>%
+    mutate(
+      `Pr(Adoption)` = sprintf("%.1f%%", prob * 100),
+      Adopted        = ifelse(adoption == 1, "Yes", "No")
+    ) %>%
+    select(-prob, -adoption)
+
+  term_cols_tbl <- setdiff(colnames(tbl), c("year", "Pr(Adoption)", "Adopted"))
+
+  kable(tbl, digits = 3, format = "html",
+    caption = paste0(country_name, " — Bulk Adoption: Term Contributions (Log-odds)")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = TRUE, font_size = 12) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(ncol(tbl), bold = TRUE,
+      color = ifelse(tbl$Adopted == "Yes", col_good, col_bad))
+}
+```
+
+---
+
+# Diffuse Sector {.tabset}
+
+```{r diffuse-check, echo=FALSE, results='asis'}
+if (is.null(contrib_diffuse_grp)) {
+  cat(sprintf(
+    '<div class="callout" style="border-color:%s;background:#fef9e7;"><strong>%s not found in Diffuse panel data.</strong></div>',
+    col_warn, country_name
+  ))
+}
+```
+
+## Log-odds Contributions
+
+```{r diffuse-stacked-bar, echo=FALSE, fig.height=6, fig.width=12}
+if (!is.null(contrib_diffuse_grp)) {
+  df_pos <- add_stack_pos(contrib_diffuse_grp)
+
+  p <- ggplot(df_pos, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.45, xmax = year + 0.45,
+      ymin = ymin, ymax = ymax
+    )) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_line(
+      data = contrib_diffuse_grp %>% distinct(year, eta),
+      aes(x = year, y = eta, fill = NULL),
+      color = "#2C3E50", linewidth = 0.9, linetype = "dashed"
+    ) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Diffuse Sector: Log-odds Contributions by Term Group"),
+      subtitle = "Stacked bars = β × x(t) per group; dashed line = total linear predictor η",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "diffuse_stacked_bar.png"), p, width = 12, height = 6, dpi = 300)
+}
+```
+
+## Stacked Area
+
+```{r diffuse-area-chart, echo=FALSE, fig.height=6, fig.width=12}
+if (!is.null(contrib_diffuse_grp)) {
+  df_area <- add_stack_pos(contrib_diffuse_grp)
+
+  p <- ggplot(df_area, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.42, xmax = year + 0.42,
+      ymin = ymin, ymax = ymax
+    ), alpha = 0.85) +
+    geom_smooth(
+      data = contrib_diffuse_grp %>% distinct(year, eta),
+      aes(x = year, y = eta, fill = NULL),
+      color = "#2C3E50", linewidth = 1.0, method = "loess", se = FALSE
+    ) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Diffuse Sector: Term Contribution Area Chart"),
+      subtitle = "Each band = group contribution; smooth curve = LOESS trend of η",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "diffuse_area_chart.png"), p, width = 12, height = 6, dpi = 300)
+}
+```
+
+## Probability Trajectory
+
+```{r diffuse-prob-line, echo=FALSE, fig.height=5, fig.width=12}
+if (!is.null(contrib_diffuse_wide)) {
+  df_traj <- contrib_diffuse_wide %>% select(year, prob, adoption) %>% distinct()
+
+  p <- ggplot(df_traj, aes(x = year)) +
+    geom_step(aes(y = adoption, color = "Actual adoption (0/1)"),
+              linewidth = 0.8, alpha = 0.55, direction = "hv") +
+    geom_line(aes(y = prob, color = "Model Pr(Adoption)"), linewidth = 1.4) +
+    geom_point(aes(y = prob, color = "Model Pr(Adoption)"), size = 2.5) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+               color = "grey50", linewidth = 0.7) +
+    scale_color_manual(
+      values = c("Actual adoption (0/1)" = "grey55", "Model Pr(Adoption)" = col_diffuse),
+      name = NULL
+    ) +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Diffuse Sector: Adoption Probability Trajectory"),
+      subtitle = paste0("Solid = model predicted probability; step = actual adoption status; dashed = threshold ", adoption_threshold),
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "diffuse_prob_trajectory.png"), p, width = 12, height = 5, dpi = 300)
+}
+```
+
+## Year-over-Year Changes
+
+```{r diffuse-yoy-bar, echo=FALSE, fig.height=6, fig.width=12}
+if (!is.null(yoy_diffuse) && nrow(yoy_diffuse) > 0) {
+  df_yoy <- add_stack_pos(
+    yoy_diffuse %>% select(-contribution) %>% rename(contribution = delta),
+    fill_col = "term_group"
+  )
+
+  df_total_delta <- yoy_diffuse %>%
+    group_by(year) %>%
+    summarise(total_delta = sum(delta), .groups = "drop")
+
+  p <- ggplot(df_yoy, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.45, xmax = year + 0.45,
+      ymin = ymin, ymax = ymax
+    )) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_line(data = df_total_delta, aes(x = year, y = total_delta, fill = NULL),
+              color = "#2C3E50", linewidth = 1.0, linetype = "dashed") +
+    geom_point(data = df_total_delta, aes(x = year, y = total_delta, fill = NULL),
+               color = "#2C3E50", size = 2.0) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = seq(2001, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Diffuse Sector: Year-over-Year Change in Log-odds Contributions"),
+      subtitle = "Bars = Δ(β × x) per group from previous year; dashed line = total Δη",
+      x = "Year", y = "Δ Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "diffuse_yoy_change.png"), p, width = 12, height = 6, dpi = 300)
+}
+```
+
+### YoY Lollipop — Individual Terms
+
+```{r diffuse-yoy-lollipop, echo=FALSE, fig.height=7, fig.width=13}
+if (!is.null(contrib_diffuse_long)) {
+  yoy_individual <- contrib_diffuse_long %>%
+    arrange(year) %>%
+    group_by(term_raw, term_label, term_group) %>%
+    mutate(delta = contribution - lag(contribution, 1)) %>%
+    ungroup() %>%
+    filter(!is.na(delta), abs(delta) > 1e-8)
+
+  if (nrow(yoy_individual) > 0) {
+    p <- ggplot(yoy_individual, aes(x = year, y = delta, color = term_group)) +
+      geom_hline(yintercept = 0, color = "grey60", linewidth = 0.5) +
+      geom_segment(aes(xend = year, yend = 0), linewidth = 0.8, alpha = 0.7) +
+      geom_point(size = 2.5) +
+      facet_wrap(~term_label, scales = "free_y", ncol = 3) +
+      scale_color_manual(values = col_group_ext, name = "Term Group") +
+      scale_x_continuous(breaks = seq(2001, 2022, 4)) +
+      labs(
+        title    = paste0(country_name, " — Diffuse Sector: YoY Change per Individual Term"),
+        subtitle = "Each panel shows the annual change in β × x for one model term",
+        x = "Year", y = "Δ Log-odds contribution"
+      ) +
+      theme_report() +
+      theme(legend.position = "bottom")
+
+    print(p)
+    ggsave(file.path(plotOutputDir, "diffuse_yoy_lollipop.png"), p, width = 13, height = 7, dpi = 300)
+  }
+}
+```
+
+## Waterfall Analysis {.tabset}
+
+```{r diffuse-waterfalls, echo=FALSE, results='asis', fig.height=6, fig.width=11}
+if (!is.null(contrib_diffuse_grp)) {
+  avail_years <- sort(unique(contrib_diffuse_grp$year))
+  wf_years    <- intersect(waterfall_years, avail_years)
+
+  for (yr in wf_years) {
+    cat(sprintf("\n### %d\n\n", yr))
+    p <- make_waterfall(contrib_diffuse_grp, yr, "Diffuse", col_diffuse)
+    print(p)
+    ggsave(
+      file.path(plotOutputDir, sprintf("diffuse_waterfall_%d.png", yr)),
+      p, width = 11, height = 6, dpi = 300
+    )
+    cat("\n\n")
+  }
+}
+```
+
+## Contribution Heatmap
+
+```{r diffuse-heatmap, echo=FALSE, fig.height=7, fig.width=13}
+if (!is.null(contrib_diffuse_long)) {
+  hm_df <- contrib_diffuse_long %>%
+    filter(!term_group %in% c("Region Fixed Effects")) %>%
+    mutate(term_label = factor(term_label))
+
+  max_abs <- max(abs(hm_df$contribution), na.rm = TRUE)
+
+  p <- ggplot(hm_df, aes(x = year, y = term_label, fill = contribution)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    geom_text(aes(
+      label = sprintf("%.2f", contribution),
+      color = abs(contribution) > max_abs * 0.5
+    ), size = 2.8) +
+    scale_fill_gradient2(
+      low = "#e74c3c", mid = "white", high = "#2C7BB6",
+      midpoint = 0, limits = c(-max_abs, max_abs),
+      labels = function(x) sprintf("%.2f", x),
+      name = "Log-odds\ncontribution"
+    ) +
+    scale_color_manual(values = c("FALSE" = "grey25", "TRUE" = "white"), guide = "none") +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Diffuse Sector: Term Contribution Heatmap"),
+      subtitle = "Cell value = β × x(t). Blue = pro-adoption; Red = anti-adoption. FE terms excluded.",
+      x = "Year", y = NULL
+    ) +
+    theme_report() +
+    theme(axis.text.y = element_text(size = 11), panel.grid = element_blank())
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "diffuse_heatmap.png"), p, width = 13, height = 7, dpi = 300)
+}
+```
+
+## Data Table
+
+```{r diffuse-table, echo=FALSE}
+if (!is.null(contrib_diffuse_grp)) {
+  tbl <- contrib_diffuse_grp %>%
+    select(year, term_group, contribution, prob, adoption) %>%
+    pivot_wider(names_from = term_group, values_from = contribution) %>%
+    arrange(year) %>%
+    mutate(
+      `Pr(Adoption)` = sprintf("%.1f%%", prob * 100),
+      Adopted        = ifelse(adoption == 1, "Yes", "No")
+    ) %>%
+    select(-prob, -adoption)
+
+  kable(tbl, digits = 3, format = "html",
+    caption = paste0(country_name, " — Diffuse Adoption: Term Contributions (Log-odds)")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = TRUE, font_size = 12) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(ncol(tbl), bold = TRUE,
+      color = ifelse(tbl$Adopted == "Yes", col_good, col_bad))
+}
+```
+
+---
+
+# Cross-sector Comparison
+
+Side-by-side comparison of Bulk and Diffuse adoption probability trajectories and term contributions.
+
+```{r cross-sector-prob, echo=FALSE, fig.height=5, fig.width=13}
+if (!is.null(contrib_bulk_wide) && !is.null(contrib_diffuse_wide)) {
+  df_comp <- bind_rows(
+    contrib_bulk_wide    %>% select(year, prob, adoption) %>% distinct() %>% mutate(sector = "Bulk"),
+    contrib_diffuse_wide %>% select(year, prob, adoption) %>% distinct() %>% mutate(sector = "Diffuse")
+  )
+
+  p <- ggplot(df_comp, aes(x = year, y = prob, color = sector)) +
+    geom_step(aes(y = adoption, alpha = I(0.45)), linewidth = 0.7, direction = "hv") +
+    geom_line(linewidth = 1.4) +
+    geom_point(size = 2.2) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed", color = "grey50") +
+    scale_color_manual(values = c(Bulk = col_bulk, Diffuse = col_diffuse), name = "Sector") +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk vs Diffuse: Adoption Probability"),
+      subtitle = "Solid = model probability; step = actual adoption; dashed = threshold",
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "cross_sector_probability.png"), p, width = 13, height = 5, dpi = 300)
+}
+```
+
+```{r cross-sector-contributions, echo=FALSE, fig.height=7, fig.width=13}
+if (!is.null(contrib_bulk_grp) && !is.null(contrib_diffuse_grp)) {
+  df_both <- bind_rows(
+    contrib_bulk_grp    %>% mutate(sector = "Bulk"),
+    contrib_diffuse_grp %>% mutate(sector = "Diffuse")
+  )
+
+  # Compute stacking positions within each sector separately
+  df_both_pos <- df_both %>%
+    group_by(sector) %>%
+    group_modify(~ add_stack_pos(.x)) %>%
+    ungroup()
+
+  p <- ggplot(df_both_pos, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.45, xmax = year + 0.45,
+      ymin = ymin, ymax = ymax
+    )) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    facet_wrap(~sector, ncol = 1) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = seq(2000, 2022, 2)) +
+    labs(
+      title    = paste0(country_name, " — Bulk vs Diffuse: Log-odds Contribution Comparison"),
+      subtitle = "Both sectors use the same model spec; faceted for direct comparison",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "cross_sector_contributions.png"), p, width = 13, height = 7, dpi = 300)
+}
+```
+
+---
+
+# Future Projections {.tabset}
+
+```{r scen-gate, echo=FALSE, results='asis'}
+if (!has_scenario || (is.null(scen_bulk_grp) && is.null(scen_diffuse_grp))) {
+  cat(sprintf(
+    '<div class="callout" style="border-color:%s;background:#fef9e7;"><strong>&#9888; Scenario data not available.</strong> Re-render with a valid <code>gdxPath</code> to enable future projections.</div>\n',
+    col_warn
+  ))
+}
+```
+
+```{r scen-helpers, include=FALSE}
+# ── Helper: combined timeline stacked bar ────────────────────────────────────
+plot_combined_stacked <- function(combined_grp, sector_name, col_sector, boundary) {
+  if (is.null(combined_grp) || nrow(combined_grp) == 0) return(NULL)
+  df <- add_stack_pos(combined_grp)
+
+  ggplot(df, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - 0.45, xmax = year + 0.45,
+      ymin = ymin, ymax = ymax,
+      alpha = period
+    )) +
+    geom_vline(xintercept = boundary + 0.5, linetype = "dotted",
+               color = "grey40", linewidth = 0.8) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    geom_line(
+      data = combined_grp %>% distinct(year, eta, period),
+      aes(x = year, y = eta, fill = NULL, linetype = period),
+      color = "#2C3E50", linewidth = 0.9
+    ) +
+    annotate("text", x = boundary + 1, y = Inf,
+             label = "Scenario →", hjust = 0, vjust = 1.5,
+             color = "grey40", size = 3.5) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_alpha_manual(values = c("Historical" = 1, "Scenario" = 0.75), guide = "none") +
+    scale_linetype_manual(values = c("Historical" = "solid", "Scenario" = "longdash"),
+                          name = "Period") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name, ": Full Timeline Log-odds Contributions"),
+      subtitle = paste0("Bars = β×x(t) by group; dotted line = historical/scenario boundary (",
+                        boundary, ")"),
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+}
+
+# ── Helper: combined probability trajectory ───────────────────────────────────
+plot_combined_prob <- function(hist_wide, scen_wide, sector_name, col_sector,
+                                boundary, threshold) {
+  if (is.null(hist_wide) && is.null(scen_wide)) return(NULL)
+  all_traj <- bind_rows(
+    if (!is.null(hist_wide))
+      hist_wide %>% select(year, prob, adoption) %>% distinct() %>% mutate(period = "Historical"),
+    if (!is.null(scen_wide))
+      scen_wide %>% select(year, prob) %>% distinct() %>%
+        mutate(adoption = NA_integer_, period = "Scenario")
+  )
+
+  ggplot(all_traj, aes(x = year)) +
+    geom_step(data = all_traj %>% filter(period == "Historical"),
+              aes(y = adoption, color = "Actual adoption (0/1)"),
+              linewidth = 0.7, alpha = 0.5, direction = "hv") +
+    geom_vline(xintercept = boundary + 0.5, linetype = "dotted",
+               color = "grey40", linewidth = 0.8) +
+    geom_line(aes(y = prob, color = "Model Pr(Adoption)", linetype = period),
+              linewidth = 1.4) +
+    geom_point(data = all_traj %>% filter(period == "Scenario"),
+               aes(y = prob, color = "Model Pr(Adoption)"), size = 2, alpha = 0.8) +
+    geom_hline(yintercept = threshold, linetype = "dashed",
+               color = "grey50", linewidth = 0.7) +
+    annotate("text", x = min(all_traj$year, na.rm = TRUE) + 0.3,
+             y = threshold + 0.03, hjust = 0, color = "grey40", size = 3.2,
+             label = paste0("Threshold: ", threshold)) +
+    scale_color_manual(
+      values = c("Actual adoption (0/1)" = "grey55", "Model Pr(Adoption)" = col_sector),
+      name = NULL
+    ) +
+    scale_linetype_manual(values = c("Historical" = "solid", "Scenario" = "longdash"),
+                          name = NULL) +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name, ": Full Probability Trajectory"),
+      subtitle = "Solid = historical in-sample fit; dashed = scenario projection; dotted = period boundary",
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+}
+
+# ── Helper: future-only stacked bar ──────────────────────────────────────────
+plot_scen_stacked <- function(scen_grp, sector_name, timestep) {
+  if (is.null(scen_grp) || nrow(scen_grp) == 0) return(NULL)
+  df <- add_stack_pos(scen_grp)
+
+  ggplot(df, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - timestep * 0.45,
+      xmax = year + timestep * 0.45,
+      ymin = ymin, ymax = ymax
+    ), alpha = 0.85) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    geom_line(
+      data = scen_grp %>% distinct(year, eta),
+      aes(x = year, y = eta, fill = NULL),
+      color = "#2C3E50", linewidth = 0.9, linetype = "dashed"
+    ) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name, ": Scenario Log-odds Contributions"),
+      subtitle = paste0("Stacked bars = β×x(t) per group; dashed = total η; ",
+                        timestep, "-year timesteps"),
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+}
+
+# ── Helper: period-to-period change bar ──────────────────────────────────────
+plot_scen_yoy <- function(yoy_scen, sector_name, timestep) {
+  if (is.null(yoy_scen) || nrow(yoy_scen) == 0) return(NULL)
+
+  df_yoy <- add_stack_pos(
+    yoy_scen %>% select(-contribution) %>% rename(contribution = delta),
+    fill_col = "term_group"
+  ) %>% mutate(term_group = factor(term_group, levels = group_order))
+
+  df_total <- yoy_scen %>%
+    group_by(year) %>%
+    summarise(total_delta = sum(delta), .groups = "drop")
+
+  ggplot(df_yoy, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - timestep * 0.45,
+      xmax = year + timestep * 0.45,
+      ymin = ymin, ymax = ymax
+    )) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    geom_line(data = df_total, aes(x = year, y = total_delta, fill = NULL),
+              color = "#2C3E50", linewidth = 1.0, linetype = "dashed") +
+    geom_point(data = df_total, aes(x = year, y = total_delta, fill = NULL),
+               color = "#2C3E50", size = 2.0) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Period-to-Period Change in Log-odds Contributions"),
+      subtitle = paste0("Bars = Δ(β×x) per group vs prior timestep; dashed = total Δη; ",
+                        timestep, "-year steps"),
+      x = "Year", y = paste0("Δ Log-odds (per ", timestep, "-year step)")
+    ) +
+    theme_report()
+}
+
+# ── Helper: period-to-period lollipop (individual terms) ─────────────────────
+plot_scen_lollipop <- function(scen_long, sector_name) {
+  if (is.null(scen_long)) return(NULL)
+  yoy_ind <- scen_long %>%
+    arrange(year) %>%
+    group_by(term_raw, term_label, term_group) %>%
+    mutate(delta = contribution - lag(contribution, 1)) %>%
+    ungroup() %>%
+    filter(!is.na(delta), abs(delta) > 1e-8)
+  if (nrow(yoy_ind) == 0) return(NULL)
+
+  ggplot(yoy_ind, aes(x = year, y = delta, color = term_group)) +
+    geom_hline(yintercept = 0, color = "grey60", linewidth = 0.4) +
+    geom_segment(aes(xend = year, yend = 0), linewidth = 0.8, alpha = 0.7) +
+    geom_point(size = 2.5) +
+    facet_wrap(~term_label, scales = "free_y", ncol = 3) +
+    scale_color_manual(values = col_group_ext, name = "Term Group") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name, ": Period-to-Period Change per Term (Scenario)"),
+      subtitle = "Each panel = annual change in β×x for one model term",
+      x = "Year", y = "Δ Log-odds contribution"
+    ) +
+    theme_report() +
+    theme(legend.position = "bottom")
+}
+
+# ── Helper: Historical vs Scenario side-by-side stacked bars (overlap years) ──
+plot_overlap_stack <- function(hist_grp, scen_grp, overlap_yrs, sector_name, col_sector) {
+  if (length(overlap_yrs) == 0 || is.null(hist_grp) || is.null(scen_grp)) return(NULL)
+  hw <- 0.35  # half-width of each bar group
+
+  df_h <- hist_grp %>% filter(year %in% overlap_yrs) %>% mutate(period = "Historical")
+  df_s <- scen_grp %>% filter(year %in% overlap_yrs) %>% mutate(period = "Scenario")
+  if (nrow(df_h) == 0 || nrow(df_s) == 0) return(NULL)
+
+  pos_one <- function(df) {
+    df %>%
+      group_by(year) %>%
+      arrange(year, match(as.character(term_group), group_order)) %>%
+      mutate(
+        cum_pos = { p <- pmax(0, contribution); cumsum(p) - p },
+        cum_neg = { n <- pmin(0, contribution); cumsum(n) - n },
+        ymin    = ifelse(contribution >= 0, cum_pos, cum_neg + contribution),
+        ymax    = ifelse(contribution >= 0, cum_pos + contribution, cum_neg)
+      ) %>%
+      ungroup()
+  }
+
+  df_h_pos <- pos_one(df_h) %>% mutate(x_lo = year - hw * 2, x_hi = year - hw * 0.05)
+  df_s_pos <- pos_one(df_s) %>% mutate(x_lo = year + hw * 0.05, x_hi = year + hw * 2)
+  df_all   <- bind_rows(df_h_pos, df_s_pos)
+
+  eta_pts <- bind_rows(
+    df_h %>% distinct(year, eta) %>% mutate(x = year - hw, period = "Historical"),
+    df_s %>% distinct(year, eta) %>% mutate(x = year + hw, period = "Scenario")
+  )
+
+  ggplot(df_all, aes(fill = term_group)) +
+    geom_rect(aes(xmin = x_lo, xmax = x_hi, ymin = ymin, ymax = ymax,
+                  alpha = period)) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    geom_point(data = eta_pts, aes(x = x, y = eta, fill = NULL, shape = period),
+               color = "#2C3E50", size = 3, alpha = 0.9, inherit.aes = FALSE) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_alpha_manual(values = c("Historical" = 1, "Scenario" = 0.72), name = "Period") +
+    scale_shape_manual(values = c("Historical" = 19, "Scenario" = 17), name = "Total η") +
+    scale_x_continuous(breaks = overlap_yrs) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Historical vs Scenario (Overlapping Years)"),
+      subtitle = "Left bar = Historical observed; right bar = Scenario projection. Dot = total log-odds η.",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+}
+
+# ── Helper: Scenario − Historical difference bars (overlap years) ────────────────
+plot_overlap_delta <- function(hist_grp, scen_grp, overlap_yrs, sector_name) {
+  if (length(overlap_yrs) == 0 || is.null(hist_grp) || is.null(scen_grp)) return(NULL)
+
+  df_h <- hist_grp %>% filter(year %in% overlap_yrs) %>%
+    select(year, term_group, contribution) %>% rename(hist = contribution)
+  df_s <- scen_grp %>% filter(year %in% overlap_yrs) %>%
+    select(year, term_group, contribution) %>% rename(scen = contribution)
+
+  df_delta <- inner_join(df_h, df_s, by = c("year", "term_group")) %>%
+    mutate(contribution = scen - hist,
+           term_group   = factor(term_group, levels = group_order))
+  if (nrow(df_delta) == 0) return(NULL)
+
+  df_pos <- add_stack_pos(df_delta)
+
+  total_delta <- df_delta %>%
+    group_by(year) %>% summarise(total = sum(contribution), .groups = "drop")
+
+  ggplot(df_pos, aes(fill = term_group)) +
+    geom_rect(aes(xmin = year - 0.4, xmax = year + 0.4, ymin = ymin, ymax = ymax),
+              alpha = 0.85) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_point(data = total_delta, aes(x = year, y = total, fill = NULL),
+               color = "#2C3E50", size = 3.5, shape = 18, inherit.aes = FALSE) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_x_continuous(breaks = overlap_yrs) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Scenario − Historical Divergence (Overlapping Years)"),
+      subtitle = "Bars = Scenario − Historical log-odds contribution per group. Diamond = total Δη.",
+      x = "Year", y = "Δ Log-odds (Scenario − Historical)"
+    ) +
+    theme_report()
+}
+
+# ── Helper: scenario heatmap ─────────────────────────────────────────────────
+plot_scen_heatmap <- function(scen_long, sector_name) {
+  if (is.null(scen_long)) return(NULL)
+  hm_df <- scen_long %>%
+    filter(!term_group %in% "Region Fixed Effects") %>%
+    mutate(term_label = factor(term_label))
+  if (nrow(hm_df) == 0) return(NULL)
+
+  max_abs <- max(abs(hm_df$contribution), na.rm = TRUE)
+
+  ggplot(hm_df, aes(x = year, y = term_label, fill = contribution)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    geom_text(aes(
+      label = sprintf("%.2f", contribution),
+      color = abs(contribution) > max_abs * 0.5
+    ), size = 2.5) +
+    scale_fill_gradient2(
+      low = "#e74c3c", mid = "white", high = "#2C7BB6",
+      midpoint = 0, limits = c(-max_abs, max_abs),
+      labels = function(x) sprintf("%.2f", x),
+      name = "Log-odds\ncontribution"
+    ) +
+    scale_color_manual(values = c("FALSE" = "grey25", "TRUE" = "white"), guide = "none") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name, ": Scenario Contribution Heatmap"),
+      subtitle = "Cell = β×x(t). Blue = pro-adoption; Red = anti-adoption. FE excluded.",
+      x = "Year", y = NULL
+    ) +
+    theme_report() +
+    theme(axis.text.y = element_text(size = 11), panel.grid = element_blank())
+}
+```
+
+## Full Timeline {.tabset}
+
+Combined historical in-sample fit (2000–`r hist_boundary_year`) and scenario projection, shown together on a single axis.
+
+### Probability — Bulk
+
+```{r full-timeline-prob-bulk, echo=FALSE, fig.height=5, fig.width=13}
+p <- plot_combined_prob(contrib_bulk_wide, scen_bulk_wide, "Bulk",
+                         col_bulk, hist_boundary_year, adoption_threshold)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "full_timeline_prob_bulk.png"), p, width = 13, height = 5, dpi = 300)
+} else cat("> Scenario data not available.")
+```
+
+### Probability — Diffuse
+
+```{r full-timeline-prob-diffuse, echo=FALSE, fig.height=5, fig.width=13}
+p <- plot_combined_prob(contrib_diffuse_wide, scen_diffuse_wide, "Diffuse",
+                         col_diffuse, hist_boundary_year, adoption_threshold)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "full_timeline_prob_diffuse.png"), p, width = 13, height = 5, dpi = 300)
+} else cat("> Scenario data not available.")
+```
+
+### Contributions — Bulk
+
+```{r full-timeline-contrib-bulk, echo=FALSE, fig.height=6, fig.width=14}
+if (!is.null(combined_bulk_grp)) {
+  p <- plot_combined_stacked(combined_bulk_grp, "Bulk", col_bulk, hist_boundary_year)
+  if (!is.null(p)) {
+    print(p)
+    ggsave(file.path(plotOutputDir, "full_timeline_contrib_bulk.png"), p, width = 14, height = 6, dpi = 300)
+  }
+} else cat("> No combined data available.")
+```
+
+### Contributions — Diffuse
+
+```{r full-timeline-contrib-diffuse, echo=FALSE, fig.height=6, fig.width=14}
+if (!is.null(combined_diffuse_grp)) {
+  p <- plot_combined_stacked(combined_diffuse_grp, "Diffuse", col_diffuse, hist_boundary_year)
+  if (!is.null(p)) {
+    print(p)
+    ggsave(file.path(plotOutputDir, "full_timeline_contrib_diffuse.png"), p, width = 14, height = 6, dpi = 300)
+  }
+} else cat("> No combined data available.")
+```
+
+---
+
+## Historical vs Scenario — Overlap {.tabset}
+
+Comparison for years present in **both** the historical panel and the scenario projection. Left bar = historical observed; right bar = scenario model output. The delta chart shows where each term group diverges between the two sources.
+
+```{r overlap-gate, echo=FALSE, results='asis'}
+has_overlap <- length(overlap_years_bulk) > 0 || length(overlap_years_diffuse) > 0
+if (!has_overlap) {
+  cat("> No years overlap between the historical data and the scenario projection.\n")
+}
+```
+
+### Bulk — Side-by-Side
+
+```{r overlap-bulk-stack, echo=FALSE, fig.height=6, fig.width=12}
+if (has_overlap && length(overlap_years_bulk) > 0) {
+  p <- plot_overlap_stack(contrib_bulk_grp, scen_bulk_grp,
+                          overlap_years_bulk, "Bulk", col_bulk)
+  if (!is.null(p)) {
+    print(p)
+    ggsave(file.path(plotOutputDir, "overlap_bulk_stack.png"), p, width = 12, height = 6, dpi = 300)
+  }
+} else cat("> No overlapping years for Bulk sector.")
+```
+
+### Bulk — Divergence
+
+```{r overlap-bulk-delta, echo=FALSE, fig.height=5, fig.width=12}
+if (has_overlap && length(overlap_years_bulk) > 0) {
+  p <- plot_overlap_delta(contrib_bulk_grp, scen_bulk_grp,
+                          overlap_years_bulk, "Bulk")
+  if (!is.null(p)) {
+    print(p)
+    ggsave(file.path(plotOutputDir, "overlap_bulk_delta.png"), p, width = 12, height = 5, dpi = 300)
+  }
+} else cat("> No overlapping years for Bulk sector.")
+```
+
+### Diffuse — Side-by-Side
+
+```{r overlap-diffuse-stack, echo=FALSE, fig.height=6, fig.width=12}
+if (has_overlap && length(overlap_years_diffuse) > 0) {
+  p <- plot_overlap_stack(contrib_diffuse_grp, scen_diffuse_grp,
+                          overlap_years_diffuse, "Diffuse", col_diffuse)
+  if (!is.null(p)) {
+    print(p)
+    ggsave(file.path(plotOutputDir, "overlap_diffuse_stack.png"), p, width = 12, height = 6, dpi = 300)
+  }
+} else cat("> No overlapping years for Diffuse sector.")
+```
+
+### Diffuse — Divergence
+
+```{r overlap-diffuse-delta, echo=FALSE, fig.height=5, fig.width=12}
+if (has_overlap && length(overlap_years_diffuse) > 0) {
+  p <- plot_overlap_delta(contrib_diffuse_grp, scen_diffuse_grp,
+                          overlap_years_diffuse, "Diffuse")
+  if (!is.null(p)) {
+    print(p)
+    ggsave(file.path(plotOutputDir, "overlap_diffuse_delta.png"), p, width = 12, height = 5, dpi = 300)
+  }
+} else cat("> No overlapping years for Diffuse sector.")
+```
+
+---
+
+## Bulk — Scenario {.tabset}
+
+```{r scen-bulk-check, echo=FALSE, results='asis'}
+if (is.null(scen_bulk_grp)) cat("> Bulk scenario data not available.")
+```
+
+### Log-odds Contributions
+
+```{r scen-bulk-stacked, echo=FALSE, fig.height=6, fig.width=13}
+p <- plot_scen_stacked(scen_bulk_plot, "Bulk", scen_timestep)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_bulk_stacked_bar.png"), p, width = 13, height = 6, dpi = 300)
+}
+```
+
+### Probability Trajectory
+
+```{r scen-bulk-prob, echo=FALSE, fig.height=5, fig.width=13}
+if (!is.null(scen_bulk_wide)) {
+  df_traj <- scen_bulk_wide %>% filter(!year %in% hist_years) %>%
+    select(year, prob) %>% distinct()
+
+  p <- ggplot(df_traj, aes(x = year, y = prob)) +
+    geom_line(color = col_bulk, linewidth = 1.4) +
+    geom_point(color = col_bulk, size = 2.5) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+               color = "grey50", linewidth = 0.7) +
+    annotate("text", x = min(df_traj$year) + 1, y = adoption_threshold + 0.03,
+             hjust = 0, color = "grey40", size = 3.2,
+             label = paste0("Threshold: ", adoption_threshold)) +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0(country_name, " — Bulk Sector: Scenario Probability Trajectory"),
+      subtitle = paste0("Model-projected Pr(Adoption); ", scen_timestep, "-year timesteps"),
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_bulk_prob_trajectory.png"), p, width = 13, height = 5, dpi = 300)
+} else cat("> Scenario data not available.")
+```
+
+### Period-to-Period Changes
+
+Year-over-period change in each group's log-odds contribution. Each bar shows how much a group's contribution shifted from the previous scenario timestep.
+
+```{r scen-bulk-yoy, echo=FALSE, fig.height=6, fig.width=13}
+p <- plot_scen_yoy(yoy_scen_bulk_plot, "Bulk", scen_timestep)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_bulk_yoy_change.png"), p, width = 13, height = 6, dpi = 300)
+} else cat("> No period-to-period data available.")
+```
+
+### YoY Lollipop — Individual Terms
+
+```{r scen-bulk-lollipop, echo=FALSE, fig.height=7, fig.width=13}
+p <- plot_scen_lollipop(scen_bulk_long_plot, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_bulk_yoy_lollipop.png"), p, width = 13, height = 7, dpi = 300)
+} else cat("> No data available.")
+```
+
+### Waterfall Analysis {.tabset}
+
+```{r scen-bulk-waterfalls, echo=FALSE, results='asis', fig.height=6, fig.width=11}
+if (!is.null(scen_bulk_plot)) {
+  avail <- sort(unique(scen_bulk_plot$year))
+  wf_yrs <- intersect(future_waterfall_years, avail)
+  if (length(wf_yrs) == 0) wf_yrs <- avail[seq(1, length(avail), length.out = min(5, length(avail)))]
+
+  for (yr in wf_yrs) {
+    cat(sprintf("\n#### %d\n\n", yr))
+    p <- make_waterfall(scen_bulk_plot, yr, "Bulk", col_bulk)
+    print(p)
+    ggsave(file.path(plotOutputDir, sprintf("scen_bulk_waterfall_%d.png", yr)),
+           p, width = 11, height = 6, dpi = 300)
+    cat("\n\n")
+  }
+} else cat("> Scenario data not available.")
+```
+
+### Contribution Heatmap
+
+```{r scen-bulk-heatmap, echo=FALSE, fig.height=7, fig.width=14}
+p <- plot_scen_heatmap(scen_bulk_long_plot, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_bulk_heatmap.png"), p, width = 14, height = 7, dpi = 300)
+} else cat("> Scenario data not available.")
+```
+
+### Data Table
+
+```{r scen-bulk-table, echo=FALSE}
+if (!is.null(scen_bulk_plot)) {
+  tbl <- scen_bulk_plot %>%
+    select(year, term_group, contribution, prob) %>%
+    pivot_wider(names_from = term_group, values_from = contribution) %>%
+    arrange(year) %>%
+    mutate(`Pr(Adoption)` = sprintf("%.1f%%", prob * 100)) %>%
+    select(-prob)
+
+  kable(tbl, digits = 3, format = "html",
+    caption = paste0(country_name, " — Bulk: Scenario Term Contributions (Log-odds)")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = TRUE, font_size = 12) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(ncol(tbl), bold = TRUE)
+}
+```
+
+---
+
+## Diffuse — Scenario {.tabset}
+
+```{r scen-diffuse-check, echo=FALSE, results='asis'}
+if (is.null(scen_diffuse_grp)) cat("> Diffuse scenario data not available.")
+```
+
+### Log-odds Contributions
+
+```{r scen-diffuse-stacked, echo=FALSE, fig.height=6, fig.width=13}
+p <- plot_scen_stacked(scen_diffuse_plot, "Diffuse", scen_timestep)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_diffuse_stacked_bar.png"), p, width = 13, height = 6, dpi = 300)
+}
+```
+
+### Probability Trajectory
+
+```{r scen-diffuse-prob, echo=FALSE, fig.height=5, fig.width=13}
+if (!is.null(scen_diffuse_wide)) {
+  df_traj <- scen_diffuse_wide %>% filter(!year %in% hist_years) %>%
+    select(year, prob) %>% distinct()
+
+  p <- ggplot(df_traj, aes(x = year, y = prob)) +
+    geom_line(color = col_diffuse, linewidth = 1.4) +
+    geom_point(color = col_diffuse, size = 2.5) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+               color = "grey50", linewidth = 0.7) +
+    annotate("text", x = min(df_traj$year) + 1, y = adoption_threshold + 0.03,
+             hjust = 0, color = "grey40", size = 3.2,
+             label = paste0("Threshold: ", adoption_threshold)) +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0(country_name, " — Diffuse Sector: Scenario Probability Trajectory"),
+      subtitle = paste0("Model-projected Pr(Adoption); ", scen_timestep, "-year timesteps"),
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_diffuse_prob_trajectory.png"), p, width = 13, height = 5, dpi = 300)
+} else cat("> Scenario data not available.")
+```
+
+### Period-to-Period Changes
+
+```{r scen-diffuse-yoy, echo=FALSE, fig.height=6, fig.width=13}
+p <- plot_scen_yoy(yoy_scen_diffuse_plot, "Diffuse", scen_timestep)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_diffuse_yoy_change.png"), p, width = 13, height = 6, dpi = 300)
+} else cat("> No period-to-period data available.")
+```
+
+### YoY Lollipop — Individual Terms
+
+```{r scen-diffuse-lollipop, echo=FALSE, fig.height=7, fig.width=13}
+p <- plot_scen_lollipop(scen_diffuse_long_plot, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_diffuse_yoy_lollipop.png"), p, width = 13, height = 7, dpi = 300)
+} else cat("> No data available.")
+```
+
+### Waterfall Analysis {.tabset}
+
+```{r scen-diffuse-waterfalls, echo=FALSE, results='asis', fig.height=6, fig.width=11}
+if (!is.null(scen_diffuse_plot)) {
+  avail <- sort(unique(scen_diffuse_plot$year))
+  wf_yrs <- intersect(future_waterfall_years, avail)
+  if (length(wf_yrs) == 0) wf_yrs <- avail[seq(1, length(avail), length.out = min(5, length(avail)))]
+
+  for (yr in wf_yrs) {
+    cat(sprintf("\n#### %d\n\n", yr))
+    p <- make_waterfall(scen_diffuse_plot, yr, "Diffuse", col_diffuse)
+    print(p)
+    ggsave(file.path(plotOutputDir, sprintf("scen_diffuse_waterfall_%d.png", yr)),
+           p, width = 11, height = 6, dpi = 300)
+    cat("\n\n")
+  }
+} else cat("> Scenario data not available.")
+```
+
+### Contribution Heatmap
+
+```{r scen-diffuse-heatmap, echo=FALSE, fig.height=7, fig.width=14}
+p <- plot_scen_heatmap(scen_diffuse_long_plot, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "scen_diffuse_heatmap.png"), p, width = 14, height = 7, dpi = 300)
+} else cat("> Scenario data not available.")
+```
+
+### Data Table
+
+```{r scen-diffuse-table, echo=FALSE}
+if (!is.null(scen_diffuse_plot)) {
+  tbl <- scen_diffuse_plot %>%
+    select(year, term_group, contribution, prob) %>%
+    pivot_wider(names_from = term_group, values_from = contribution) %>%
+    arrange(year) %>%
+    mutate(`Pr(Adoption)` = sprintf("%.1f%%", prob * 100)) %>%
+    select(-prob)
+
+  kable(tbl, digits = 3, format = "html",
+    caption = paste0(country_name, " — Diffuse: Scenario Term Contributions (Log-odds)")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                  full_width = TRUE, font_size = 12) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(ncol(tbl), bold = TRUE)
+}
+```
+
+---
+
+## Cross-sector — Scenario
+
+```{r scen-cross-sector, echo=FALSE, fig.height=7, fig.width=14}
+if (!is.null(scen_bulk_plot) && !is.null(scen_diffuse_plot)) {
+  df_both <- bind_rows(
+    scen_bulk_plot    %>% mutate(sector = "Bulk"),
+    scen_diffuse_plot %>% mutate(sector = "Diffuse")
+  )
+  df_both_pos <- df_both %>%
+    group_by(sector) %>%
+    group_modify(~ add_stack_pos(.x)) %>%
+    ungroup()
+
+  p_contrib <- ggplot(df_both_pos, aes(fill = term_group)) +
+    geom_rect(aes(
+      xmin = year - scen_timestep * 0.45,
+      xmax = year + scen_timestep * 0.45,
+      ymin = ymin, ymax = ymax
+    ), alpha = 0.85) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    facet_wrap(~sector, ncol = 1) +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    labs(
+      title    = paste0(country_name, " — Bulk vs Diffuse: Scenario Log-odds Contributions"),
+      subtitle = "Faceted comparison of term contributions across sectors",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+
+  df_prob <- bind_rows(
+    scen_bulk_wide    %>% filter(!year %in% hist_years) %>%
+      select(year, prob) %>% distinct() %>% mutate(sector = "Bulk"),
+    scen_diffuse_wide %>% filter(!year %in% hist_years) %>%
+      select(year, prob) %>% distinct() %>% mutate(sector = "Diffuse")
+  )
+  p_prob <- ggplot(df_prob, aes(x = year, y = prob, color = sector)) +
+    geom_line(linewidth = 1.3) +
+    geom_point(size = 2.0) +
+    geom_hline(yintercept = adoption_threshold, linetype = "dashed", color = "grey50") +
+    scale_color_manual(values = c(Bulk = col_bulk, Diffuse = col_diffuse), name = "Sector") +
+    scale_y_continuous(labels = percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0(country_name, " — Bulk vs Diffuse: Scenario Pr(Adoption)"),
+      subtitle = "Projected adoption probability by sector",
+      x = "Year", y = "Pr(Adoption)"
+    ) +
+    theme_report()
+
+  print(p_contrib / p_prob + plot_layout(heights = c(2, 1)))
+  ggsave(file.path(plotOutputDir, "scen_cross_sector.png"),
+         p_contrib / p_prob + plot_layout(heights = c(2, 1)),
+         width = 14, height = 10, dpi = 300)
+} else {
+  cat("> Scenario data not available for one or both sectors.")
+}
+```
+
+---
+
+```{r supp-helpers, include=FALSE}
+# ── 1. Marginal effects (probability scale) ───────────────────────────────────
+# Uses the linear approximation ΔP ≈ P(1−P) × β×x, which is additive and
+# therefore stack-able. The dashed line shows the actual Pr(Adoption).
+make_marginal_prob <- function(contrib_grp, sector_name) {
+  if (is.null(contrib_grp) || nrow(contrib_grp) == 0) return(NULL)
+  df <- contrib_grp %>%
+    mutate(contribution = prob * (1 - prob) * contribution,
+           term_group   = factor(term_group, levels = group_order))
+  df_pos <- add_stack_pos(df)
+  prob_line <- contrib_grp %>% distinct(year, prob)
+
+  ggplot(df_pos, aes(fill = term_group)) +
+    geom_rect(aes(xmin = year - 0.45, xmax = year + 0.45,
+                  ymin = ymin, ymax = ymax), alpha = 0.85) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.4) +
+    geom_line(data = prob_line, aes(x = year, y = prob, fill = NULL),
+              color = "#2C3E50", linewidth = 0.9, linetype = "dashed") +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    scale_y_continuous(labels = percent) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Marginal Contributions (Probability Scale)"),
+      subtitle = "Bars = P(1−P)·β×x per group (linear approximation). Dashed = Pr(Adoption).",
+      x = "Year", y = "ΔPr(Adoption) [linear approx.]"
+    ) +
+    theme_report()
+}
+
+# ── 2. Rank / bump chart ─────────────────────────────────────────────────────
+make_rank_chart <- function(contrib_grp, sector_name) {
+  if (is.null(contrib_grp) || nrow(contrib_grp) == 0) return(NULL)
+  df <- contrib_grp %>%
+    filter(!term_group %in% "Other", abs(contribution) > 1e-6) %>%
+    group_by(year) %>%
+    mutate(rank = rank(-abs(contribution), ties.method = "first")) %>%
+    ungroup()
+  if (nrow(df) == 0) return(NULL)
+
+  ggplot(df, aes(x = year, y = rank, color = term_group, group = term_group)) +
+    geom_line(linewidth = 1.3, alpha = 0.85) +
+    geom_point(aes(size = abs(contribution)), alpha = 0.9) +
+    scale_y_reverse(breaks = seq_len(max(df$rank))) +
+    scale_color_manual(values = col_group_ext, name = "Term Group") +
+    scale_size_continuous(range = c(1.5, 5), guide = "none") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Term Group Ranking Over Time"),
+      subtitle = "Rank 1 = largest absolute contribution. Point size = magnitude.",
+      x = "Year", y = "Rank (1 = dominant)"
+    ) +
+    theme_report()
+}
+
+# ── 3. Slope chart (first vs last historical year) ───────────────────────────
+make_slope_chart <- function(contrib_grp, sector_name) {
+  if (is.null(contrib_grp) || nrow(contrib_grp) == 0) return(NULL)
+  yr1 <- min(contrib_grp$year)
+  yr2 <- max(contrib_grp$year)
+  df  <- contrib_grp %>%
+    filter(year %in% c(yr1, yr2), !term_group %in% "Other") %>%
+    mutate(yr_lbl = factor(year, levels = c(yr1, yr2)))
+
+  left_lbl  <- df %>% filter(year == yr1)
+  right_lbl <- df %>% filter(year == yr2)
+
+  ggplot(df, aes(x = yr_lbl, y = contribution,
+                 group = term_group, color = term_group)) +
+    geom_hline(yintercept = 0, color = "grey80", linewidth = 0.5) +
+    geom_line(linewidth = 1.5, alpha = 0.85) +
+    geom_point(size = 4.5, alpha = 0.9) +
+    geom_text(data = left_lbl,
+              aes(label = term_group), hjust = 1.12, size = 3.1, fontface = "bold") +
+    geom_text(data = right_lbl,
+              aes(label = sprintf("%+.2f", contribution)), hjust = -0.12, size = 2.9) +
+    scale_color_manual(values = col_group_ext, guide = "none") +
+    scale_x_discrete(expand = expansion(mult = c(0.42, 0.28))) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Term Contributions: ", yr1, " → ", yr2),
+      subtitle = "Lines show which groups rose, fell, or held steady over the full historical period.",
+      x = "Year", y = "Log-odds contribution"
+    ) +
+    theme_report()
+}
+
+# ── 4. What-If counterfactual bars (latest year) ────────────────────────────
+# For each group, shows the exact ΔPr(Adoption) if that group's contribution
+# were zero: plogis(η) − plogis(η − β×x_group).
+make_whatif_chart <- function(contrib_grp, sector_name) {
+  if (is.null(contrib_grp) || nrow(contrib_grp) == 0) return(NULL)
+  yr <- max(contrib_grp$year)
+  df <- contrib_grp %>%
+    filter(year == yr, !term_group %in% "Other") %>%
+    mutate(delta_prob = plogis(eta) - plogis(eta - contribution)) %>%
+    arrange(desc(abs(delta_prob)))
+  if (nrow(df) == 0) return(NULL)
+
+  actual_p <- unique(df$prob)[1]
+
+  ggplot(df, aes(y = reorder(term_group, abs(delta_prob)),
+                 x = delta_prob, fill = term_group)) +
+    geom_col(alpha = 0.85) +
+    geom_vline(xintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_text(aes(label = sprintf("%+.1f pp", delta_prob * 100),
+                  hjust = ifelse(delta_prob >= 0, -0.1, 1.1)),
+              size = 3.2, color = "grey20") +
+    scale_fill_manual(values = col_group_ext, guide = "none") +
+    scale_x_continuous(labels = function(x) sprintf("%+.0f pp", x * 100),
+                       expand = expansion(mult = 0.2)) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": What-If Counterfactuals (", yr, ")"),
+      subtitle = sprintf(
+        "Bar = ΔPr(Adoption) if this group were zero. Actual Pr = %.1f%%.", actual_p * 100),
+      x = "ΔPr(Adoption) [percentage points]", y = NULL
+    ) +
+    theme_report()
+}
+
+# ── 5. Country vs world-average contributions ─────────────────────────────────
+# For each continuous predictor, computes β × (x_country − x̄_world) per year.
+# Excludes intercept and region FE (country-specific by definition).
+make_country_vs_avg <- function(fit, hist_df, contrib_grp, sector_name) {
+  if (is.null(contrib_grp) || is.null(hist_df) || is.null(fit)) return(NULL)
+  beta <- coef(fit$model)
+  cont_terms <- names(beta)[
+    names(beta) != "(Intercept)" &
+    !grepl("^regionFE", names(beta)) &
+    names(beta) %in% colnames(hist_df)
+  ]
+  if (length(cont_terms) == 0) return(NULL)
+
+  avg_by_year <- hist_df %>%
+    group_by(year) %>%
+    summarise(across(all_of(cont_terms), ~ mean(.x, na.rm = TRUE)),
+              .groups = "drop") %>%
+    pivot_longer(all_of(cont_terms), names_to = "term", values_to = "avg_x") %>%
+    mutate(avg_contrib = beta[term] * avg_x,
+           term_group  = classify_term(term)) %>%
+    group_by(year, term_group) %>%
+    summarise(avg_contrib = sum(avg_contrib, na.rm = TRUE), .groups = "drop")
+
+  df_dev <- contrib_grp %>%
+    filter(!term_group %in% c("Intercept", "Region Fixed Effects", "Other")) %>%
+    select(year, term_group, contribution) %>%
+    inner_join(avg_by_year, by = c("year", "term_group")) %>%
+    mutate(contribution = contribution - avg_contrib)
+  if (nrow(df_dev) == 0) return(NULL)
+
+  df_pos    <- add_stack_pos(df_dev)
+  total_dev <- df_dev %>%
+    group_by(year) %>% summarise(total = sum(contribution), .groups = "drop")
+
+  ggplot(df_pos, aes(fill = term_group)) +
+    geom_rect(aes(xmin = year - 0.45, xmax = year + 0.45,
+                  ymin = ymin, ymax = ymax), alpha = 0.85) +
+    geom_hline(yintercept = 0, color = "grey40", linewidth = 0.5) +
+    geom_line(data = total_dev, aes(x = year, y = total, fill = NULL),
+              color = "#2C3E50", linewidth = 0.9, linetype = "dashed") +
+    scale_fill_manual(values = col_group_ext, name = "Term Group") +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Country vs World-Average Contributions"),
+      subtitle = paste0(
+        "Bars = β×(x_", country_code,
+        " − x̄_world). Positive = above global average. Dashed = total deviation."),
+      x = "Year", y = "Δ Log-odds vs world average"
+    ) +
+    theme_report()
+}
+
+# ── 6. Radar (polar bar) for selected years ───────────────────────────────────
+make_radar_chart <- function(contrib_grp, sector_name, selected_years) {
+  if (is.null(contrib_grp) || nrow(contrib_grp) == 0) return(NULL)
+  avail <- sort(unique(contrib_grp$year))
+  radar_yrs <- intersect(selected_years, avail)
+  if (length(radar_yrs) == 0)
+    radar_yrs <- avail[round(seq(1, length(avail), length.out = min(6, length(avail))))]
+
+  df <- contrib_grp %>%
+    filter(year %in% radar_yrs, !term_group %in% "Other") %>%
+    mutate(year = factor(year, levels = sort(unique(year))))
+
+  ggplot(df, aes(x = term_group, y = contribution, fill = term_group)) +
+    geom_hline(yintercept = seq(
+      floor(min(df$contribution)), ceiling(max(df$contribution)), by = 5),
+      color = "grey88", linewidth = 0.3) +
+    geom_col(width = 0.85, alpha = 0.85, show.legend = FALSE) +
+    geom_hline(yintercept = 0, color = "grey50", linewidth = 0.5) +
+    coord_polar(theta = "x") +
+    facet_wrap(~year) +
+    scale_fill_manual(values = col_group_ext) +
+    labs(
+      title    = paste0(country_name, " — ", sector_name,
+                        ": Radar — Log-odds Contributions by Year"),
+      subtitle = "Each spoke = one term group. Length = log-odds contribution (inward = negative).",
+      x = NULL, y = NULL
+    ) +
+    theme_report() +
+    theme(
+      axis.text.x  = element_text(size = 7.5, face = "bold"),
+      axis.text.y  = element_blank(),
+      axis.ticks.y = element_blank(),
+      panel.grid   = element_blank()
+    )
+}
+```
+
+# Supplementary Analysis {.tabset}
+
+## Bulk {.tabset}
+
+### Marginal Effects
+
+Probability-scale contributions using the linear approximation $\Delta P \approx P(1-P) \cdot \beta x$. Unlike log-odds, these are in percentage-point units directly interpretable by stakeholders. Note that the bars are approximately additive (they sum to $P(1-P) \cdot \eta$, not exactly to $P$, but the approximation is close near $P = 0.5$).
+
+```{r supp-bulk-marginal, echo=FALSE, fig.height=6, fig.width=13}
+p <- make_marginal_prob(contrib_bulk_grp, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_bulk_marginal.png"), p, width = 13, height = 6, dpi = 300)
+} else cat("> Historical Bulk contributions not available.")
+```
+
+### Term Rankings
+
+Bump chart showing how each group's rank by absolute contribution shifts over time. Rank 1 = dominant driver. Crossing lines signal tipping points where one group overtakes another.
+
+```{r supp-bulk-rankings, echo=FALSE, fig.height=5, fig.width=13}
+p <- make_rank_chart(contrib_bulk_grp, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_bulk_rankings.png"), p, width = 13, height = 5, dpi = 300)
+} else cat("> Historical Bulk contributions not available.")
+```
+
+### Slope: First vs Last Year
+
+Connected dot chart comparing term contributions between the first and last historical years. Rising lines = growing driver; falling lines = declining influence.
+
+```{r supp-bulk-slope, echo=FALSE, fig.height=5, fig.width=9}
+p <- make_slope_chart(contrib_bulk_grp, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_bulk_slope.png"), p, width = 9, height = 5, dpi = 300)
+} else cat("> Historical Bulk contributions not available.")
+```
+
+### What-If Counterfactuals
+
+For the latest historical year, each bar shows the exact change in adoption probability if that group's log-odds contribution were set to zero. Answers: *"How much would adoption probability change if this driver did not exist?"*
+
+```{r supp-bulk-whatif, echo=FALSE, fig.height=5, fig.width=10}
+p <- make_whatif_chart(contrib_bulk_grp, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_bulk_whatif.png"), p, width = 10, height = 5, dpi = 300)
+} else cat("> Historical Bulk contributions not available.")
+```
+
+### Country vs World Average
+
+For each continuous driver, shows $\beta \times (x_{\text{country}} - \bar{x}_{\text{world}})$ — the excess contribution due to being above or below the cross-country average. A positive bar means the country benefits more from this driver than the average country; a negative bar means it is disadvantaged. Intercept and region fixed effects are excluded (by definition country-specific).
+
+```{r supp-bulk-avg, echo=FALSE, fig.height=6, fig.width=13}
+p <- make_country_vs_avg(fit_bulk, hist_bulk_df, contrib_bulk_grp, "Bulk")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_bulk_country_vs_avg.png"), p, width = 13, height = 6, dpi = 300)
+} else cat("> Could not compute world-average contributions.")
+```
+
+### Radar — Selected Years
+
+Polar bar chart showing the balance across driver groups for selected historical years (the waterfall years). Each spoke corresponds to one term group; spoke length = log-odds contribution (inward = negative contribution). Good for comparing the overall "shape" of a country's driver profile across time.
+
+```{r supp-bulk-radar, echo=FALSE, fig.height=7, fig.width=12}
+p <- make_radar_chart(contrib_bulk_grp, "Bulk", waterfall_years)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_bulk_radar.png"), p, width = 12, height = 7, dpi = 300)
+} else cat("> Historical Bulk contributions not available.")
+```
+
+## Diffuse {.tabset}
+
+### Marginal Effects
+
+```{r supp-diffuse-marginal, echo=FALSE, fig.height=6, fig.width=13}
+p <- make_marginal_prob(contrib_diffuse_grp, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_diffuse_marginal.png"), p, width = 13, height = 6, dpi = 300)
+} else cat("> Historical Diffuse contributions not available.")
+```
+
+### Term Rankings
+
+```{r supp-diffuse-rankings, echo=FALSE, fig.height=5, fig.width=13}
+p <- make_rank_chart(contrib_diffuse_grp, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_diffuse_rankings.png"), p, width = 13, height = 5, dpi = 300)
+} else cat("> Historical Diffuse contributions not available.")
+```
+
+### Slope: First vs Last Year
+
+```{r supp-diffuse-slope, echo=FALSE, fig.height=5, fig.width=9}
+p <- make_slope_chart(contrib_diffuse_grp, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_diffuse_slope.png"), p, width = 9, height = 5, dpi = 300)
+} else cat("> Historical Diffuse contributions not available.")
+```
+
+### What-If Counterfactuals
+
+```{r supp-diffuse-whatif, echo=FALSE, fig.height=5, fig.width=10}
+p <- make_whatif_chart(contrib_diffuse_grp, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_diffuse_whatif.png"), p, width = 10, height = 5, dpi = 300)
+} else cat("> Historical Diffuse contributions not available.")
+```
+
+### Country vs World Average
+
+```{r supp-diffuse-avg, echo=FALSE, fig.height=6, fig.width=13}
+p <- make_country_vs_avg(fit_diffuse, hist_diffuse_df, contrib_diffuse_grp, "Diffuse")
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_diffuse_country_vs_avg.png"), p, width = 13, height = 6, dpi = 300)
+} else cat("> Could not compute world-average contributions.")
+```
+
+### Radar — Selected Years
+
+```{r supp-diffuse-radar, echo=FALSE, fig.height=7, fig.width=12}
+p <- make_radar_chart(contrib_diffuse_grp, "Diffuse", waterfall_years)
+if (!is.null(p)) {
+  print(p)
+  ggsave(file.path(plotOutputDir, "supp_diffuse_radar.png"), p, width = 12, height = 7, dpi = 300)
+} else cat("> Historical Diffuse contributions not available.")
+```
+
+---
+
+# Appendix {.tabset}
+
+## Model Specification
+
+```{r appendix-spec, echo=FALSE, results='asis'}
+cat(sprintf("**Country:** %s (%s)\n\n", country_name, country_code))
+cat(sprintf("**Model:** %s\n\n", params$modelName))
+cat(sprintf("**Institutional Quality drivers:** %s\n\n",
+    paste(model_instQualityDrivers, collapse = "; ")))
+cat(sprintf("**Control drivers:** %s\n\n",
+    paste(model_controlDrivers, collapse = "; ")))
+cat(sprintf("**Region FE mapping:** %s\n\n",
+    if (is.null(model_regionMappingFE)) "None" else model_regionMappingFE))
+cat(sprintf("**Lagged adoption:** %s\n\n", model_includeLagged))
+cat(sprintf("**Adoption threshold:** %s\n\n", adoption_threshold))
+```
+
+**Bulk model formula:**
+
+```{r formula-bulk, echo=FALSE, comment=""}
+if (!is.null(fit_bulk)) {
+  cat(pfm::formatModelEquation(
+    coefficients       = pfm::coeftestToDataFrame(fit_bulk$coeftest),
+    actorPowerIndex    = "Actor Power Index",
+    actorPowerDrivers  = NULL,
+    instQualityDrivers = model_instQualityDrivers,
+    controlDrivers     = model_controlDrivers,
+    includeLegend      = FALSE,
+    prefix             = "  Pr(Bulk Adoption) ~ "
+  ), "\n")
+}
+```
+
+**Diffuse model formula:**
+
+```{r formula-diffuse, echo=FALSE, comment=""}
+if (!is.null(fit_diffuse)) {
+  cat(pfm::formatModelEquation(
+    coefficients       = pfm::coeftestToDataFrame(fit_diffuse$coeftest),
+    actorPowerIndex    = "Actor Power Index",
+    actorPowerDrivers  = NULL,
+    instQualityDrivers = model_instQualityDrivers,
+    controlDrivers     = model_controlDrivers,
+    includeLegend      = TRUE,
+    prefix             = "  Pr(Diffuse Adoption) ~ "
+  ), "\n")
+}
+```
+
+## Session Information
+
+```{r session, echo=FALSE}
+tryCatch(
+  print(sessionInfo()),
+  error = function(e) cat("R Version:", R.version.string, "\n")
+)
+```
