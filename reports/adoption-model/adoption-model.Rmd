@@ -14,6 +14,7 @@ params:
   includeLagged: false
   adoptionThreshold: 0.5
   snapshotYears: !r c(2030, 2040, 2050, 2070, 2100)
+  reportName: "default"
 output:
   html_document:
     toc: true
@@ -77,6 +78,7 @@ library(scales)
 
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/modelHelpers.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/forestPlot.R"))
 
 if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
@@ -610,6 +612,7 @@ if (!is.null(p_bulk)) {
 ```{r coef-table-bulk, echo=FALSE}
 coef_display_bulk <- pfm::coeftestToDataFrame(fit_bulk$coeftest) %>%
   mutate(
+    term = vapply(term, clean_term_plain, character(1)),
     Significance = case_when(
       pValue < 0.001 ~ "***", pValue < 0.01 ~ "**",
       pValue < 0.05  ~ "*",   pValue < 0.1  ~ ".", TRUE ~ ""
@@ -624,7 +627,7 @@ kable(coef_display_bulk, digits = 4, format = "html",
   caption = "Bulk Adoption — Coefficient Estimates") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
   column_spec(5, bold = TRUE,
-    color = ifelse(coef_display_bulk$`p-value` < 0.05, col_good, "grey50"))
+    color = ifelse(!is.na(coef_display_bulk$`p-value`) & coef_display_bulk$`p-value` < 0.05, col_good, "grey50"))
 ```
 
 ### Fit Diagnostics
@@ -672,6 +675,7 @@ if (!is.null(p_diffuse)) {
 ```{r coef-table-diffuse, echo=FALSE}
 coef_display_diffuse <- pfm::coeftestToDataFrame(fit_diffuse$coeftest) %>%
   mutate(
+    term = vapply(term, clean_term_plain, character(1)),
     Significance = case_when(
       pValue < 0.001 ~ "***", pValue < 0.01 ~ "**",
       pValue < 0.05  ~ "*",   pValue < 0.1  ~ ".", TRUE ~ ""
@@ -686,7 +690,7 @@ kable(coef_display_diffuse, digits = 4, format = "html",
   caption = "Diffuse Adoption — Coefficient Estimates") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
   column_spec(5, bold = TRUE,
-    color = ifelse(coef_display_diffuse$`p-value` < 0.05, col_good, "grey50"))
+    color = ifelse(!is.na(coef_display_diffuse$`p-value`) & coef_display_diffuse$`p-value` < 0.05, col_good, "grey50"))
 ```
 
 ### Fit Diagnostics
@@ -974,6 +978,112 @@ ggsave(file.path(plotOutputDir, "hist_timeline_diffuse.png"), p, width = 11, hei
 
 ---
 
+# Model Interpretation {.tabset}
+
+## Average Marginal Effects
+
+Average Marginal Effects (AMEs) translate log-odds coefficients into the probability scale.
+The AME for predictor k is the average, across all observations, of the instantaneous slope
+of Pr(Adoption) with respect to x_k:
+**AME_k = mean_i[ π_i(1−π_i) ] × β_k**.
+Standard errors are derived via the delta method using the same robust clustered variance-covariance
+matrix as the main coefficient table. An AME of 0.05 means that a one-unit increase in the
+predictor raises adoption probability by ~5 percentage points on average across the sample.
+
+```{r ame-table, echo=FALSE}
+format_ame_table <- function(fit_obj, sector_label) {
+  ame_df <- fit_obj$ame
+  if (is.null(ame_df) || nrow(ame_df) == 0) {
+    cat(paste0("> AME not available for ", sector_label, " sector.\n"))
+    return(invisible(NULL))
+  }
+  ame_df <- ame_df[ame_df$term != "(Intercept)", ]
+  ame_df$signif <- ifelse(!is.na(ame_df$p) & ame_df$p < 0.001, "***",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.01,  "**",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.05,  "*",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.1,   ".", ""))))
+  ame_df$ci95 <- sprintf("[%.4f, %.4f]", ame_df$lower, ame_df$upper)
+  out <- ame_df[, c("term_group", "term", "ame", "se", "z", "p", "signif", "ci95")]
+  out$term <- vapply(out$term, clean_term_plain, character(1))
+  colnames(out) <- c("Group", "Term", "AME", "SE", "z", "p-value", "", "95% CI")
+  out <- out[order(out$Group, out$Term), ]
+
+  kable(out, format = "html", digits = 4,
+        caption = paste(sector_label, "Sector — Average Marginal Effects on Pr(Adoption)")) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+      full_width = TRUE, font_size = 12
+    ) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(3, color = ifelse(!is.na(out$AME) & out$AME > 0, col_good,
+                              ifelse(!is.na(out$AME) & out$AME < 0, col_bad, "black")))
+}
+
+format_ame_table(fit_bulk,    "Bulk")
+format_ame_table(fit_diffuse, "Diffuse")
+```
+
+## Predicted Probability Plots
+
+Each panel shows how Pr(Adoption) changes as a single theory-group predictor sweeps from
+its observed minimum to its maximum **holding all other predictors at their sample means**.
+This answers: *"How does the model's predicted adoption probability respond to the full
+range of [variable], keeping everything else average?"* The shaded ribbon is a delta-method
+95% confidence interval. The dashed horizontal line marks the adoption threshold.
+
+```{r margins-plots, echo=FALSE, fig.height=4, fig.width=12, results='asis'}
+make_margins_panel <- function(fit_obj, sector_label, sector_col) {
+  pp <- fit_obj$predictedProbs
+  if (is.null(pp) || length(pp) == 0) {
+    cat(paste0("> Predicted probability profiles not available for ", sector_label, ".\n"))
+    return(invisible(NULL))
+  }
+
+  col_grp <- c(
+    "Actor Power"  = "#e74c3c",
+    "Inst. Quality" = "#2ecc71",
+    "Interaction"  = "#f1c40f"
+  )
+
+  plots <- lapply(names(pp), function(var) {
+    df  <- pp[[var]]
+    grp <- pfm::classifyTermGroups(var,
+             actorPowerDrivers = NULL, actorPowerIndex = "Actor Power Index",
+             instQualityDrivers = model_instQualityDrivers,
+             controlDrivers = model_controlDrivers)
+    col_line <- if (!is.na(col_grp[grp])) col_grp[[grp]] else sector_col
+    lbl <- clean_term_plain(var)
+
+    ggplot(df, aes(x = x, y = prob)) +
+      geom_ribbon(aes(ymin = lower, ymax = upper), fill = col_line, alpha = 0.15) +
+      geom_line(color = col_line, linewidth = 1.3) +
+      geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+                 color = "grey50", linewidth = 0.7) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      labs(title = lbl, subtitle = sector_label, x = lbl, y = "Pr(Adoption)") +
+      theme_minimal(base_size = 13) +
+      theme(plot.title = element_text(face = "bold", size = 12),
+            plot.subtitle = element_text(color = sector_col, size = 10))
+  })
+
+  n     <- length(plots)
+  ncols <- min(n, 4)
+  print(
+    patchwork::wrap_plots(plots, ncol = ncols) +
+      patchwork::plot_annotation(
+        title    = paste0(sector_label, " Sector — Predicted Probability Profiles"),
+        subtitle = "Sweep from observed min to max; ribbon = delta-method 95% CI; dashed = adoption threshold"
+      )
+  )
+}
+
+library(patchwork)
+make_margins_panel(fit_bulk,    "Bulk",    col_bulk)
+make_margins_panel(fit_diffuse, "Diffuse", col_diffuse)
+```
+
+---
+
 # Future Projections {.tabset}
 
 ```{r proj-check, echo=FALSE, results='asis'}
@@ -1080,31 +1190,90 @@ if (has_scenario && !is.null(proj_diffuse)) {
 ## Adoption Timeline {.tabset}
 
 ```{r timeline-helper, include=FALSE}
+# Rogers (2003) Diffusion of Innovations — 5-category framework
+# Categories are defined by σ-distances from the mean adoption year μ
+# across all regions that adopt within the scenario window:
+#
+#   Innovators      year < μ − 2σ        (~  2.5 % of adopters)
+#   Early Adopters  μ − 2σ ≤ year < μ − σ (~13.5 %)
+#   Early Majority  μ − σ  ≤ year < μ     (~34   %)
+#   Late Majority   μ      ≤ year < μ + σ (~34   %)
+#   Laggards        year ≥ μ + σ          (~16   %)
+#   Non-Adopters    Pr(Adoption) never reaches threshold in scenario window
+#
+# Breakpoints are recomputed from the actual distribution of adoption years
+# for each scenario run — no hardcoded calendar dates.
+#
+# Reference:
+#   Rogers, E. M. (2003). Diffusion of Innovations (5th ed.).
+#   Free Press, New York. (Original work published 1962)
+
+# Canonical Rogers category order and colour palette
+.rogers_levels <- c("Innovators", "Early Adopters", "Early Majority",
+                    "Late Majority", "Laggards", "Non-Adopters")
+.rogers_colors <- c(
+  "Innovators"     = "#1a9641",
+  "Early Adopters" = "#74c476",
+  "Early Majority" = "#fed976",
+  "Late Majority"  = "#fd8d3c",
+  "Laggards"       = "#d73027",
+  "Non-Adopters"   = "#969696"
+)
+
 compute_timeline <- function(proj_df, threshold) {
   if (is.null(proj_df) || nrow(proj_df) == 0) return(NULL)
-  proj_df %>%
+
+  tl <- proj_df %>%
     group_by(region) %>%
     summarise(
       AdoptionYear = ifelse(any(prob >= threshold, na.rm = TRUE),
                             min(year[prob >= threshold], na.rm = TRUE), Inf),
       .groups = "drop"
-    ) %>%
-    mutate(
-      Category  = case_when(
-        AdoptionYear <= 2030 ~ "Forerunners",
-        AdoptionYear <= 2050 ~ "Early Majority",
-        AdoptionYear <= 2070 ~ "Late Majority",
-        TRUE                 ~ "Laggards"
-      ),
-      YearRange = case_when(
-        Category == "Forerunners"    ~ "≤ 2030",
-        Category == "Early Majority" ~ "2031–2050",
-        Category == "Late Majority"  ~ "2051–2070",
-        Category == "Laggards"       ~ "> 2070"
-      ),
-      RegYear = ifelse(is.finite(AdoptionYear),
-                       paste0(region, " (", as.integer(AdoptionYear), ")"), region)
     )
+
+  finite_years <- tl$AdoptionYear[is.finite(tl$AdoptionYear)]
+  fmt_yr       <- function(y) as.integer(round(y))
+
+  # Require at least 2 adopters to compute a meaningful σ
+  if (length(finite_years) < 2) {
+    return(tl %>% mutate(
+      Category  = ifelse(is.finite(AdoptionYear), "Innovators", "Non-Adopters"),
+      YearRange = ifelse(is.finite(AdoptionYear),
+                         as.character(fmt_yr(AdoptionYear)), "Never"),
+      RegYear   = ifelse(is.finite(AdoptionYear),
+                         paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+    ))
+  }
+
+  mu    <- mean(finite_years)
+  sigma <- sd(finite_years)
+  if (sigma < 1) sigma <- 1   # guard: collapse when all adopt in the same timestep
+
+  b1 <- mu - 2 * sigma   # ~2.5th percentile breakpoint
+  b2 <- mu -     sigma   # ~16th percentile breakpoint
+  b3 <- mu               # ~50th percentile breakpoint (mean)
+  b4 <- mu +     sigma   # ~84th percentile breakpoint
+
+  tl %>% mutate(
+    Category = case_when(
+      !is.finite(AdoptionYear) ~ "Non-Adopters",
+      AdoptionYear  < b1       ~ "Innovators",
+      AdoptionYear  < b2       ~ "Early Adopters",
+      AdoptionYear  < b3       ~ "Early Majority",
+      AdoptionYear  < b4       ~ "Late Majority",
+      TRUE                     ~ "Laggards"
+    ),
+    YearRange = case_when(
+      Category == "Innovators"     ~ paste0("< ",      fmt_yr(b1)),
+      Category == "Early Adopters" ~ paste0(fmt_yr(b1), "–", fmt_yr(b2)),
+      Category == "Early Majority" ~ paste0(fmt_yr(b2), "–", fmt_yr(b3)),
+      Category == "Late Majority"  ~ paste0(fmt_yr(b3), "–", fmt_yr(b4)),
+      Category == "Laggards"       ~ paste0("≥ ",  fmt_yr(b4)),
+      TRUE                         ~ "Never"
+    ),
+    RegYear = ifelse(is.finite(AdoptionYear),
+                     paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+  )
 }
 
 render_timeline_table <- function(tl_df, sector_name) {
@@ -1112,18 +1281,23 @@ render_timeline_table <- function(tl_df, sector_name) {
     cat("> Scenario data not available.")
     return(invisible(NULL))
   }
+
   final_table <- tl_df %>%
-    mutate(Category = factor(Category,
-      levels = c("Forerunners", "Early Majority", "Late Majority", "Laggards"))) %>%
+    mutate(Category = factor(Category, levels = .rogers_levels)) %>%
     group_by(Category, YearRange) %>%
     summarise(Regions = paste(RegYear, collapse = ", "), .groups = "drop") %>%
-    arrange(Category)
+    arrange(Category) %>%
+    filter(!is.na(Category))   # silently drop any category with zero members
+
+  # Row colours matched by category name — robust to empty categories
+  row_colors <- unname(.rogers_colors[as.character(final_table$Category)])
 
   cat(as.character(
     kable(final_table, format = "html",
-      col.names = c("Category", "Expected Year", "Regions")) %>%
-      kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE) %>%
-      column_spec(1, bold = TRUE, color = c("#2ecc71", "#82e0aa", "#f7dc6f", "#e67e22"))
+          col.names = c("Category", "Year Range", "Regions")) %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                    full_width = TRUE) %>%
+      column_spec(1, bold = TRUE, color = row_colors)
   ))
   cat("\n\n")
 }
@@ -1266,9 +1440,9 @@ render_adoption_year_map <- function(tl_df, sector_name, threshold) {
     return(invisible(NULL))
   }
 
+  # Use the canonical Rogers levels/colours defined in the timeline-helper chunk
   adopt_data <- tl_df %>%
-    mutate(Category = factor(Category,
-      levels = c("Forerunners", "Early Majority", "Late Majority", "Laggards")))
+    mutate(Category = factor(Category, levels = .rogers_levels))
 
   map_data_df <- mapping_54 %>%
     mutate(
@@ -1280,19 +1454,19 @@ render_adoption_year_map <- function(tl_df, sector_name, threshold) {
 
   world_data <- world %>% left_join(map_data_df, by = c("iso_key" = "CountryCode"))
 
+  # Only include levels that are actually present — prevents empty legend entries
+  present_levels <- intersect(.rogers_levels,
+                               as.character(unique(world_data$Category[!is.na(world_data$Category)])))
+
   p <- ggplot() +
     geom_sf(data = world_data[world_data$iso_key == "ATA", ],
             fill = "grey90", color = "white", linewidth = 0.05) +
     geom_sf(data = world_data[world_data$iso_key != "ATA", ],
             aes(fill = Category), color = "white", linewidth = 0.05) +
     scale_fill_manual(
-      values = c(
-        "Forerunners"   = "#2ecc71",
-        "Early Majority"= "#82e0aa",
-        "Late Majority" = "#f7dc6f",
-        "Laggards"      = "#e67e22"
-      ),
-      na.value = "grey90", na.translate = FALSE
+      values    = .rogers_colors[present_levels],
+      limits    = present_levels,
+      na.value  = "grey90", na.translate = FALSE
     ) +
     theme_minimal() +
     theme(

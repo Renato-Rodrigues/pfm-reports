@@ -1,21 +1,26 @@
 # PFM Reports — build launcher
 #
 # CLI usage:
-#   Rscript createReports.R                        # interactive menu (defaults: c1, all except model-diagnostics)
-#   Rscript createReports.R 1,3                    # reports 1 and 3, default cache (no prompts)
-#   Rscript createReports.R all                    # all reports including model-diagnostics, default cache
-#   Rscript createReports.R a                      # all except model-diagnostics, default cache
-#   Rscript createReports.R 2,4 --madrat           # reports 2+4, also clear madrat caches
-#   Rscript createReports.R --no-clear             # keep caches, run default selection (no prompts)
-#   Rscript createReports.R 2 --country=IND        # country-adoption for India (name auto-resolved)
-#   Rscript createReports.R 2 --country=IND,BRA,DEU  # multiple countries in parallel
+#   Rscript createReports.R                           # interactive menu (defaults: c1, all except model-diagnostics)
+#   Rscript createReports.R 1,3                       # reports 1 and 3, default cache (no prompts)
+#   Rscript createReports.R all                       # all reports including model-diagnostics, default cache
+#   Rscript createReports.R a                         # all except model-diagnostics, default cache
+#   Rscript createReports.R 2,4 --madrat              # reports 2+4, also clear madrat caches
+#   Rscript createReports.R --no-clear                # keep caches, run default selection (no prompts)
+#   Rscript createReports.R 2 --country=IND           # country-adoption for India (name auto-resolved)
+#   Rscript createReports.R 2 --country=IND,BRA,DEU   # multiple countries in parallel
 #   Rscript createReports.R 2 --country=ZAF --countryName="South Africa"
+#   Rscript createReports.R 5 --modelConfig=default                    # model-selection with named config
+#   Rscript createReports.R 5 --modelConfig=default,vdem-focus         # two parallel model-selection runs
+#   Rscript createReports.R 5 --modelConfig=model-configs/my-cfg.yml   # explicit relative path
+#   Rscript createReports.R 1 --reportName=rule-of-law  # adoption-model with a custom name suffix
+#   Rscript createReports.R --verbose                    # show all subprocess output (library loads, etc.)
+#   Rscript createReports.R -v 1,3                       # verbose shorthand
 #
 # Interactive (RStudio):
-#   source("createReports.R")                      # shows interactive menu with country prompt
+#   source("createReports.R")                         # shows interactive menu with all prompts
 
-library(rprojroot)
-source(file.path(find_rstudio_root_file(), "src/r/configHelper.R"))
+library(rprojroot)   # only load needed to find root and discover report dirs
 
 root        <- find_rstudio_root_file()
 reports_dir <- file.path(root, "reports")
@@ -37,6 +42,14 @@ if (length(report_dirs) == 0L) {
 
 DEFAULT_EXCLUDE <- "model-diagnostics"
 
+# ── Discover model-selection configs (sorted for stable numbering) ───────────
+model_configs_dir       <- file.path(reports_dir, "model-selection", "model-configs")
+available_model_configs <- if (dir.exists(model_configs_dir)) {
+  sort(list.files(model_configs_dir, pattern = "\\.ya?ml$", full.names = FALSE))
+} else {
+  character(0)
+}
+
 # Reports that write to the shared panelDataHistorical.rds cache
 CACHE_USERS <- setdiff(report_dirs, "downscale")
 
@@ -54,6 +67,9 @@ cli_clear          <- NULL    # NULL = not explicitly set; resolved later
 cli_cache_explicit <- FALSE
 cli_country        <- NULL
 cli_country_name   <- NULL
+cli_model_configs  <- NULL    # comma-separated config names/paths for model-selection
+cli_adoption_name  <- NULL    # --reportName= suffix for adoption-model output file
+cli_verbose        <- FALSE   # --verbose / -v: show all subprocess output
 
 for (a in args) {
   if (a %in% c("--madrat", "--all-caches")) {
@@ -66,12 +82,16 @@ for (a in args) {
     cli_country        <- toupper(trimws(sub("^--country=", "", a)))
   } else if (startsWith(a, "--countryName=")) {
     cli_country_name   <- trimws(sub("^--countryName=", "", a))
+  } else if (startsWith(a, "--modelConfig=")) {
+    cli_model_configs  <- trimws(strsplit(sub("^--modelConfig=", "", a), ",")[[1]])
+  } else if (startsWith(a, "--reportName=")) {
+    cli_adoption_name  <- trimws(sub("^--reportName=", "", a))
+  } else if (a %in% c("--verbose", "-v")) {
+    cli_verbose <- TRUE
   } else if (!startsWith(a, "--")) {
     cli_selection <- a
   }
 }
-
-COUNTRY_NAMES <- getRegionNames()
 
 # True only when the user typed Rscript createReports.R with no arguments at all
 is_interactive_mode <- length(args) == 0L
@@ -82,15 +102,24 @@ read_stdin <- function(prompt) {
   if (interactive()) readline("") else trimws(readLines("stdin", n = 1L, warn = FALSE))
 }
 
-# ── Print menu ───────────────────────────────────────────────────────────────
+# ── Step 1: cache option ─────────────────────────────────────────────────────
 cat("\n=== PFM Reports Builder ===\n\n")
-
 cat("Cache options:\n")
 cat("  [c0]  Keep existing data (no clearing)\n")
 cat("  [c1]  Clear report data — panelData, downscale cache, modelData  (default)\n")
-cat("  [c2]  Clear report data + mrpfm madrat caches  (re-downloads source data on next run)\n\n")
+cat("  [c2]  Clear report data + mrpfm madrat caches  (re-downloads source data on next run)\n")
 
-cat("Available reports:\n")
+resolve_cache_mode <- function() {
+  if (cli_cache_explicit) return(cli_clear)
+  if (!is_interactive_mode) return("reports")
+  ans <- read_stdin("Cache option [c0/c1/c2, default c1]: ")
+  switch(ans, c0 = "none", c1 = "reports", c2 = "madrat", "reports")
+}
+
+cache_mode <- resolve_cache_mode()
+
+# ── Step 2: report selection ──────────────────────────────────────────────────
+cat("\nAvailable reports:\n")
 cat(sprintf("  [a]   All except %-20s  (default)\n", DEFAULT_EXCLUDE))
 cat("  [0]   All reports\n")
 for (i in seq_along(report_dirs)) {
@@ -99,17 +128,6 @@ for (i in seq_along(report_dirs)) {
 }
 cat("\nComma-separated indices select a subset, e.g. '1,3' runs reports 1 and 3.\n\n")
 
-# ── Resolve cache mode ───────────────────────────────────────────────────────
-resolve_cache_mode <- function() {
-  if (cli_cache_explicit) return(cli_clear)
-  if (!is_interactive_mode) return("reports")   # default when args provided
-  ans <- read_stdin("Cache option [c0/c1/c2, default c1]: ")
-  switch(ans, c0 = "none", c1 = "reports", c2 = "madrat", "reports")
-}
-
-cache_mode <- resolve_cache_mode()
-
-# ── Resolve report selection ─────────────────────────────────────────────────
 resolve_reports <- function() {
   raw <- cli_selection
   if (is.null(raw)) {
@@ -142,10 +160,63 @@ resolve_reports <- function() {
 
 chosen <- resolve_reports()
 
+# Load yaml + pfm and their config/caching helpers only after the user has answered.
+# Everything above uses only base R and rprojroot.
+if (cli_verbose) {
+  source(file.path(root, "src/r/configHelper.R"))
+} else {
+  suppressPackageStartupMessages(suppressMessages(
+    source(file.path(root, "src/r/configHelper.R"))
+  ))
+}
+
+# ── Helpers for report-specific parameter resolution ─────────────────────────
+
+# Resolve a config name/stem/path to the relative path expected by run.R
+normalize_model_config_path <- function(cfg) {
+  if (grepl("[/\\\\]", cfg)) return(cfg)                              # already has path separator
+  if (!grepl("\\.ya?ml$", cfg, ignore.case = TRUE)) cfg <- paste0(cfg, ".yml")
+  paste0("model-configs/", cfg)
+}
+
+# Interactive/CLI resolution of which model config files to use
+resolve_model_configs <- function() {
+  if (!is.null(cli_model_configs)) return(cli_model_configs)
+
+  if (length(available_model_configs) == 0L) {
+    message("[model-selection] No .yml files in model-configs/ — using default.yml")
+    return("model-configs/default.yml")
+  }
+
+  if (!is_interactive_mode) return(available_model_configs[1L])
+
+  cat("\nModel Selection configs:\n")
+  for (i in seq_along(available_model_configs)) {
+    cat(sprintf("  [%d]  %s\n", i, available_model_configs[i]))
+  }
+  raw <- read_stdin(sprintf(
+    "  Config(s) [1-%d or filename(s), comma-separated, default 1]: ",
+    length(available_model_configs)
+  ))
+  if (!nzchar(trimws(raw))) return(available_model_configs[1L])
+
+  parts <- trimws(unlist(strsplit(raw, "[,\\s]+")))
+  idxs  <- suppressWarnings(as.integer(parts))
+  if (all(!is.na(idxs))) {
+    bad <- idxs < 1L | idxs > length(available_model_configs)
+    if (any(bad)) stop(sprintf(
+      "Invalid model config index(es): %s", paste(parts[bad], collapse = ", ")
+    ))
+    return(unique(available_model_configs[idxs]))
+  }
+  parts   # treat as filenames / stems
+}
+
 # ── Resolve countries for country-adoption report ────────────────────────────
 report_extra_args <- list()
 
 if ("country-adoption" %in% chosen) {
+  COUNTRY_NAMES <- getRegionNames()
   # Collect raw ISO codes from CLI or interactive prompt
   if (!is.null(cli_country)) {
     raw_isos <- toupper(trimws(strsplit(cli_country, ",")[[1]]))
@@ -189,6 +260,36 @@ if ("country-adoption" %in% chosen) {
   })
 }
 
+# ── Resolve model configs for model-selection report ─────────────────────────
+if ("model-selection" %in% chosen) {
+  sel_configs <- resolve_model_configs()
+  sel_paths   <- vapply(sel_configs, normalize_model_config_path, character(1L))
+  sel_stems   <- tools::file_path_sans_ext(basename(sel_paths))
+
+  if (is_interactive_mode) {
+    cat(sprintf("  Resolved  : %s\n", paste(sel_stems, collapse = ", ")))
+  }
+
+  report_extra_args[["model-selection"]] <- lapply(sel_paths, function(p) {
+    paste0("--modelConfig=", p)
+  })
+}
+
+# ── Resolve report name for adoption-model report ────────────────────────────
+if ("adoption-model" %in% chosen) {
+  if (!is.null(cli_adoption_name)) {
+    adoption_name <- cli_adoption_name
+  } else if (is_interactive_mode) {
+    cat("\nAdoption Model report name:\n")
+    raw <- read_stdin("  Name suffix for output file [default]: ")
+    adoption_name <- if (nzchar(trimws(raw))) trimws(raw) else "default"
+    cat(sprintf("  Resolved  : %s\n", adoption_name))
+  } else {
+    adoption_name <- "default"
+  }
+  report_extra_args[["adoption-model"]] <- list(paste0("--reportName=", adoption_name))
+}
+
 cat(sprintf("Cache mode  : %s\n", switch(cache_mode,
   none    = "keep existing data",
   reports = "clear report data only",
@@ -200,9 +301,19 @@ if ("country-adoption" %in% chosen) {
     paste(sapply(country_pairs, function(p) sprintf("%s (%s)", p$countryName, p$country)),
           collapse = ", ")))
 }
+if ("model-selection" %in% chosen) {
+  mc_stems <- tools::file_path_sans_ext(basename(
+    sub("^--modelConfig=", "", unlist(report_extra_args[["model-selection"]]))
+  ))
+  cat(sprintf("Model configs: %s\n", paste(mc_stems, collapse = ", ")))
+}
+if ("adoption-model" %in% chosen) {
+  an <- sub("^--reportName=", "", report_extra_args[["adoption-model"]][[1]])
+  cat(sprintf("Adoption name: %s\n", an))
+}
 cat("\n")
 
-# ── Expand to flat task list (one entry per report/country combination) ───────
+# ── Expand to flat task list (one entry per report/variant combination) ───────
 tasks <- list()
 for (rep_name in chosen) {
   extra_list <- report_extra_args[[rep_name]]
@@ -210,10 +321,14 @@ for (rep_name in chosen) {
     tasks <- c(tasks, list(list(report = rep_name, label = rep_name, extra = NULL)))
   } else {
     for (extra in extra_list) {
-      iso   <- sub("^--country=", "", extra[1])
-      tasks <- c(tasks, list(list(
+      # Derive a short tag by stripping --key= from the first arg, then taking
+      # the basename without extension (works for both --country=IND and
+      # --modelConfig=model-configs/default.yml).
+      raw_val <- sub("^--[^=]+=", "", extra[1])
+      tag     <- tools::file_path_sans_ext(basename(raw_val))
+      tasks   <- c(tasks, list(list(
         report = rep_name,
-        label  = sprintf("%s[%s]", rep_name, iso),
+        label  = sprintf("%s[%s]", rep_name, tag),
         extra  = extra
       )))
     }
@@ -274,9 +389,27 @@ if (cache_mode != "none") {
 if (length(tasks) == 1L) {
 
   # ── Single task ────────────────────────────────────────────────────────────
-  task <- tasks[[1]]
+  task     <- tasks[[1]]
+  run_args <- c(file.path(reports_dir, task$report, "run.R"), task$extra)
   cat(sprintf("Building: %s\n\n", task$label))
-  status <- system2(rscript_path, c(file.path(reports_dir, task$report, "run.R"), task$extra), wait = TRUE)
+
+  if (cli_verbose) {
+    status <- system2(rscript_path, run_args, wait = TRUE)
+  } else {
+    # Stream stdout (render progress) to the terminal; capture stderr silently
+    # and only surface it when the build fails.
+    stderr_file <- tempfile(fileext = ".txt")
+    status      <- system2(rscript_path, run_args, wait = TRUE, stderr = stderr_file)
+    if (status != 0L) {
+      err_lines <- tryCatch(readLines(stderr_file), error = function(e) character(0))
+      if (length(err_lines) > 0L) {
+        cat("\n--- Captured error output ---\n")
+        cat(paste(err_lines, collapse = "\n"), "\n")
+      }
+    }
+    unlink(stderr_file)
+  }
+
   if (status == 0L) cat("\nDone.\n") else stop(sprintf("'%s' failed.", task$label))
 
 } else {
@@ -318,7 +451,12 @@ if (length(tasks) == 1L) {
 
     seed_file <- tempfile(fileext = ".R")
     writeLines(seed_lines, seed_file)
-    seed_status <- system2(rscript_path, seed_file, wait = TRUE)
+    if (cli_verbose) {
+      seed_status <- system2(rscript_path, seed_file, wait = TRUE)
+    } else {
+      seed_status <- system2(rscript_path, seed_file, wait = TRUE,
+                             stdout = FALSE, stderr = FALSE)
+    }
     unlink(seed_file)
 
     if (seed_status != 0L) {
@@ -331,14 +469,18 @@ if (length(tasks) == 1L) {
   library(parallel)
   n_cores <- min(length(tasks), max(1L, detectCores() - 1L))
   cl      <- makeCluster(n_cores)
-  clusterExport(cl, c("reports_dir", "rscript_path"), envir = environment())
+  clusterExport(cl, c("reports_dir", "rscript_path", "cli_verbose"), envir = environment())
 
   results <- parLapply(cl, tasks, function(task) {
     t0  <- Sys.time()
     out <- tryCatch(
       system2(rscript_path, c(file.path(reports_dir, task$report, "run.R"), task$extra),
               stdout = TRUE, stderr = TRUE),
-      error = function(e) structure(e$message, status = -1L)
+      error = function(e) {
+        msg <- e$message
+        attr(msg, "status") <- -1L
+        msg
+      }
     )
     status <- attr(out, "status")
     if (is.null(status)) status <- 0L
@@ -361,7 +503,13 @@ if (length(tasks) == 1L) {
   cat("=====================================================\n\n")
 
   failures <- Filter(function(r) !r$ok, results)
-  if (length(failures) > 0L) {
+  if (cli_verbose) {
+    cat("Task output:\n\n")
+    for (r in results) {
+      cat(sprintf("--- %s [%s] ---\n", r$report, if (r$ok) "OK" else "FAILED"))
+      cat(paste(r$output, collapse = "\n"), "\n\n")
+    }
+  } else if (length(failures) > 0L) {
     cat("Failure details:\n\n")
     for (f in failures) {
       cat(sprintf("--- %s ---\n", f$report))

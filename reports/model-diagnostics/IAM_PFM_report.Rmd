@@ -446,7 +446,7 @@ for (wfid in names(wf_meta)) {
 
         d <- diag_results$modelDiagnoses[[wfid]][[paste0(sec, "_", stg)]]
         if (!is.null(d)) {
-          cat("**Top predictors** (by |z|):", paste0("**", d$topPredictors, "**", collapse = ", "), "\n\n")
+          cat("**Top predictors** (by |z|):", paste0("**", vapply(d$topPredictors, clean_term_plain, character(1)), "**", collapse = ", "), "\n\n")
           if (length(d$extremeZTerms) > 0)
             cat("> ⚠ **Extreme z-values detected** on:", paste(d$extremeZTerms, collapse = ", "), "\n\n")
           if (isTRUE(d$separation) && stg == "adoption")

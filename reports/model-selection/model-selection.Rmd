@@ -1,7 +1,9 @@
 ---
-title: "Progressive PFM Model Formulations and Improvements"
+title: "`r paste0('PFM Model Selection — ', tools::file_path_sans_ext(basename(params$modelConfigFile)))`"
 author: "PFM Modeling Output"
 date: "`r Sys.Date()`"
+params:
+  modelConfigFile: "model-configs/default.yml"
 html_document:
   toc: true
   toc_float:
@@ -39,6 +41,7 @@ library(kableExtra)
 library(rprojroot)
 
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/modelHelpers.R"))
 
 # Configure madrat
 cache_dir <- getPfmConfig("cacheDir", "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default")
@@ -61,164 +64,36 @@ options(pfm.modelDir = model_dir)
 
 ```{r defining_models, include=FALSE}
 
-# Global Model Configurations
-model_configs <- list(
-  list(
-    name = "Baseline",
-    phases = c("Phase 1: Base Model Assumptions", "Phase 2: Institutional Quality", "Phase 3: Regional Fixed Effects"),
-    description = "**What it does:** Uses a single composite Actor Power Index.\n\n**Assumption:** Actor power operates symmetrically (a 1-unit increase in Innovator Power perfectly cancels out a 1-unit increase in Incumbent Power). Institutional quality interacts globally with this net power.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Split Variables",
-    phases = "Phase 1: Base Model Assumptions",
-    description = "**What it does:** Replaces the combined index with discrete components.\n\n**Assumption:** Incumbents and Innovators exert asymmetric power dynamics over policy adoption.",
-    actorPowerDrivers = c("Innovator Power", "Incumbent Power"), 
-    actorPowerIndex = c("Innovator Power", "Incumbent Power"),
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Advanced Controls",
-    phases = "Phase 1: Base Model Assumptions",
-    description = "**What it does:** Expands the structural controls.\n\n**Assumption:** Broader macroeconomic and demographic factors drive feasibility.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Energy Intensity", "Urban Population Share", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Non-Linear Dynamics",
-    phases = "Phase 1: Base Model Assumptions",
-    description = "**What it does:** Includes a squared term for GDP per Capita.\n\n**Assumption:** The Environmental Kuznets Curve hypothesis applies to pricing adoption.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita Sq", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Heterogeneous Regional Effects",
-    phases = "Phase 1: Base Model Assumptions",
-    description = "**What it does:** Interacts Region Fixed Effects with structural drivers.\n\n**Assumption:** The impact of actor power and institutional quality varies intrinsically by region.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = TRUE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Path Dependency",
-    phases = "Phase 1: Base Model Assumptions",
-    description = "**What it does:** Introduces lagged adoption/price stringency.\n\n**Assumption:** Policy adoption strongly correlates with historical status (inertia).",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = TRUE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Institutional Quality - Rule of Law",
-    phases = "Phase 2: Institutional Quality",
-    description = "**What it does:** Introduces VDem institutional quality Rule of Law indicator.\n\n**Assumption:** Test alternative institutional quality indicators.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)"), 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Institutional Quality - Diagonal Accountability",
-    phases = "Phase 2: Institutional Quality",
-    description = "**What it does:** Introduces VDem Diagonal Accountability indicator (Media & CSOs monitoring).\n\n**Assumption:** Non-electoral public scrutiny exposes incumbent lobbying.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = c("Government Effectiveness (WGI)", "Diagonal Accountability (VDem)"), 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Institutional Quality - Diagonal & Vertical Accountability",
-    phases = "Phase 2: Institutional Quality",
-    description = "**What it does:** Introduces VDem Diagonal & Vertical Accountability indicators.\n\n**Assumption:** Combines media scrutiny with electoral pressure at the ballot box.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = c("Government Effectiveness (WGI)", "Diagonal Accountability (VDem)", "Vertical Accountability (VDem)"), 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Institutional Quality - Full Accountability",
-    phases = "Phase 2: Institutional Quality",
-    description = "**What it does:** Introduces all three VDem Accountability indicators (Vertical, Horizontal, Diagonal).\n\n**Assumption:** Test full interactive accountability system.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = c("Government Effectiveness (WGI)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Institutional Quality - VDem",
-    phases = "Phase 2: Institutional Quality",
-    description = "**What it does:** Introduces all VDem institutional quality indicators.\n\n**Assumption:** Test alternative institutional quality indicators.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = c("Government Effectiveness (WGI)", "Rule of Law (VDem)", "Vertical Accountability (VDem)", "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)"), 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = FALSE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmappingH12.csv"
-  ),
-  list(
-    name = "Region FE - EU/OECD+",
-    phases = "Phase 3: Regional Fixed Effects",
-    description = "**What it does:** Uses a specialized region mapping for fixed effects (EU, OECD+, Rest of World).\n\n**Assumption:** Policy dynamics are clustered in these macro-regions.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = TRUE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmapping_EU_OECDp.csv"
-  ),
-  list(
-    name = "Region FE - None",
-    phases = "Phase 3: Regional Fixed Effects",
-    description = "**What it does:** Disables region fixed effects.\n\n**Assumption:** Eliminating region fixed effects highlights global drivers.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = TRUE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = NULL
-  ),
-  list(
-    name = "Region FE - 54 Regions",
-    phases = "Phase 3: Regional Fixed Effects",
-    description = "**What it does:** Uses 54 native regions for fixed effects.\n\n**Assumption:** Highly granular regional effects isolate country-level variations better.",
-    actorPowerDrivers = "Actor Power Index", 
-    actorPowerIndex = "Actor Power Index",
-    instQualityDrivers = "Government Effectiveness (WGI)", 
-    controlDrivers = c("GDP per Capita", "Hydro Nuclear Share"),
-    includeLagged = TRUE, interactRegionFE = FALSE,
-    regionMappingFixedEffects = "regionmapping_54.csv"
+# ── Load model configurations from external YAML file ─────────────────────────
+model_config_file <- params$modelConfigFile
+if (!is_absolute_path(model_config_file)) {
+  model_config_file <- file.path(
+    rprojroot::find_rstudio_root_file(),
+    "reports/model-selection",
+    model_config_file
   )
-)
+}
+if (!file.exists(model_config_file)) {
+  stop("Model config file not found: ", model_config_file)
+}
 
+model_config_name <- tools::file_path_sans_ext(basename(model_config_file))
+
+# YAML lists read as R lists; unlist() converts them to character vectors so
+# they work correctly with pfm functions that expect character vector inputs.
+normalize_model_config <- function(cfg) {
+  vec_fields <- c("phases", "actorPowerDrivers", "actorPowerIndex",
+                  "instQualityDrivers", "controlDrivers")
+  for (f in vec_fields) {
+    if (!is.null(cfg[[f]])) cfg[[f]] <- unlist(cfg[[f]])
+  }
+  # Ensure logical fields are actually logical (YAML may read as character)
+  cfg$includeLagged    <- isTRUE(cfg$includeLagged)
+  cfg$interactRegionFE <- isTRUE(cfg$interactRegionFE)
+  cfg
+}
+
+model_configs <- lapply(yaml::read_yaml(model_config_file), normalize_model_config)
 
 ```
 
@@ -246,6 +121,83 @@ panelData <- mbind(
 # Global list to track diagnostics for the final comparison table
 all_aics <- data.frame()
 combo_summary_df <- data.frame()
+all_contribs <- data.frame()
+all_ames <- list()   # stores computeAME() results keyed by "Sector_Stage|Model"
+
+# Collect AMEs (adoption stage only) for the cross-model comparison table
+add_ame <- function(fit, sector_stage, model_name, cfg) {
+  if (!grepl("Adoption", sector_stage, ignore.case = TRUE)) return(invisible(NULL))
+  if (is.null(fit) || is.null(fit$model)) return(invisible(NULL))
+  ame_df <- computeAME(
+    fit,
+    actorPowerDrivers  = c(cfg$actorPowerDrivers, cfg$actorPowerIndex),
+    actorPowerIndex    = cfg$actorPowerIndex,
+    instQualityDrivers = cfg$instQualityDrivers,
+    controlDrivers     = cfg$controlDrivers
+  )
+  if (!is.null(ame_df)) {
+    rmap <- cfg$regionMappingFixedEffects
+    mapping_label <- if (is.null(rmap))                                    "None"
+      else if (grepl("H12",  rmap, ignore.case = TRUE))                    "H12"
+      else if (grepl("54",   rmap))                                         "54 Regions"
+      else if (grepl("OECD", rmap, ignore.case = TRUE))                    "OECD+"
+      else                                                                   rmap
+    key <- paste0(sector_stage, "|", model_name)
+    all_ames[[key]] <<- cbind(
+      data.frame(Sector_Stage = sector_stage, Model = model_name,
+                 mapping_type = mapping_label,
+                 stringsAsFactors = FALSE),
+      ame_df
+    )
+  }
+}
+
+# get_term_group() is superseded by pfm::classifyTermGroups().
+# Kept as a thin wrapper so any downstream code that still calls it continues to work.
+get_term_group <- function(nm, cfg) {
+  classifyTermGroups(
+    nm,
+    actorPowerDrivers  = c(cfg$actorPowerDrivers, cfg$actorPowerIndex),
+    actorPowerIndex    = cfg$actorPowerIndex,
+    instQualityDrivers = cfg$instQualityDrivers,
+    controlDrivers     = cfg$controlDrivers
+  )
+}
+
+# Compute mean β×x contribution per term group and append to all_contribs.
+# Theory Score and Theory Frac. are now computed by pfm::computeGroupContributions().
+add_contributions <- function(fit, sector_stage, model_name, cfg) {
+  if (is.null(fit) || is.null(fit$model)) return(invisible(NULL))
+
+  gc <- computeGroupContributions(
+    fit,
+    actorPowerDrivers  = c(cfg$actorPowerDrivers, cfg$actorPowerIndex),
+    actorPowerIndex    = cfg$actorPowerIndex,
+    instQualityDrivers = cfg$instQualityDrivers,
+    controlDrivers     = cfg$controlDrivers
+  )
+  if (is.null(gc)) return(invisible(NULL))
+
+  group_levels <- c("Intercept", "Actor Power", "Inst. Quality", "Interaction",
+                    "Controls", "Time Trend", "Path Dep.", "Region FE", "Other")
+
+  row <- list(Sector_Stage = sector_stage, Model = model_name)
+  for (g in group_levels) row[[g]] <- if (!is.null(gc[[g]])) gc[[g]] else NA_real_
+  row[["Total η"]]     <- gc[["Total η"]]
+  row[["Mean P"]]      <- if (grepl("Adoption", sector_stage, ignore.case = TRUE))
+    gc[["Mean P"]] else NA_real_
+  row[["Theory Score"]] <- gc[["Theory Score"]]
+  row[["Theory Frac."]] <- gc[["Theory Frac."]]
+
+  all_contribs <<- rbind(all_contribs, as.data.frame(row, stringsAsFactors = FALSE))
+
+  # Propagate Theory Frac. to the matching all_aics row so Summary Tables can highlight it
+  match_idx <- which(all_aics$Sector_Stage == sector_stage & all_aics$Model == model_name)
+  if (length(match_idx) > 0) {
+    if (!"Theory Frac." %in% names(all_aics)) all_aics[["Theory Frac."]] <<- NA_real_
+    all_aics[["Theory Frac."]][match_idx] <<- row[["Theory Frac."]]
+  }
+}
 
 add_aic <- function(fit, sector_stage, model_name, cfg) {
   m <- fit$model
@@ -325,6 +277,7 @@ add_aic <- function(fit, sector_stage, model_name, cfg) {
     `High-Z` = highZ,
     `Max |Z|` = round(as.numeric(maxAbsZ), 1),
     Converged = converged,
+    `Theory Frac.` = NA_real_,
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
@@ -538,6 +491,8 @@ for (stg in stages) {
       }
       
       add_aic(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
+      add_contributions(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
+      add_ame(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
       plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
       plots_list[[i]] <- plot_forest(fit, plot_title)
     }
@@ -647,6 +602,8 @@ for (stg in stages) {
         }
         
         add_aic(fit, sec_stg, cfg$name, cfg)
+        add_contributions(fit, sec_stg, cfg$name, cfg)
+        add_ame(fit, sec_stg, cfg$name, cfg)
         plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
         plots_list[[i]] <- plot_forest(fit, plot_title)
       }
@@ -661,7 +618,9 @@ for (stg in stages) {
       sub_df <- all_aics %>%
         filter(Sector_Stage == sec_stg, Model %in% target_models) %>%
         arrange(match(Model, target_models)) %>%
-        select(-Sector_Stage) # Drop redundant columns
+        select(-Sector_Stage)
+      if ("Theory Frac." %in% names(sub_df))
+        sub_df <- dplyr::relocate(sub_df, `Theory Frac.`, .after = `Pseudo-R2`)
         
       if("ModelNum" %in% names(sub_df)) {
         sub_df <- sub_df %>% select(-ModelNum)
@@ -741,7 +700,9 @@ for (stg in stages) {
       fmt_hqic <- get_col_fmt(sub_df$HQIC, minimize = TRUE)
       fmt_ll   <- get_col_fmt(sub_df$`Log-lik`, minimize = FALSE)
       fmt_r2   <- get_col_fmt(sub_df$`Pseudo-R2`, minimize = FALSE)
-      
+      fmt_tf   <- if ("Theory Frac." %in% names(sub_df))
+        get_col_fmt(sub_df[["Theory Frac."]], minimize = FALSE) else NULL
+
       # Warnings (Model Name Highlight)
       is_warning <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE | sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
       model_name_bg <- ifelse(is_warning, "#ffebee", "white")
@@ -760,8 +721,12 @@ for (stg in stages) {
         column_spec(4, background = fmt_bic$bg, color = fmt_bic$color, bold = fmt_bic$bold) %>%
         column_spec(5, background = fmt_hqic$bg, color = fmt_hqic$color, bold = fmt_hqic$bold) %>%
         column_spec(6, background = fmt_ll$bg, color = fmt_ll$color, bold = fmt_ll$bold) %>%
-        column_spec(7, background = fmt_r2$bg, color = fmt_r2$color, bold = fmt_r2$bold) %>%
-        scroll_box(width = "100%")
+        column_spec(7, background = fmt_r2$bg, color = fmt_r2$color, bold = fmt_r2$bold)
+      if (!is.null(fmt_tf)) {
+        col_tf <- which(names(sub_df) == "Theory Frac.")
+        k <- k %>% column_spec(col_tf, background = fmt_tf$bg, color = fmt_tf$color, bold = fmt_tf$bold)
+      }
+      k <- k %>% scroll_box(width = "100%")
           
       # Render the table
       cat(sprintf("\n#### %s\n\n", topic_name))
@@ -809,7 +774,69 @@ for (stg in stages) {
       }
     }
     
-    # 3. Render Forest Plots Sub-tab
+    # 3. Render Term Contributions Sub-tab
+    cat("\n### Term Contributions\n\n")
+    units_lbl <- if (stg == "Adoption")
+      "Mean &beta;&times;x contribution to log-odds (&eta;). Positive = pro-adoption; negative = contra-adoption."
+    else
+      "Mean &beta;&times;x contribution to linear predictor (&eta;). Positive = higher price; negative = lower price."
+    cat(sprintf("*%s Each cell is the cross-panel mean of the partial linear predictor for that term group. Adoption rows also show Mean P — the sample mean of P(Adoption) = plogis(&eta;).*\n\n", units_lbl))
+
+    for (topic_name in names(topics)) {
+      target_models <- topics[[topic_name]]
+      if (nrow(all_contribs) == 0 || !"Sector_Stage" %in% names(all_contribs)) {
+        cat("> Term contributions not available for this sector/stage.\n\n")
+        break
+      }
+      sub_c <- all_contribs %>%
+        filter(Sector_Stage == sec_stg, Model %in% target_models) %>%
+        arrange(match(Model, target_models)) %>%
+        select(-Sector_Stage)
+
+      if (nrow(sub_c) == 0) next
+
+      # Drop columns that are entirely NA (term group absent in all models of this phase)
+      sub_c <- sub_c[, !sapply(sub_c, function(x) all(is.na(x))), drop = FALSE]
+
+      # Theory Score and Theory Frac. are pre-computed in add_contributions.
+      # Reorder: group contributions first, then summary columns.
+      tail_cols <- intersect(c("Theory Score", "Theory Frac.", "Total η", "Mean P"), names(sub_c))
+      sub_c     <- sub_c[, c(setdiff(names(sub_c), tail_cols), tail_cols), drop = FALSE]
+
+      # Underline the row with the highest Theory Fraction
+      best_theory_row <- if ("Theory Frac." %in% names(sub_c)) {
+        idx <- which.max(sub_c[["Theory Frac."]])
+        if (length(idx) > 0 && is.finite(sub_c[["Theory Frac."]][idx])) idx else integer(0)
+      } else integer(0)
+
+      # Highlight: for each numeric column, shade the largest absolute contribution
+      kbl <- kable(sub_c, format = "html", digits = 3,
+                   caption = paste("Term Contributions:", topic_name)) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                      font_size = 11, full_width = TRUE) %>%
+        scroll_box(width = "100%")
+
+      # Colour-code numeric columns: green = largest contribution (abs) in column
+      num_cols <- which(sapply(sub_c, is.numeric))
+      for (j in num_cols) {
+        vals    <- sub_c[[j]]
+        abs_max <- suppressWarnings(max(abs(vals), na.rm = TRUE))
+        if (is.finite(abs_max) && abs_max > 0) {
+          bg <- ifelse(!is.na(vals) & abs(vals) == abs_max, "#c8e6c9", "white")
+          kbl <- kbl %>% column_spec(j, background = bg)
+        }
+      }
+
+      # Underline + bold the row with the highest combined theory contribution
+      if (length(best_theory_row) > 0)
+        kbl <- kbl %>% row_spec(best_theory_row, underline = TRUE, bold = TRUE)
+
+      cat(sprintf("\n#### %s\n\n", topic_name))
+      print(kbl)
+      cat("\n<br>\n")
+    }
+
+    # 4. Render Forest Plots Sub-tab
     cat("\n### Forest Plots {.tabset}\n\n")
     
     for (i in seq_along(local_configs)) {
@@ -820,24 +847,27 @@ for (stg in stages) {
         cat("\n\n")
       }
     }
-    
-    # 4. Render Combo Configuration Sub-tab for this Sector/Stage
+
+    # 5. Combo Configuration for this Sector/Stage
     cat("\n### Combo Configuration\n\n")
     local_combos <- combo_summary_df[combo_summary_df$Sector_Stage == sec_stg, ]
-    if(nrow(local_combos) > 0) {
+    if (nrow(local_combos) > 0) {
       print(kable(local_combos, format = "html") %>%
-        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+                      font_size = 11) %>%
         scroll_box(width = "100%"))
     } else {
-      cat("No combos were generated for this sector/stage.")
+      cat("> No combos recorded for this sector/stage.\n")
     }
     cat("\n\n")
-    
+
   }
 }
 ```
 
-# Diagnostic Metrics Guide
+# Legend {.tabset}
+
+## Diagnostic Metrics
 
 * **AIC (Akaike Information Criterion):** *Lower is better.* Measures goodness of fit while penalizing for the number of parameters.
 * **AICc:** *Lower is better.* AIC corrected for smaller sample sizes.
@@ -859,8 +889,9 @@ for (stg in stages) {
 * **High-Z:** *FALSE is better.* Flags extremely high Z-scores ($|Z| > 15$), usually a symptom of numerical instability.
 * **Max |Z|:** *Lower is better.* The maximum absolute Z-score among the predictors.
 * **Converged:** *TRUE is better.* Indicates if the optimization algorithm reached a solution.
+* **Theory Frac.:** *Higher is better (0–1).* Fraction of the non-intercept linear predictor attributable to the three theoretical channels: Actor Power, Institutional Quality, and their Interaction. Computed as |Actor Power + Inst. Quality + Interaction| / Σ|all non-intercept group contributions|. A value of 0.6 means 60% of the non-constant model variation is driven by theory rather than controls, time trend, path dependency, or regional fixed effects. Use this to compare how "theory-driven" each specification is relative to its own scale of prediction.
 
-## Highlight Legend (Ranking Columns)
+## Highlight Legend
 
 * <span style="background-color: #c8e6c9; padding: 2px 4px; font-weight: bold;">Light Green</span>: **Best Model with All Three Theories** (Lowest AIC among models that have at least one significant interaction, one significant institutional quality, and one significant actor power term).
 * <span style="background-color: #bbdefb; padding: 2px 4px; font-weight: bold;">Light Blue</span>: **Best Model with At Least One Theory** (Lowest AIC among models that have significant coefficients for at least one of those three theoretical clusters).
@@ -869,10 +900,177 @@ for (stg in stages) {
 
 *(Note: Ranking colors overwrite each other in priority. Green overwrites Blue and Yellow, Blue overwrites Yellow).*
 
-# Key Conclusions
-1. **Split Variables** better capture the asymmetric lobbying pressures of Incumbents vs. Innovators.
-2. **Advanced Controls** (Energy Intensity, Urban Share) consistently reveal cleaner estimates by controlling for macro-structural confounders.
-3. **Heterogeneous Region Effects** (`interactRegionFE`) show that Actor Power operates fundamentally differently inside the EU compared to the OECD or the rest of the world.
-4. **Path Dependency** (`lagged_adoption` and `lagged_ecp`) provides a massive AIC drop, proving that political inertia is the single most powerful predictor of policy status.
+# Average Marginal Effects (AME) Comparison {.tabset}
 
-The **Fully Advanced Model (Model 6: Path Dependency)** drastically outperforms the Baseline and represents the strongest overall specification for both Adoption and Stringency.
+AMEs express each predictor's effect on the **probability scale**: how many percentage points does Pr(Adoption) change, on average across the sample, for a one-unit increase in that predictor? This complements AIC-based model selection by revealing whether theory variables have *practically meaningful* effect sizes — a model with low AIC but near-zero theory AMEs may be statistically preferred but theoretically hollow.
+
+**Reading the table:** rows are theory-group predictors; columns are model specifications. Cells show AME ± SE. Bold = |AME| / SE > 1.96 (significant at 5%). Only the adoption stage is shown (logit); AMEs for the stringency stage (log-link GLM) are on the log scale and are not directly comparable.
+
+```{r ame-comparison, echo=FALSE, results='asis'}
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+# Colour-coded HTML cell. Fixes NA-SE display ("±NA" previously shown).
+ame_cell_html <- function(ame, se, p, max_abs) {
+  if (is.na(ame)) return('<span style="color:#bbb;font-size:0.85em;">—</span>')
+  intensity <- min(abs(ame) / max(max_abs, 1e-6), 1)
+  fade      <- round(255 - intensity * 185)
+  bg        <- if (ame >= 0) sprintf("rgb(255,%d,%d)", fade, fade)
+               else          sprintf("rgb(%d,%d,255)", fade, fade)
+  sig       <- !is.na(p) && p < 0.05
+  val       <- if (sig) sprintf("<b>%.4f</b>", ame) else sprintf("%.4f", ame)
+  err  <- if (!is.na(se) && is.finite(se))
+            sprintf('<span style="font-size:0.78em;color:#555;">&plusmn;%.4f</span>', se)
+          else ""
+  body <- if (nchar(err) > 0) paste0(val, "<br>", err) else val
+  sprintf(
+    '<div style="background:%s;padding:3px 5px;border-radius:4px;text-align:center;line-height:1.4;">%s</div>',
+    bg, body
+  )
+}
+
+# Render one transposed AME table (rows = models, cols = terms).
+# No scroll_box — columns are narrow with wrapping headers to fit the page.
+render_ame_table <- function(df_ss, term_filter_fn, caption_txt) {
+  df_sub <- df_ss[term_filter_fn(df_ss), ]
+  if (nrow(df_sub) == 0) {
+    cat("> No matching predictors.\n\n"); return(invisible(NULL))
+  }
+  models_here <- unique(df_ss$Model)
+  all_terms   <- unique(df_sub$term)
+
+  grp_order <- c("Actor Power", "Inst. Quality", "Interaction", "Controls",
+                 "Time Trend", "Path Dep.", "Region FE", "Other")
+  term_grp  <- df_sub$term_group[match(all_terms, df_sub$term)]
+
+  # For Region FE-only tables, sub-group columns by mapping type (H12 / OECD+ / 54 Regions)
+  is_rfe_tab <- length(unique(term_grp)) == 1L && unique(term_grp) == "Region FE" &&
+                "mapping_type" %in% colnames(df_sub)
+
+  if (is_rfe_tab) {
+    mapping_order <- c("H12", "OECD+", "54 Regions", "None", "Other")
+    term_mapping  <- vapply(all_terms, function(t) {
+      mt <- df_sub$mapping_type[df_sub$term == t & !is.na(df_sub$ame)]
+      if (length(mt) == 0) return("Other")
+      names(sort(table(mt), decreasing = TRUE))[1L]
+    }, character(1))
+    ord          <- order(match(term_mapping, mapping_order), all_terms)
+    all_terms    <- all_terms[ord]
+    term_grp     <- term_grp[ord]
+    term_mapping <- term_mapping[ord]
+    mt_runs      <- rle(term_mapping)
+    header_spec  <- c(setNames(1L, " "),
+                      setNames(as.list(mt_runs$lengths),
+                               paste0(mt_runs$values, " regions")))
+  } else {
+    ord       <- order(match(term_grp, grp_order), all_terms)
+    all_terms <- all_terms[ord]
+    term_grp  <- term_grp[ord]
+    grp_runs    <- rle(term_grp)
+    header_spec <- c(setNames(1L, " "),
+                     setNames(as.list(grp_runs$lengths), grp_runs$values))
+  }
+
+  max_abs <- max(abs(df_sub$ame), na.rm = TRUE)
+
+  wide <- data.frame(Model = models_here, stringsAsFactors = FALSE)
+  for (t in all_terms) {
+    wide[[t]] <- vapply(models_here, function(mod) {
+      row <- df_sub[df_sub$Model == mod & df_sub$term == t, ]
+      if (nrow(row) == 0) return('<span style="color:#bbb;">—</span>')
+      ame_cell_html(row$ame, row$se, row$p, max_abs)
+    }, character(1))
+  }
+
+  # Readable HTML labels (dots → spaces, <br> wrapping)
+  display_names <- c("Model", vapply(all_terms, clean_term, character(1)))
+
+  n_data_cols <- length(all_terms)
+  kb <- kable(wide, format = "html", escape = FALSE, caption = caption_txt,
+              col.names = display_names) %>%
+    kable_styling(
+      bootstrap_options = c("condensed", "bordered"),
+      font_size = 10, full_width = TRUE
+    ) %>%
+    add_header_above(header_spec, escape = FALSE) %>%
+    # Wide model-name column; data columns let CSS handle wrapping
+    column_spec(1, bold = TRUE, width = "22em",
+                extra_css = "vertical-align:middle;") %>%
+    column_spec(seq(2, n_data_cols + 1), width = "5em",
+                extra_css = "min-width:4em;") %>%
+    # Allow header cells to wrap (prevents horizontal overflow)
+    row_spec(0, extra_css = "white-space:normal;word-break:break-word;vertical-align:bottom;padding:4px 3px;font-size:0.9em;")
+  print(kb)
+  cat("\n\n")
+}
+
+# ── main rendering ─────────────────────────────────────────────────────────────
+if (length(all_ames) == 0) {
+  cat("> No AME results available.\n")
+} else {
+  ame_all <- do.call(rbind, all_ames)
+  sector_stages_ame <- unique(ame_all$Sector_Stage)
+  sector_stages_ame <- sector_stages_ame[
+    grepl("Adoption", sector_stages_ame, ignore.case = TRUE)
+  ]
+
+  for (sec_stg in sector_stages_ame) {
+    cat("\n## ", sec_stg, " {.tabset}\n\n")
+    df_ss <- ame_all[ame_all$Sector_Stage == sec_stg, ]
+
+    # ── Tab 1: Core theory — Actor Power, Inst. Quality, API×IQ interactions ──
+    cat("\n### Core Theory\n\n")
+    cat("Actor Power drivers, Institutional Quality indicators, and their interactions",
+        "with the API. Background = |AME| (red = positive, blue = negative).",
+        "**Bold** = p < 0.05.\n\n")
+    render_ame_table(
+      df_ss,
+      term_filter_fn = function(d) {
+        is_rfe_interaction <- grepl("regionFE", d$term, ignore.case = TRUE) &
+                             (grepl("_x_", d$term) | grepl(":", d$term))
+        is_pure_rfe        <- d$term_group == "Region FE" &
+                             !grepl("_x_|:", d$term)
+        d$term != "(Intercept)" &
+          !is_pure_rfe & !is_rfe_interaction &
+          d$term_group %in% c("Actor Power", "Inst. Quality", "Interaction")
+      },
+      caption_txt = paste(sec_stg, "— Core Theory AMEs")
+    )
+
+    # ── Tab 2: Controls, time trend, path dependency ──────────────────────────
+    cat("\n### Controls & Trend\n\n")
+    render_ame_table(
+      df_ss,
+      term_filter_fn = function(d) {
+        d$term_group %in% c("Controls", "Time Trend", "Path Dep.") |
+          d$term == "(Intercept)"
+      },
+      caption_txt = paste(sec_stg, "— Controls & Trend AMEs")
+    )
+
+    # ── Tab 3: Pure region fixed effects (dummies) ────────────────────────────
+    cat("\n### Region Fixed Effects\n\n")
+    cat("AME for each region dummy: average change in Pr(Adoption) for a region",
+        "belonging to that group vs. the reference region.\n\n")
+    render_ame_table(
+      df_ss,
+      term_filter_fn = function(d) {
+        d$term_group == "Region FE" & !grepl("_x_|:", d$term)
+      },
+      caption_txt = paste(sec_stg, "— Region FE AMEs")
+    )
+
+    # ── Tab 4: Region × API interaction terms (interactRegionFE models) ───────
+    cat("\n### Region × API Interactions\n\n")
+    cat("Present only in models with `interactRegionFE = TRUE`.",
+        "Captures heterogeneous Actor Power effects across regions.\n\n")
+    render_ame_table(
+      df_ss,
+      term_filter_fn = function(d) {
+        grepl("regionFE", d$term, ignore.case = TRUE) &
+          (grepl("_x_", d$term) | grepl(":", d$term))
+      },
+      caption_txt = paste(sec_stg, "— Region × API Interaction AMEs")
+    )
+  }
+}
+```

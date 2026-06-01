@@ -29,15 +29,24 @@ col_good <- "#2ecc71"
 col_warn <- "#f39c12"
 col_bad  <- "#e74c3c"
 
-# Coefficient group colours (used in forest plots)
+# Coefficient group colours (used in forest plots and contribution charts).
+# Canonical names (used by pfm::classifyTermGroups) are listed first; legacy
+# full-form aliases are kept for backward compatibility with older plot code.
 col_group <- c(
-  "Actor Power"                  = "#e74c3c",
+  # Canonical pfm names
+  "Actor Power"    = "#e74c3c",
+  "Inst. Quality"  = "#2ecc71",
+  "Interaction"    = "#f1c40f",
+  "Controls"       = "#3498db",
+  "Path Dep."      = "#e67e22",
+  "Region FE"      = "#9b59b6",
+  "Time Trend"     = "#34495e",
+  "Intercept"      = "#95a5a6",
+  "Other"          = "#bdc3c7",
+  # Legacy aliases (do not remove — still used by forest plots and IAM report)
   "Institutional Quality"        = "#2ecc71",
   "Institutional Quality (VDem)" = "#27ae60",
-  "Interaction"                  = "#f1c40f",
-  "Controls"                     = "#3498db",
-  "Region Fixed Effects"         = "#9b59b6",
-  "Time Trend"                   = "#34495e"
+  "Region Fixed Effects"         = "#9b59b6"
 )
 
 # Static driver lists (used in correlation analysis and group classification)

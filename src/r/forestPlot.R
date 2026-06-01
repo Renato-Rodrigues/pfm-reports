@@ -34,9 +34,7 @@ render_forest_plot <- function(coef_df, title, subtitle = NULL) {
         grepl("timeTrend|Year|year", term) ~ "Time Trend",
         TRUE ~ "Institutional Quality & Controls"
       ),
-      clean_term = term %>%
-        gsub("\\.", " ", .) %>%
-        gsub("_x_|_X_", " x ", .)
+      term_label = vapply(term, clean_term_plain, character(1))
     )
 
   p_data$Group <- factor(p_data$Group, levels = c(
@@ -44,7 +42,7 @@ render_forest_plot <- function(coef_df, title, subtitle = NULL) {
     "Controls", "Region Fixed Effects", "Time Trend"
   ))
 
-  ggplot(p_data, aes(x = reorder(clean_term, estimate), y = estimate, color = Group)) +
+  ggplot(p_data, aes(x = reorder(term_label, estimate), y = estimate, color = Group)) +
     geom_hline(yintercept = 0, linetype = "dashed", color = "grey50") +
     geom_point(size = 3) +
     geom_errorbar(aes(ymin = lo, ymax = hi), width = 0.2, linewidth = 0.8) +

@@ -88,6 +88,7 @@ library(knitr)
 library(kableExtra)
 library(scales)
 library(patchwork)
+library(rprojroot)
 
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
@@ -117,33 +118,27 @@ plotOutputDir <- file.path(params$assetDir, "plots", country_code)
 if (!dir.exists(plotOutputDir)) dir.create(plotOutputDir, recursive = TRUE)
 
 # ── Extended colour palette ──────────────────────────────────────────────────
-col_group_ext <- c(
-  col_group,
-  "Intercept"          = "#95a5a6",
-  "Total"              = "#2C3E50"
-)
+# "Intercept" is now in col_group (theme.R); only "Total" needs to be added.
+col_group_ext <- c(col_group, "Total" = "#2C3E50")
 
 # ── Group ordering (determines stacking order) ───────────────────────────────
+# Uses canonical pfm Term Group names from classifyTermGroups().
 group_order <- c(
-  "Intercept", "Region Fixed Effects", "Time Trend",
-  "Actor Power", "Institutional Quality", "Interaction",
-  "Controls", "Other"
+  "Intercept", "Region FE", "Time Trend",
+  "Actor Power", "Inst. Quality", "Interaction",
+  "Controls", "Path Dep.", "Other"
 )
 
 # ── Term → group classification ──────────────────────────────────────────────
+# Thin wrapper around pfm::classifyTermGroups() for backward compatibility.
 classify_term <- function(terms) {
-  iq_safe   <- make.names(model_instQualityDrivers)
-  ctrl_safe <- make.names(model_controlDrivers)
-  vapply(terms, function(t) {
-    if (t == "(Intercept)")                                    return("Intercept")
-    if (t == "timeTrend")                                      return("Time Trend")
-    if (grepl("^regionFE", t))                                 return("Region Fixed Effects")
-    if (grepl("_x_", t))                                      return("Interaction")
-    if (t %in% iq_safe)                                        return("Institutional Quality")
-    if (t %in% ctrl_safe)                                      return("Controls")
-    if (grepl("Actor\\.Power|Innovator\\.Power|Incumbent\\.Power", t)) return("Actor Power")
-    "Other"
-  }, character(1))
+  classifyTermGroups(
+    terms,
+    actorPowerDrivers  = NULL,
+    actorPowerIndex    = "Actor Power Index",
+    instQualityDrivers = model_instQualityDrivers,
+    controlDrivers     = model_controlDrivers
+  )
 }
 
 # ── Term → human-readable label ─────────────────────────────────────────────
@@ -169,60 +164,43 @@ term_to_label <- function(terms) {
 }
 
 # ── Build per-term log-odds contributions (wide) ─────────────────────────────
-# Returns a data.frame with one row per year for the selected country.
-# Columns: one per model term (log-odds contribution = beta * x) + meta columns.
-#
-# Uses manual term evaluation instead of model.matrix() to avoid factor-level
-# errors: when data is filtered to a single country, regionFE only has one level
-# present, and model.matrix() drops the expected dummy columns. Here we decode
-# factor dummies directly from the coefficient name pattern (regionFE<LEVEL>).
+# Delegates to pfm::computeTermContributions() which handles the regionFE
+# dummy decoding correctly even for single-country subsets.
 build_contributions <- function(fit, df_panel) {
-  m          <- fit$model
   df_country <- df_panel[df_panel$region == country_code, , drop = FALSE]
-  if (nrow(df_country) == 0) return(NULL)
-
-  needed <- intersect(all.vars(m$formula), colnames(df_country))
-  df_ok  <- df_country[complete.cases(df_country[, needed, drop = FALSE]), , drop = FALSE]
-  if (nrow(df_ok) == 0) return(NULL)
-
-  beta        <- coef(m)
-  n           <- nrow(df_ok)
-  contrib_mat <- matrix(0, nrow = n, ncol = length(beta),
-                        dimnames = list(NULL, names(beta)))
-
-  for (term_name in names(beta)) {
-    b <- beta[[term_name]]
-    if (term_name == "(Intercept)") {
-      contrib_mat[, term_name] <- b
-    } else if (grepl("^regionFE", term_name)) {
-      # Factor dummy: 1 if this country's FE group matches the level in the name
-      fe_level <- sub("^regionFE", "", term_name)
-      contrib_mat[, term_name] <- b * as.integer(as.character(df_ok$regionFE) == fe_level)
-    } else if (term_name %in% colnames(df_ok)) {
-      contrib_mat[, term_name] <- b * df_ok[[term_name]]
-    }
-    # Terms absent from df_ok remain 0 (already initialised)
-  }
-
-  df_out          <- as.data.frame(contrib_mat)
-  df_out$year     <- df_ok$year
-  df_out$ecp      <- df_ok$ecp
-  df_out$adoption <- as.integer(df_ok$ecp > 0)
-  df_out$eta      <- rowSums(contrib_mat)
-  df_out$prob     <- plogis(df_out$eta)
-  df_out
+  long <- computeTermContributions(
+    fit, df_country,
+    actorPowerDrivers  = NULL,
+    actorPowerIndex    = "Actor Power Index",
+    instQualityDrivers = model_instQualityDrivers,
+    controlDrivers     = model_controlDrivers,
+    aggregate          = FALSE
+  )
+  if (is.null(long) || nrow(long) == 0) return(NULL)
+  meta_cols <- c("year", "region", "ecp", "adoption", "eta", "prob")
+  tidyr::pivot_wider(
+    long[, c(meta_cols, "term_raw", "contribution")],
+    names_from  = "term_raw",
+    values_from = "contribution"
+  )
 }
 
 # ── Reshape to long ──────────────────────────────────────────────────────────
 to_long <- function(contrib_wide) {
   if (is.null(contrib_wide)) return(NULL)
-  meta_cols <- c("year", "ecp", "adoption", "eta", "prob")
+  meta_cols <- c("year", "region", "ecp", "adoption", "eta", "prob")
   term_cols <- setdiff(colnames(contrib_wide), meta_cols)
   long <- pivot_longer(contrib_wide,
     cols     = all_of(term_cols),
     names_to = "term_raw", values_to = "contribution"
   )
-  long$term_group <- classify_term(long$term_raw)
+  long$term_group <- classifyTermGroups(
+    long$term_raw,
+    actorPowerDrivers  = NULL,
+    actorPowerIndex    = "Actor Power Index",
+    instQualityDrivers = model_instQualityDrivers,
+    controlDrivers     = model_controlDrivers
+  )
   long$term_label <- term_to_label(long$term_raw)
   long
 }
@@ -231,7 +209,7 @@ to_long <- function(contrib_wide) {
 to_grouped <- function(contrib_long) {
   if (is.null(contrib_long)) return(NULL)
   contrib_long %>%
-    group_by(year, ecp, adoption, prob, eta, term_group) %>%
+    group_by(year, region, ecp, adoption, prob, eta, term_group) %>%
     summarise(contribution = sum(contribution), .groups = "drop") %>%
     mutate(term_group = factor(term_group, levels = group_order))
 }
@@ -321,26 +299,10 @@ if (!is.null(future_mag)) {
 
 ```{r build_contributions, include=FALSE}
 # ── Historical panel data.frames ─────────────────────────────────────────────
-hist_bulk_df <- pfm::preparePanelData(
-  data                      = panelData,
-  sector                    = "Bulk",
-  actorPowerDrivers         = NULL,
-  actorPowerIndex           = "Actor Power Index",
-  instQualityDrivers        = model_instQualityDrivers,
-  controlDrivers            = model_controlDrivers,
-  regionMappingFixedEffects = model_regionMappingFE,
-  lag                       = 1
-)
-hist_diffuse_df <- pfm::preparePanelData(
-  data                      = panelData,
-  sector                    = "Diffuse",
-  actorPowerDrivers         = NULL,
-  actorPowerIndex           = "Actor Power Index",
-  instQualityDrivers        = model_instQualityDrivers,
-  controlDrivers            = model_controlDrivers,
-  regionMappingFixedEffects = model_regionMappingFE,
-  lag                       = 1
-)
+# estimateAdoptionModel() now returns $data (the prepared panel df), so we
+# can reuse it directly instead of calling preparePanelData() a second time.
+hist_bulk_df    <- fit_bulk$data
+hist_diffuse_df <- fit_diffuse$data
 
 country_in_data <- country_code %in% unique(hist_bulk_df$region)
 
@@ -1267,6 +1229,109 @@ if (!is.null(contrib_bulk_grp) && !is.null(contrib_diffuse_grp)) {
   print(p)
   ggsave(file.path(plotOutputDir, "cross_sector_contributions.png"), p, width = 13, height = 7, dpi = 300)
 }
+```
+
+---
+
+# Model Interpretation {.tabset}
+
+## Average Marginal Effects
+
+Average Marginal Effects (AMEs) express each predictor's impact on the **probability scale**:
+the average change in Pr(Adoption) for a one-unit increase in that predictor, evaluated at
+each observed data point and then averaged. Unlike log-odds coefficients, AMEs are directly
+interpretable: an AME of 0.05 means adoption probability increases by 5 percentage points
+on average per unit increase in that variable. Significance is tested via the delta method
+using the same robust clustered standard errors as the main coefficient table.
+
+```{r ame-table, echo=FALSE}
+make_ame_table <- function(fit_obj, sector_label) {
+  ame_df <- fit_obj$ame
+  if (is.null(ame_df) || nrow(ame_df) == 0) {
+    cat(paste0("> AME not available for ", sector_label, ".\n"))
+    return(invisible(NULL))
+  }
+  # Exclude intercept from display
+  ame_df <- ame_df[ame_df$term != "(Intercept)", ]
+  ame_df$signif <- ifelse(!is.na(ame_df$p) & ame_df$p < 0.001, "***",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.01,  "**",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.05,  "*",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.1,   ".", ""))))
+  ame_df$display <- sprintf("%.4f %s<br><small>(±%.4f, p=%.3f)</small>",
+                            ame_df$ame, ame_df$signif, ame_df$se, ame_df$p)
+  out <- ame_df[, c("term_group", "term", "display")]
+  colnames(out) <- c("Group", "Term", paste0(sector_label, " AME (95% CI)"))
+  out <- out[order(out$Group, out$Term), ]
+
+  kable(out, format = "html", escape = FALSE,
+        caption = paste(sector_label, "— Average Marginal Effects on Pr(Adoption)")) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+      full_width = TRUE, font_size = 12
+    ) %>%
+    column_spec(1, bold = TRUE)
+}
+
+if (!is.null(fit_bulk))    make_ame_table(fit_bulk,    "Bulk")
+if (!is.null(fit_diffuse)) make_ame_table(fit_diffuse, "Diffuse")
+```
+
+## Predicted Probability Plots (Margins Plots)
+
+Each panel below shows how Pr(Adoption) changes as a single theory-group predictor sweeps
+from its observed minimum to its maximum, **holding all other predictors at their sample means**.
+This answers: *"How much would adoption probability change for `r country_name` if this
+variable moved across its full historical range?"* The shaded ribbon is a delta-method 95%
+confidence interval. Curves crossing the dashed threshold line indicate conditions under which
+the model would predict adoption.
+
+```{r margins-plots, echo=FALSE, fig.height=4, fig.width=10}
+make_margins_plots <- function(fit_obj, sector_label) {
+  pp <- fit_obj$predictedProbs
+  if (is.null(pp) || length(pp) == 0) {
+    cat(paste0("> Predicted probability profiles not available for ", sector_label, ".\n"))
+    return(invisible(NULL))
+  }
+  plots <- lapply(names(pp), function(var) {
+    df <- pp[[var]]
+    grp <- classifyTermGroups(
+      var,
+      actorPowerDrivers  = NULL,
+      actorPowerIndex    = "Actor Power Index",
+      instQualityDrivers = model_instQualityDrivers,
+      controlDrivers     = model_controlDrivers
+    )
+    col_line <- col_group_ext[grp]
+    if (is.na(col_line)) col_line <- "#2C3E50"
+    lbl <- term_to_label(var)
+    ggplot(df, aes(x = x, y = prob)) +
+      geom_ribbon(aes(ymin = lower, ymax = upper), fill = col_line, alpha = 0.18) +
+      geom_line(color = col_line, linewidth = 1.2) +
+      geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+                 color = "grey50", linewidth = 0.7) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      labs(
+        title    = lbl,
+        subtitle = paste0(sector_label, " — all others at means"),
+        x        = lbl,
+        y        = "Pr(Adoption)"
+      ) +
+      theme_report() +
+      theme(plot.title = element_text(size = 12))
+  })
+  n <- length(plots)
+  if (n == 0) return(invisible(NULL))
+  ncols <- min(n, 3)
+  nrows <- ceiling(n / ncols)
+  patchwork::wrap_plots(plots, ncol = ncols) +
+    patchwork::plot_annotation(
+      title   = paste0(country_name, " — ", sector_label, ": Predicted Probability Profiles"),
+      subtitle = "Sweep from observed min to max; ribbon = delta-method 95% CI"
+    )
+}
+
+if (!is.null(fit_bulk))    print(make_margins_plots(fit_bulk,    "Bulk"))
+if (!is.null(fit_diffuse)) print(make_margins_plots(fit_diffuse, "Diffuse"))
 ```
 
 ---
