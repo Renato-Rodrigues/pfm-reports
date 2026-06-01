@@ -1204,9 +1204,16 @@ if (has_scenario && !is.null(proj_diffuse)) {
 # Breakpoints are recomputed from the actual distribution of adoption years
 # for each scenario run — no hardcoded calendar dates.
 #
+# Alternative (use_quantile_breakpoints = TRUE): empirical quantiles at Rogers'
+# target percentiles (2.5th, 16th, 50th, 84th). Robust to coarse IAM timesteps
+# (5-year steps) where σ-based windows can fall between data points and leave
+# categories empty.
+#
 # Reference:
 #   Rogers, E. M. (2003). Diffusion of Innovations (5th ed.).
 #   Free Press, New York. (Original work published 1962)
+
+use_quantile_breakpoints <- TRUE
 
 # Canonical Rogers category order and colour palette
 .rogers_levels <- c("Innovators", "Early Adopters", "Early Majority",
@@ -1234,7 +1241,7 @@ compute_timeline <- function(proj_df, threshold) {
   finite_years <- tl$AdoptionYear[is.finite(tl$AdoptionYear)]
   fmt_yr       <- function(y) as.integer(round(y))
 
-  # Require at least 2 adopters to compute a meaningful σ
+  # Require at least 2 adopters to compute meaningful breakpoints
   if (length(finite_years) < 2) {
     return(tl %>% mutate(
       Category  = ifelse(is.finite(AdoptionYear), "Innovators", "Non-Adopters"),
@@ -1245,6 +1252,53 @@ compute_timeline <- function(proj_df, threshold) {
     ))
   }
 
+  if (use_quantile_breakpoints) {
+    # Rank-based Rogers assignment: regions ordered by adoption year, sequential
+    # rank percentile determines category. Ties are spread across positions so all
+    # 5 Rogers categories are populated regardless of timestep granularity.
+    # Boundary years are linearly interpolated at Rogers' percentile cutoffs
+    # (2.5th, 16th, 50th, 84th) — intermediate years are acceptable.
+    n_adopters    <- length(finite_years)
+    p1 <- 0.025; p2 <- 0.16; p3 <- 0.50; p4 <- 0.84
+
+    adopter_rows    <- which(is.finite(tl$AdoptionYear))
+    sorted_idx      <- order(finite_years)
+    sorted_years    <- finite_years[sorted_idx]
+    rank_pcts       <- (seq_len(n_adopters) - 1) / n_adopters
+
+    tl$rank_pct <- NA_real_
+    tl$rank_pct[adopter_rows[sorted_idx]] <- rank_pcts
+
+    b1 <- approx(rank_pcts, sorted_years, xout = p1, rule = 2)$y
+    b2 <- approx(rank_pcts, sorted_years, xout = p2, rule = 2)$y
+    b3 <- approx(rank_pcts, sorted_years, xout = p3, rule = 2)$y
+    b4 <- approx(rank_pcts, sorted_years, xout = p4, rule = 2)$y
+
+    result <- tl %>% mutate(
+      Category = case_when(
+        !is.finite(AdoptionYear) ~ "Non-Adopters",
+        rank_pct < p1            ~ "Innovators",
+        rank_pct < p2            ~ "Early Adopters",
+        rank_pct < p3            ~ "Early Majority",
+        rank_pct < p4            ~ "Late Majority",
+        is.finite(AdoptionYear)  ~ "Laggards",
+        TRUE                     ~ "Non-Adopters"
+      ),
+      YearRange = case_when(
+        Category == "Innovators"     ~ paste0("< ",      fmt_yr(b1)),
+        Category == "Early Adopters" ~ paste0(fmt_yr(b1), "–", fmt_yr(b2)),
+        Category == "Early Majority" ~ paste0(fmt_yr(b2), "–", fmt_yr(b3)),
+        Category == "Late Majority"  ~ paste0(fmt_yr(b3), "–", fmt_yr(b4)),
+        Category == "Laggards"       ~ paste0("≥ ",  fmt_yr(b4)),
+        TRUE                         ~ "Never"
+      ),
+      RegYear = ifelse(is.finite(AdoptionYear),
+                       paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+    )
+    return(result %>% select(-rank_pct))
+  }
+
+  # Original σ-based approach (use_quantile_breakpoints = FALSE)
   mu    <- mean(finite_years)
   sigma <- sd(finite_years)
   if (sigma < 1) sigma <- 1   # guard: collapse when all adopt in the same timestep
