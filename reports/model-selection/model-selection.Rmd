@@ -100,6 +100,14 @@ model_configs <- lapply(yaml::read_yaml(model_config_file), normalize_model_conf
 
 ```{r loading data, include=FALSE}
 
+# Enable PFM model store so all fits are cached to disk with deterministic keys
+# (formula + data hash). Adoption/stringency reports load from this store so
+# their forest plots match model-selection exactly (same fit, same Ridge λ).
+.model_store <- file.path(rprojroot::find_rstudio_root_file(),
+                           getPfmConfig("modelDir", "models"))
+dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
+options(pfm.modelDir = .model_store)
+
 # 1. Load Data
 panelData <- getPanelDataHistoricalCached(
   aggregate = TRUE, y = 2000:2022,
@@ -189,13 +197,114 @@ add_contributions <- function(fit, sector_stage, model_name, cfg) {
   row[["Theory Score"]] <- gc[["Theory Score"]]
   row[["Theory Frac."]] <- gc[["Theory Frac."]]
 
+  # FE / Theory ratio: how much of the linear predictor is driven by FE vs theory.
+  # Values > 1 mean FE dominates theory; < 1 means theory dominates.
+  fe_abs     <- abs(if (!is.null(gc[["Region FE"]]) && is.numeric(gc[["Region FE"]]))
+                      gc[["Region FE"]] else 0)
+  theory_abs <- abs(gc[["Theory Score"]])
+  row[["FE / Theory"]] <- if (!is.na(theory_abs) && theory_abs > 1e-10)
+                            round(fe_abs / theory_abs, 2) else NA_real_
+
   all_contribs <<- rbind(all_contribs, as.data.frame(row, stringsAsFactors = FALSE))
 
-  # Propagate Theory Frac. to the matching all_aics row so Summary Tables can highlight it
+  # Propagate Theory Frac. and FE / Theory to the matching all_aics row
   match_idx <- which(all_aics$Sector_Stage == sector_stage & all_aics$Model == model_name)
   if (length(match_idx) > 0) {
     if (!"Theory Frac." %in% names(all_aics)) all_aics[["Theory Frac."]] <<- NA_real_
     all_aics[["Theory Frac."]][match_idx] <<- row[["Theory Frac."]]
+    if (!"FE / Theory" %in% names(all_aics)) all_aics[["FE / Theory"]] <<- NA_real_
+    all_aics[["FE / Theory"]][match_idx] <<- row[["FE / Theory"]]
+  }
+}
+
+# Incremental R²: how much theory channels add beyond controls + FE.
+# Uses the GLM's stored complete-case model frame (m$model) exclusively —
+# this is exactly the data the model was fitted on, with correct factor levels
+# and no NA rows that could make the baseline design matrix rank-deficient.
+add_delta_r2 <- function(fit, sec_stg, model_name, cfg) {
+  if (is.null(fit) || is.null(fit$model)) return(invisible(NULL))
+  m <- fit$model
+
+  # For logistf models use their stored model slot; for GLM use m$model.
+  df <- if (inherits(m, "logistf")) {
+    tryCatch(m$model, error = function(e) NULL)
+  } else {
+    m$model   # always stored by glm() since model = TRUE is the default
+  }
+  if (is.null(df) || !is.data.frame(df) || nrow(df) == 0) return(invisible(NULL))
+
+  # Drop unused factor levels that would produce rank-deficient baselines
+  df <- droplevels(df)
+
+  # Full formula from the fitted model
+  fml_full <- tryCatch(
+    if (inherits(m, "logistf")) m$formula
+    else                         stats::formula(m$terms),
+    error = function(e) NULL
+  )
+  if (is.null(fml_full)) return(invisible(NULL))
+
+  dep_var <- tryCatch(as.character(fml_full[[2]]), error = function(e) NULL)
+  if (is.null(dep_var) || !dep_var %in% colnames(df)) return(invisible(NULL))
+
+  # Identify theory terms to strip: Actor Power, IQ, and interactions (_x_)
+  api_safe  <- make.names(c(cfg$actorPowerDrivers, cfg$actorPowerIndex))
+  iq_safe   <- make.names(cfg$instQualityDrivers)
+  is_theory <- function(term) {
+    grepl("_x_", term) ||
+    any(sapply(c(api_safe, iq_safe), function(v) grepl(paste0("^", v, "$"), term)))
+  }
+
+  all_terms  <- attr(terms(fml_full), "term.labels")
+  base_terms <- all_terms[!sapply(all_terms, is_theory)]
+  if (length(base_terms) == 0) base_terms <- "1"
+
+  fml_base <- tryCatch(
+    as.formula(paste(dep_var, "~", paste(base_terms, collapse = " + "))),
+    error = function(e) NULL
+  )
+  if (is.null(fml_base)) return(invisible(NULL))
+
+  stage <- if (grepl("Adoption", sec_stg, ignore.case = TRUE)) "Adoption" else "Stringency"
+  fam   <- if (stage == "Adoption") binomial(link = "logit") else Gamma(link = "log")
+
+  base_fit <- tryCatch(
+    suppressWarnings(glm(fml_base, data = df, family = fam,
+                          control = list(maxit = 500))),
+    error = function(e) {
+      message("[ΔR²] Baseline GLM failed for '", model_name, "': ", conditionMessage(e))
+      NULL
+    }
+  )
+  if (is.null(base_fit)) return(invisible(NULL))
+
+  # logistf stores log-likelihoods; GLM uses deviance (= -2 * loglik) — both give McFadden's R²
+  if (inherits(m, "logistf")) {
+    ll_full <- m$loglik["full"]
+    ll_null <- m$loglik["null"]
+    if (is.null(ll_full) || is.null(ll_null) || !is.finite(ll_full) || !is.finite(ll_null) || ll_null == 0) {
+      message("[ΔR²] loglik invalid for '", model_name, "'")
+      return(invisible(NULL))
+    }
+    r2_full <- 1 - ll_full / ll_null
+  } else {
+    null_dev <- m$null.deviance
+    if (is.null(null_dev) || !is.finite(null_dev) || null_dev <= 0) {
+      message("[ΔR²] null.deviance invalid for '", model_name, "': ", null_dev)
+      return(invisible(NULL))
+    }
+    r2_full <- 1 - m$deviance / null_dev
+  }
+
+  r2_base <- 1 - base_fit$deviance / base_fit$null.deviance
+  if (!is.finite(r2_full) || !is.finite(r2_base)) return(invisible(NULL))
+
+  delta <- round(r2_full - r2_base, 3)
+
+  match_idx <- which(all_aics$Sector_Stage == sec_stg & all_aics$Model == model_name)
+  if (length(match_idx) > 0) {
+    if (!"ΔR²(theory)" %in% names(all_aics)) all_aics[["ΔR²(theory)"]] <<- NA_real_
+    all_aics[["ΔR²(theory)"]][match_idx] <<- delta
   }
 }
 
@@ -276,8 +385,10 @@ add_aic <- function(fit, sector_stage, model_name, cfg) {
     Separation = separation,
     `High-Z` = highZ,
     `Max |Z|` = round(as.numeric(maxAbsZ), 1),
-    Converged = converged,
-    `Theory Frac.` = NA_real_,
+    Converged       = converged,
+    `Theory Frac.`  = NA_real_,
+    `FE / Theory`   = NA_real_,
+    `ΔR²(theory)`   = NA_real_,
     check.names = FALSE,
     stringsAsFactors = FALSE
   )
@@ -359,12 +470,139 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/forestPlot.R"))
 # Wrapper to use the shared rendering function
 plot_forest <- function(fit, title = "Coefficient Forest Plot") {
   if (is.null(fit) || is.null(fit$coeftest)) return(NULL)
-  
   df <- pfm::coeftestToDataFrame(fit$coeftest)
-  
-  if(nrow(df) == 0) return(NULL)
-  
+  if (nrow(df) == 0) return(NULL)
   render_forest_plot(df, title = title)
+}
+
+all_combo_descriptions <- data.frame(Model = character(), Description = character(), stringsAsFactors = FALSE)
+
+# Helper functions — use <<- from inside a function so the operator walks up to
+# knitr_env (where the globals live), rather than escaping to globalenv.
+add_combo_to_summary <- function(sec_stg, combo_name, base_name, cfg_p2, cfg_p3, base_cfg) {
+  combo_summary_df <<- rbind(combo_summary_df, data.frame(
+    Sector_Stage = sec_stg,
+    Combo        = combo_name,
+    Base_Model   = base_name,
+    Institution  = cfg_p2$name,
+    Region       = cfg_p3$name,
+    Actor_Power  = paste(base_cfg$actorPowerDrivers, collapse = ", "),
+    Controls     = paste(base_cfg$controlDrivers,    collapse = ", "),
+    Lagged       = as.character(base_cfg$includeLagged),
+    Region_Map   = if (is.null(cfg_p3$regionMappingFixedEffects)) "None" else cfg_p3$regionMappingFixedEffects,
+    stringsAsFactors = FALSE
+  ))
+}
+
+add_combo_description <- function(combo_name, description) {
+  if (!combo_name %in% all_combo_descriptions$Model) {
+    clean_d <- gsub("^\\*\\*What it does:\\*\\* ", "", description)
+    parts_d <- strsplit(clean_d, "\\n\\n\\*\\*Assumption:\\*\\* ")[[1]]
+    all_combo_descriptions <<- rbind(all_combo_descriptions, data.frame(
+      Model       = combo_name,
+      Description = parts_d[1],
+      stringsAsFactors = FALSE
+    ))
+  }
+}
+
+# Renders a styled kableExtra diagnostics table and prints it directly.
+# topic_name == "Phase 1: Base Model Assumptions" triggers baseline-relative scoring;
+# any other name uses global scoring across all rows.
+render_model_table <- function(sub_df, topic_name, caption_text) {
+  if (nrow(sub_df) == 0) return(invisible(NULL))
+  idx_all_three    <- which(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 & sub_df$`Sig. ActorPower` > 0)
+  idx_at_least_one <- which(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 | sub_df$`Sig. ActorPower` > 0)
+  get_col_fmt <- function(values, minimize = TRUE) {
+    n   <- length(values)
+    bg  <- rep("white", n)
+    bld <- rep(FALSE, n)
+    finite_vals <- values[is.finite(values)]
+    if (length(finite_vals) < 1) return(list(bg = bg, color = rep("black", n), bold = bld))
+    N_STEPS     <- 10L
+    green_ramp  <- grDevices::colorRampPalette(c("#f1f8e9", "#43a047"))(N_STEPS)
+    blue_ramp   <- grDevices::colorRampPalette(c("#e3f2fd", "#1e88e5"))(N_STEPS)
+    yellow_ramp <- grDevices::colorRampPalette(c("#fffde7", "#ffb300"))(N_STEPS)
+    apply_score <- function(j, score) {
+      if (is.na(score) || !is.finite(score) || score <= 0) return(invisible())
+      step   <- max(1L, min(N_STEPS, as.integer(ceiling(score * N_STEPS))))
+      bg[j] <<- if (j %in% idx_all_three)        green_ramp[step]
+                else if (j %in% idx_at_least_one) blue_ramp[step]
+                else                              yellow_ramp[step]
+      if (score >= 0.5) bld[j] <<- TRUE
+    }
+    if (topic_name == "Phase 1: Base Model Assumptions") {
+      baseline_val <- values[1L]
+      better <- which(seq_len(n) > 1L & !is.na(values) & !is.na(baseline_val) &
+                      (if (minimize) values < baseline_val else values > baseline_val))
+      if (length(better) > 0) {
+        imps    <- if (minimize) baseline_val - values[better] else values[better] - baseline_val
+        max_imp <- max(imps, na.rm = TRUE)
+        for (j in better) {
+          imp   <- if (minimize) baseline_val - values[j] else values[j] - baseline_val
+          score <- if (max_imp > 0) imp / max_imp else 1
+          apply_score(j, score)
+        }
+      }
+    } else {
+      val_min <- min(finite_vals); val_max <- max(finite_vals); rng <- val_max - val_min
+      for (j in seq_len(n)) {
+        if (is.na(values[j]) || !is.finite(values[j])) next
+        score <- if (rng > 0) { if (minimize) (val_max - values[j]) / rng else (values[j] - val_min) / rng } else 1
+        apply_score(j, score)
+      }
+    }
+    list(bg = bg, color = rep("black", n), bold = bld)
+  }
+  fmt_aic  <- get_col_fmt(sub_df$AIC,          minimize = TRUE)
+  fmt_aicc <- get_col_fmt(sub_df$AICc,         minimize = TRUE)
+  fmt_bic  <- get_col_fmt(sub_df$BIC,          minimize = TRUE)
+  fmt_hqic <- get_col_fmt(sub_df$HQIC,         minimize = TRUE)
+  fmt_ll   <- get_col_fmt(sub_df$`Log-lik`,    minimize = FALSE)
+  fmt_r2   <- get_col_fmt(sub_df$`Pseudo-R2`,  minimize = FALSE)
+  fmt_tf   <- if ("Theory Frac." %in% names(sub_df)) get_col_fmt(sub_df[["Theory Frac."]],  minimize = FALSE) else NULL
+  fmt_fet  <- if ("FE / Theory"  %in% names(sub_df)) get_col_fmt(sub_df[["FE / Theory"]],   minimize = TRUE)  else NULL
+  fmt_dr2  <- if ("ΔR²(theory)" %in% names(sub_df)) get_col_fmt(sub_df[["ΔR²(theory)"]], minimize = FALSE) else NULL
+  is_warning       <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE | sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
+  model_name_bg    <- ifelse(is_warning, "#ffebee", "white")
+  model_name_color <- ifelse(is_warning, "#c62828", "black")
+  model_name_bold  <- is_warning
+  k <- kable(sub_df, format = "html", caption = caption_text) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
+  k <- k %>%
+    column_spec(1, background = model_name_bg, color = model_name_color, bold = model_name_bold, width = "20em") %>%
+    column_spec(2, background = fmt_aic$bg,  color = fmt_aic$color,  bold = fmt_aic$bold)  %>%
+    column_spec(3, background = fmt_aicc$bg, color = fmt_aicc$color, bold = fmt_aicc$bold) %>%
+    column_spec(4, background = fmt_bic$bg,  color = fmt_bic$color,  bold = fmt_bic$bold)  %>%
+    column_spec(5, background = fmt_hqic$bg, color = fmt_hqic$color, bold = fmt_hqic$bold) %>%
+    column_spec(6, background = fmt_ll$bg,   color = fmt_ll$color,   bold = fmt_ll$bold)   %>%
+    column_spec(7, background = fmt_r2$bg,   color = fmt_r2$color,   bold = fmt_r2$bold)
+  if (!is.null(fmt_tf)) {
+    col_tf <- which(names(sub_df) == "Theory Frac.")
+    k <- k %>% column_spec(col_tf, background = fmt_tf$bg, color = fmt_tf$color, bold = fmt_tf$bold)
+  }
+  if (!is.null(fmt_fet)) {
+    col_fet <- which(names(sub_df) == "FE / Theory")
+    k <- k %>% column_spec(col_fet, background = fmt_fet$bg, color = fmt_fet$color, bold = fmt_fet$bold)
+  }
+  if (!is.null(fmt_dr2)) {
+    col_dr2 <- which(names(sub_df) == "ΔR²(theory)")
+    k <- k %>% column_spec(col_dr2, background = fmt_dr2$bg, color = fmt_dr2$color, bold = fmt_dr2$bold)
+  }
+  flag_bg    <- function(vals, bad = TRUE) ifelse(!is.na(vals) & vals == bad, "#ffcdd2", "white")
+  flag_color <- function(vals, bad = TRUE) ifelse(!is.na(vals) & vals == bad, "#c62828", "black")
+  flag_bold  <- function(vals, bad = TRUE) !is.na(vals) & vals == bad
+  col_sep  <- which(names(sub_df) == "Separation")
+  col_ovf  <- which(names(sub_df) == "Overfitting")
+  col_hz   <- which(names(sub_df) == "High-Z")
+  col_conv <- which(names(sub_df) == "Converged")
+  if (length(col_sep)  > 0) k <- k %>% column_spec(col_sep,  background = flag_bg(sub_df$Separation),       color = flag_color(sub_df$Separation),       bold = flag_bold(sub_df$Separation))
+  if (length(col_ovf)  > 0) k <- k %>% column_spec(col_ovf,  background = flag_bg(sub_df$Overfitting),      color = flag_color(sub_df$Overfitting),      bold = flag_bold(sub_df$Overfitting))
+  if (length(col_hz)   > 0) k <- k %>% column_spec(col_hz,   background = flag_bg(sub_df$`High-Z`),         color = flag_color(sub_df$`High-Z`),         bold = flag_bold(sub_df$`High-Z`))
+  if (length(col_conv) > 0) k <- k %>% column_spec(col_conv, background = flag_bg(sub_df$Converged, FALSE), color = flag_color(sub_df$Converged, FALSE), bold = flag_bold(sub_df$Converged, FALSE))
+  k <- k %>% scroll_box(width = "100%")
+  print(k)
+  cat("\n<br>\n")
 }
 ```
 
@@ -400,11 +638,7 @@ for (col in names(model_specs_formatted)) {
   }
 }
 
-print(kable(model_specs_formatted, format = "html", escape = FALSE, caption = "Summary of Tested Model Configurations") %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), full_width = FALSE, font_size = 12) %>%
-  column_spec(1, bold = TRUE))
-
-# Print model descriptions and assumptions table for the base models
+# Build base model descriptions for the Reference section
 desc_df <- data.frame(
   Model = character(),
   Description = character(),
@@ -428,15 +662,7 @@ for (m_idx in seq_along(model_configs)) {
   ))
 }
 
-print(kable(desc_df, format = "html", escape = FALSE, caption = "Model Assumptions and Descriptions") %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11, full_width = TRUE) %>%
-  column_spec(1, bold = TRUE, width = "15em") %>%
-  column_spec(2, width = "35em") %>%
-  column_spec(3, width = "35em"))
-
 ```
-
----
 
 # Results {.tabset}
 
@@ -477,26 +703,29 @@ for (stg in stages) {
           data = panelData, sector = sec,
           actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
           instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
-          includeLaggedAdoption = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
-          regionMappingFixedEffects = cfg$regionMappingFixedEffects
+          includeLaggedAdoption = cfg$includeLagged, interactRegionFE = isTRUE(cfg$interactRegionFE),
+          regionMappingFixedEffects = cfg$regionMappingFixedEffects,
+          useMundlak = isTRUE(cfg$useMundlak)
         )
       } else {
         fit <- estimatePriceStringencyModel(
           data = panelData, sector = sec,
           actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
           instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
-          includeLaggedECP = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
-          regionMappingFixedEffects = cfg$regionMappingFixedEffects
+          includeLaggedECP = cfg$includeLagged, interactRegionFE = isTRUE(cfg$interactRegionFE),
+          regionMappingFixedEffects = cfg$regionMappingFixedEffects,
+          useMundlak = isTRUE(cfg$useMundlak)
         )
       }
       
       add_aic(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
       add_contributions(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
+      add_delta_r2(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
       add_ame(fit, sec_stg, paste0(i, ". ", cfg$name), cfg)
       plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
       plots_list[[i]] <- plot_forest(fit, plot_title)
     }
-    
+
     topics <- topics_template
     # 3. Determine winners and construct dynamic combos
     c_p1 <- get_colored_models("Phase 1: Base Model Assumptions", sec_stg, all_aics, topics)
@@ -552,27 +781,17 @@ for (stg in stages) {
         local_configs[[combo_start_idx + k - 1]] <- list(
           name = combo_name,
           description = paste0("**What it does:** Combines Base Winner '", base_name, "' with best institution (", cfg_p2$name, ") and best region (", cfg_p3$name, ")."),
-          actorPowerDrivers = base_cfg$actorPowerDrivers, 
+          actorPowerDrivers = base_cfg$actorPowerDrivers,
           actorPowerIndex = base_cfg$actorPowerIndex,
-          instQualityDrivers = cfg_p2$instQualityDrivers, 
+          instQualityDrivers = cfg_p2$instQualityDrivers,
           controlDrivers = base_cfg$controlDrivers,
-          includeLagged = base_cfg$includeLagged, 
-          interactRegionFE = cfg_p3$interactRegionFE,
-          regionMappingFixedEffects = cfg_p3$regionMappingFixedEffects
+          includeLagged = base_cfg$includeLagged,
+          interactRegionFE = isTRUE(cfg_p3$interactRegionFE),
+          regionMappingFixedEffects = cfg_p3$regionMappingFixedEffects,
+          useMundlak = isTRUE(cfg_p3$useMundlak)
         )
         
-        combo_summary_df <<- rbind(combo_summary_df, data.frame(
-          Sector_Stage = sec_stg,
-          Combo = combo_name,
-          Base_Model = base_name,
-          Institution = cfg_p2$name,
-          Region = cfg_p3$name,
-          Actor_Power = paste(base_cfg$actorPowerDrivers, collapse=", "),
-          Controls = paste(base_cfg$controlDrivers, collapse=", "),
-          Lagged = as.character(base_cfg$includeLagged),
-          Region_Map = if(is.null(cfg_p3$regionMappingFixedEffects)) "None" else cfg_p3$regionMappingFixedEffects,
-          stringsAsFactors = FALSE
-        ))
+        add_combo_to_summary(sec_stg, combo_name, base_name, cfg_p2, cfg_p3, base_cfg)
       }
     }
     
@@ -588,193 +807,92 @@ for (stg in stages) {
             data = panelData, sector = sec,
             actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
             instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
-            includeLaggedAdoption = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
-            regionMappingFixedEffects = cfg$regionMappingFixedEffects
+            includeLaggedAdoption = cfg$includeLagged, interactRegionFE = isTRUE(cfg$interactRegionFE),
+            regionMappingFixedEffects = cfg$regionMappingFixedEffects,
+            useMundlak = isTRUE(cfg$useMundlak)
           )
         } else {
           fit <- estimatePriceStringencyModel(
             data = panelData, sector = sec,
             actorPowerDrivers = cfg$actorPowerDrivers, actorPowerIndex = cfg$actorPowerIndex,
             instQualityDrivers = cfg$instQualityDrivers, controlDrivers = cfg$controlDrivers,
-            includeLaggedECP = cfg$includeLagged, interactRegionFE = cfg$interactRegionFE,
-            regionMappingFixedEffects = cfg$regionMappingFixedEffects
+            includeLaggedECP = cfg$includeLagged, interactRegionFE = isTRUE(cfg$interactRegionFE),
+            regionMappingFixedEffects = cfg$regionMappingFixedEffects,
+            useMundlak = isTRUE(cfg$useMundlak)
           )
         }
         
         add_aic(fit, sec_stg, cfg$name, cfg)
         add_contributions(fit, sec_stg, cfg$name, cfg)
+        add_delta_r2(fit, sec_stg, cfg$name, cfg)
         add_ame(fit, sec_stg, cfg$name, cfg)
         plot_title <- paste0(stg, " ", sec, " - ", cfg$name)
         plots_list[[i]] <- plot_forest(fit, plot_title)
       }
     }
     
-    # 2. Render Summary Tables Sub-tab
-    cat("\n### Summary Tables\n\n")
-    
-    for (topic_name in names(topics)) {
+    # Collect combo descriptions for the Reference section
+    if (nrow(all_combos) > 0) {
+      for (i in seq(combo_start_idx, combo_start_idx + nrow(all_combos) - 1)) {
+        cfg_i <- local_configs[[i]]
+        add_combo_description(cfg_i$name, cfg_i$description)
+      }
+    }
+
+    # ── Models tab: all models in one table, global scoring ──────────────────
+    cat("\n### Models\n\n")
+    {
+      all_model_names <- unique(unlist(topics))
+      sub_df_all <- all_aics %>%
+        filter(Sector_Stage == sec_stg, Model %in% all_model_names) %>%
+        arrange(match(Model, all_model_names)) %>%
+        select(-Sector_Stage)
+      if ("Theory Frac." %in% names(sub_df_all))
+        sub_df_all <- dplyr::relocate(sub_df_all, `Theory Frac.`, .after = `Pseudo-R2`)
+      if ("FE / Theory" %in% names(sub_df_all))
+        sub_df_all <- dplyr::relocate(sub_df_all, `FE / Theory`, .after = `Theory Frac.`)
+      if ("ΔR²(theory)" %in% names(sub_df_all))
+        sub_df_all <- dplyr::relocate(sub_df_all, `ΔR²(theory)`, .after = `FE / Theory`)
+      if ("ModelNum" %in% names(sub_df_all))
+        sub_df_all <- sub_df_all %>% select(-ModelNum)
+      render_model_table(sub_df_all, "All Models", paste("All Models —", sec_stg))
+    }
+
+    # ── Base models tab: Phase 1–3 per-phase tables ─────────────────────────
+    cat("\n### Base models {.tabset}\n\n")
+    base_phase_names <- names(topics)[!grepl("Phase 4", names(topics))]
+    for (topic_name in base_phase_names) {
       target_models <- topics[[topic_name]]
-      
       sub_df <- all_aics %>%
         filter(Sector_Stage == sec_stg, Model %in% target_models) %>%
         arrange(match(Model, target_models)) %>%
         select(-Sector_Stage)
       if ("Theory Frac." %in% names(sub_df))
         sub_df <- dplyr::relocate(sub_df, `Theory Frac.`, .after = `Pseudo-R2`)
-        
-      if("ModelNum" %in% names(sub_df)) {
+      if ("FE / Theory" %in% names(sub_df))
+        sub_df <- dplyr::relocate(sub_df, `FE / Theory`, .after = `Theory Frac.`)
+      if ("ΔR²(theory)" %in% names(sub_df))
+        sub_df <- dplyr::relocate(sub_df, `ΔR²(theory)`, .after = `FE / Theory`)
+      if ("ModelNum" %in% names(sub_df))
         sub_df <- sub_df %>% select(-ModelNum)
-      }
-        
-      if(nrow(sub_df) == 0) next
-      
-      # Identify best values for styling
-      best_aic  <- min(sub_df$AIC, na.rm = TRUE)
-      best_aicc <- min(sub_df$AICc, na.rm = TRUE)
-      best_bic  <- min(sub_df$BIC, na.rm = TRUE)
-      best_hqic <- min(sub_df$HQIC, na.rm = TRUE)
-      best_ll   <- max(sub_df$`Log-lik`, na.rm = TRUE)
-      best_r2   <- max(sub_df$`Pseudo-R2`, na.rm = TRUE)
-      best_nsig <- max(sub_df$`N significant`, na.rm = TRUE)
-      
-      # Identify models matching criteria for theoretical robustness
-      idx_all_three <- which(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 & sub_df$`Sig. ActorPower` > 0)
-      idx_at_least_one <- which(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 | sub_df$`Sig. ActorPower` > 0)
-    
-      # Function to generate formatting vectors per column based on priorities
-      get_col_fmt <- function(values, minimize = TRUE) {
-        bg_colors <- rep("white", length(values))
-        bold_flags <- rep(FALSE, length(values))
-        
-        if (topic_name == "Phase 1: Base Model Assumptions") {
-          baseline_val <- values[1]
-          for (j in 2:length(values)) {
-            if (!is.na(values[j]) && !is.na(baseline_val)) {
-              is_better <- if(minimize) values[j] < baseline_val else values[j] > baseline_val
-              if (is_better) {
-                if (j %in% idx_all_three) {
-                  bg_colors[j] <- "#c8e6c9" # Light Green
-                } else if (j %in% idx_at_least_one) {
-                  bg_colors[j] <- "#bbdefb" # Light Blue
-                } else {
-                  bg_colors[j] <- "#fff9c4" # Light Yellow
-                }
-                bold_flags[j] <- TRUE
-              }
-            }
-          }
-        } else {
-          find_best <- function(idx) {
-            if(length(idx) == 0) return(NA)
-            val_subset <- values[idx]
-            if (minimize) min(val_subset, na.rm = TRUE) else max(val_subset, na.rm = TRUE)
-          }
-          
-          best_overall <- if(minimize) min(values, na.rm = TRUE) else max(values, na.rm = TRUE)
-          best_all_three <- find_best(idx_all_three)
-          best_at_least_one <- find_best(idx_at_least_one)
-          
-          if(!is.na(best_overall)) {
-            m <- which(values == best_overall)
-            bg_colors[m] <- "#fff9c4" # Light Yellow
-            bold_flags[m] <- TRUE
-          }
-          if(!is.na(best_at_least_one)) {
-            m <- which(values == best_at_least_one)
-            bg_colors[m] <- "#bbdefb" # Light Blue
-            bold_flags[m] <- TRUE
-          }
-          if(!is.na(best_all_three)) {
-            m <- which(values == best_all_three)
-            bg_colors[m] <- "#c8e6c9" # Light Green
-            bold_flags[m] <- TRUE
-          }
-        }
-        
-        list(bg = bg_colors, color = rep("black", length(values)), bold = bold_flags)
-      }
-      
-      fmt_aic  <- get_col_fmt(sub_df$AIC, minimize = TRUE)
-      fmt_aicc <- get_col_fmt(sub_df$AICc, minimize = TRUE)
-      fmt_bic  <- get_col_fmt(sub_df$BIC, minimize = TRUE)
-      fmt_hqic <- get_col_fmt(sub_df$HQIC, minimize = TRUE)
-      fmt_ll   <- get_col_fmt(sub_df$`Log-lik`, minimize = FALSE)
-      fmt_r2   <- get_col_fmt(sub_df$`Pseudo-R2`, minimize = FALSE)
-      fmt_tf   <- if ("Theory Frac." %in% names(sub_df))
-        get_col_fmt(sub_df[["Theory Frac."]], minimize = FALSE) else NULL
-
-      # Warnings (Model Name Highlight)
-      is_warning <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE | sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
-      model_name_bg <- ifelse(is_warning, "#ffebee", "white")
-      model_name_color <- ifelse(is_warning, "#c62828", "black")
-      model_name_bold <- is_warning
-        
-      # Build base table with scroll_box for wide columns
-      k <- kable(sub_df, format = "html", caption = paste("Model Diagnostics:", topic_name)) %>%
-        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), font_size = 11)
-        
-      # Apply conditional highlighting for the most important metric columns
-      k <- k %>%
-        column_spec(1, background = model_name_bg, color = model_name_color, bold = model_name_bold) %>%
-        column_spec(2, background = fmt_aic$bg, color = fmt_aic$color, bold = fmt_aic$bold) %>%
-        column_spec(3, background = fmt_aicc$bg, color = fmt_aicc$color, bold = fmt_aicc$bold) %>%
-        column_spec(4, background = fmt_bic$bg, color = fmt_bic$color, bold = fmt_bic$bold) %>%
-        column_spec(5, background = fmt_hqic$bg, color = fmt_hqic$color, bold = fmt_hqic$bold) %>%
-        column_spec(6, background = fmt_ll$bg, color = fmt_ll$color, bold = fmt_ll$bold) %>%
-        column_spec(7, background = fmt_r2$bg, color = fmt_r2$color, bold = fmt_r2$bold)
-      if (!is.null(fmt_tf)) {
-        col_tf <- which(names(sub_df) == "Theory Frac.")
-        k <- k %>% column_spec(col_tf, background = fmt_tf$bg, color = fmt_tf$color, bold = fmt_tf$bold)
-      }
-      k <- k %>% scroll_box(width = "100%")
-          
-      # Render the table
+      if (nrow(sub_df) == 0) next
       cat(sprintf("\n#### %s\n\n", topic_name))
-      print(k)
-      cat("\n<br>\n")
-      
-      # Print model descriptions (only for Phase 4: The Final Combinations, with no Assumption column)
-      if (topic_name == "Phase 4: The Final Combinations") {
-        desc_df <- data.frame(
-          Model = character(),
-          Description = character(),
-          stringsAsFactors = FALSE
-        )
-        
-        for (tm in target_models) {
-          cfg_desc <- ""
-          for (m_idx in seq_along(local_configs)) {
-            cfg <- local_configs[[m_idx]]
-            expected_name <- if (m_idx <= length(model_configs)) paste0(m_idx, ". ", cfg$name) else cfg$name
-            if (expected_name == tm) {
-              cfg_desc <- cfg$description
-              break
-            }
-          }
-          if (cfg_desc != "") {
-            clean_desc <- gsub("^\\*\\*What it does:\\*\\* ", "", cfg_desc)
-            parts <- strsplit(clean_desc, "\\n\\n\\*\\*Assumption:\\*\\* ")[[1]]
-            desc_val <- parts[1]
-            
-            desc_df <- rbind(desc_df, data.frame(
-              Model = tm, 
-              Description = desc_val, 
-              stringsAsFactors = FALSE
-            ))
-          }
-        }
-        
-        if (nrow(desc_df) > 0) {
-          print(kable(desc_df, format = "html", escape = FALSE) %>%
-            kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"), font_size = 11, full_width = TRUE) %>%
-            column_spec(1, bold = TRUE, width = "15em") %>%
-            column_spec(2, width = "70em"))
-        }
-        cat("\n<br>\n")
-      }
+      render_model_table(sub_df, topic_name, paste("Model Diagnostics:", topic_name))
     }
     
-    # 3. Render Term Contributions Sub-tab
+    # 3. Render Forest Plots Sub-tab
+    cat("\n### Forest Plots {.tabset}\n\n")
+
+    for (i in seq_along(local_configs)) {
+      if (!is.null(plots_list[[i]])) {
+        cat(sprintf("\n#### %s. %s\n\n", i, local_configs[[i]]$name))
+        cat(local_configs[[i]]$description, "\n\n")
+        print(plots_list[[i]])
+        cat("\n\n")
+      }
+    }
+
+    # 4. Render Term Contributions Sub-tab
     cat("\n### Term Contributions\n\n")
     units_lbl <- if (stg == "Adoption")
       "Mean &beta;&times;x contribution to log-odds (&eta;). Positive = pro-adoption; negative = contra-adoption."
@@ -795,28 +913,21 @@ for (stg in stages) {
 
       if (nrow(sub_c) == 0) next
 
-      # Drop columns that are entirely NA (term group absent in all models of this phase)
       sub_c <- sub_c[, !sapply(sub_c, function(x) all(is.na(x))), drop = FALSE]
-
-      # Theory Score and Theory Frac. are pre-computed in add_contributions.
-      # Reorder: group contributions first, then summary columns.
       tail_cols <- intersect(c("Theory Score", "Theory Frac.", "Total η", "Mean P"), names(sub_c))
       sub_c     <- sub_c[, c(setdiff(names(sub_c), tail_cols), tail_cols), drop = FALSE]
 
-      # Underline the row with the highest Theory Fraction
       best_theory_row <- if ("Theory Frac." %in% names(sub_c)) {
         idx <- which.max(sub_c[["Theory Frac."]])
         if (length(idx) > 0 && is.finite(sub_c[["Theory Frac."]][idx])) idx else integer(0)
       } else integer(0)
 
-      # Highlight: for each numeric column, shade the largest absolute contribution
       kbl <- kable(sub_c, format = "html", digits = 3,
                    caption = paste("Term Contributions:", topic_name)) %>%
         kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
                       font_size = 11, full_width = TRUE) %>%
         scroll_box(width = "100%")
 
-      # Colour-code numeric columns: green = largest contribution (abs) in column
       num_cols <- which(sapply(sub_c, is.numeric))
       for (j in num_cols) {
         vals    <- sub_c[[j]]
@@ -827,7 +938,6 @@ for (stg in stages) {
         }
       }
 
-      # Underline + bold the row with the highest combined theory contribution
       if (length(best_theory_row) > 0)
         kbl <- kbl %>% row_spec(best_theory_row, underline = TRUE, bold = TRUE)
 
@@ -836,36 +946,11 @@ for (stg in stages) {
       cat("\n<br>\n")
     }
 
-    # 4. Render Forest Plots Sub-tab
-    cat("\n### Forest Plots {.tabset}\n\n")
-    
-    for (i in seq_along(local_configs)) {
-      if (!is.null(plots_list[[i]])) {
-        cat(sprintf("\n#### %s. %s\n\n", i, local_configs[[i]]$name))
-        cat(local_configs[[i]]$description, "\n\n")
-        print(plots_list[[i]])
-        cat("\n\n")
-      }
-    }
-
-    # 5. Combo Configuration for this Sector/Stage
-    cat("\n### Combo Configuration\n\n")
-    local_combos <- combo_summary_df[combo_summary_df$Sector_Stage == sec_stg, ]
-    if (nrow(local_combos) > 0) {
-      print(kable(local_combos, format = "html") %>%
-        kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"),
-                      font_size = 11) %>%
-        scroll_box(width = "100%"))
-    } else {
-      cat("> No combos recorded for this sector/stage.\n")
-    }
-    cat("\n\n")
-
   }
 }
 ```
 
-# Legend {.tabset}
+# Reference {.tabset}
 
 ## Diagnostic Metrics
 
@@ -883,22 +968,276 @@ for (stg in stages) {
 * **Sig. ActorPower:** Count of significant Actor Power variables.
 * **Sig. Controls:** Count of significant macroeconomic control variables.
 * **Sig. TimeTrend:** Count of significant time-trend or path-dependency variables.
+* **Theory Frac.:** *Higher is better (0–1).* Fraction of the non-intercept linear predictor attributable to the three theoretical channels: Actor Power, Institutional Quality, and their Interaction. Computed as |Actor Power + Inst. Quality + Interaction| / Σ|all non-intercept group contributions|. A value of 0.6 means 60% of the non-constant model variation is driven by theory rather than controls, time trend, path dependency, or regional fixed effects.
+* **FE / Theory:** *Lower is better.* Ratio of |Region FE contribution| to |Theory Score|. Values > 1 mean region dummies dominate theory; values < 1 mean theory dominates. A value of 0 (Mundlak models) means no FE is used. Models with low FE / Theory are less susceptible to FE-driven overfitting and have more theory-driven predictions.
+* **ΔR²(theory):** *Higher is better.* Incremental McFadden Pseudo-R² uniquely attributable to the theory channels (Actor Power, Institutional Quality, and their Interaction). Computed as R²_full − R²_baseline, where the baseline retains all controls, region FE, time trend, and lagged terms but strips all theory variables. A value of 0.10 means the theory variables add 10 percentage points of explained variance beyond what controls and FE already explain. This is the cleanest measure of how much the theory is actually contributing — a high Pseudo-R² combined with a low ΔR²(theory) signals that controls or FE are driving the fit, not the theory.
 * **k / N:** Ratio of predictors to observations. *Lower is better.* Values above 0.1 may indicate overfitting.
 * **Overfitting:** *FALSE is better.* Flags if the k/N ratio exceeds 0.1.
 * **Separation:** *FALSE is better.* Flags potential complete or quasi-complete separation.
 * **High-Z:** *FALSE is better.* Flags extremely high Z-scores ($|Z| > 15$), usually a symptom of numerical instability.
 * **Max |Z|:** *Lower is better.* The maximum absolute Z-score among the predictors.
 * **Converged:** *TRUE is better.* Indicates if the optimization algorithm reached a solution.
-* **Theory Frac.:** *Higher is better (0–1).* Fraction of the non-intercept linear predictor attributable to the three theoretical channels: Actor Power, Institutional Quality, and their Interaction. Computed as |Actor Power + Inst. Quality + Interaction| / Σ|all non-intercept group contributions|. A value of 0.6 means 60% of the non-constant model variation is driven by theory rather than controls, time trend, path dependency, or regional fixed effects. Use this to compare how "theory-driven" each specification is relative to its own scale of prediction.
 
-## Highlight Legend
+## Colour Guide
 
-* <span style="background-color: #c8e6c9; padding: 2px 4px; font-weight: bold;">Light Green</span>: **Best Model with All Three Theories** (Lowest AIC among models that have at least one significant interaction, one significant institutional quality, and one significant actor power term).
-* <span style="background-color: #bbdefb; padding: 2px 4px; font-weight: bold;">Light Blue</span>: **Best Model with At Least One Theory** (Lowest AIC among models that have significant coefficients for at least one of those three theoretical clusters).
-* <span style="background-color: #fff9c4; padding: 2px 4px; font-weight: bold;">Light Yellow</span>: **Best Model Overall** (Lowest AIC in the table).
-* <span style="background-color: #ffebee; color: #c62828; padding: 2px 4px; font-weight: bold;">Red (Model Name)</span>: **Warning Flag** indicates a model suffering from Overfitting, Separation, abnormally High Z-scores, or failure to Converge.
+### Colour Families
 
-*(Note: Ranking colors overwrite each other in priority. Green overwrites Blue and Yellow, Blue overwrites Yellow).*
+Each cell is coloured based on the **theoretical robustness** of that model row — determined by whether the three theoretical channels (Actor Power, Institutional Quality, Interaction) produce statistically significant terms:
+
+<table style="border-collapse:collapse; margin-bottom:16px;">
+<tr>
+  <td style="padding:6px 12px;">
+    <span style="background:linear-gradient(to right,#f1f8e9,#43a047); display:inline-block; width:140px; height:20px; border-radius:3px; border:1px solid #ccc;"></span>
+  </td>
+  <td style="padding:6px 12px; font-weight:bold;">Green</td>
+  <td style="padding:6px 12px;">Model has <strong>at least one significant term in all three</strong> theory groups (Actor Power, Institutional Quality, and Interaction).</td>
+</tr>
+<tr>
+  <td style="padding:6px 12px;">
+    <span style="background:linear-gradient(to right,#e3f2fd,#1e88e5); display:inline-block; width:140px; height:20px; border-radius:3px; border:1px solid #ccc;"></span>
+  </td>
+  <td style="padding:6px 12px; font-weight:bold;">Blue</td>
+  <td style="padding:6px 12px;">Model has <strong>at least one significant term in at least one</strong> theory group, but not all three.</td>
+</tr>
+<tr>
+  <td style="padding:6px 12px;">
+    <span style="background:linear-gradient(to right,#fffde7,#ffb300); display:inline-block; width:140px; height:20px; border-radius:3px; border:1px solid #ccc;"></span>
+  </td>
+  <td style="padding:6px 12px; font-weight:bold;">Yellow</td>
+  <td style="padding:6px 12px;">Model has <strong>no significant theory terms</strong>. Improvements are driven by controls, FE, or path dependency rather than theory.</td>
+</tr>
+</table>
+
+### Gradient Intensity
+
+Within each colour family, the **shade intensity** encodes how good the value is relative to the other models in the same column:
+
+* **Darkest shade** → best value in the column for that metric
+* **Lightest shade** → value closest to the worst in the column
+* **White** → missing value or (Base models Phase 1 only) worse than baseline
+
+Intensity is computed as a normalised score:
+$$\text{score} = \frac{\text{best} - \text{value}}{\text{best} - \text{worst}} \quad \text{(lower-is-better metrics)}$$
+
+Scores are mapped to 10 discrete gradient steps. **Bold text** = score ≥ 0.5 (top half of the performance range).
+
+### Scoring behaviour
+
+* **Models tab:** every row is scored globally — all models compete in the same column, so the full gradient is visible across base models and combos simultaneously.
+* **Base models tab — Phase 1:** only models that *beat the baseline* are coloured; intensity reflects the magnitude of improvement. Models equal to or worse than baseline remain white.
+* **Base models tab — Phases 2–3:** every row is scored globally within the phase table.
+
+### Other formatting
+
+* <span style="background-color: #ffebee; color: #c62828; padding: 2px 6px; font-weight:bold; border-radius:3px;">Red model name</span> — **Warning flag**: model has Overfitting = TRUE, Separation = TRUE, High-Z = TRUE, or Converged = FALSE. Treat results from flagged models with caution.
+* <span style="background-color: #ffcdd2; color: #c62828; padding: 2px 6px; border-radius:3px;">Red cell</span> — **Flag cell**: the individual Separation, Overfitting, High-Z, or Converged cell that triggered the warning.
+* **Mundlak models** have FE / Theory = 0 (no region FE contribution) and will always receive the darkest shade in the FE / Theory column.
+* **ΔR²(theory)** is gradient-coloured with higher = better (darker). A model with ΔR²(theory) = 0 would mean the theory variables add nothing beyond controls — it appears white regardless of group.
+* **Green overwrites Blue** and **Blue overwrites Yellow** when a model qualifies for multiple groups — the most theory-rich group always takes precedence.
+
+## Model Configurations
+
+```{r ref-model-configurations, echo=FALSE, results='asis'}
+print(kable(model_specs_formatted, format = "html", escape = FALSE,
+            caption = "Summary of Tested Model Configurations") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+                full_width = FALSE, font_size = 12) %>%
+  column_spec(1, bold = TRUE))
+```
+
+## Model Descriptions
+
+```{r ref-model-descriptions, echo=FALSE, results='asis'}
+print(kable(desc_df, format = "html", escape = FALSE,
+            caption = "Base Model Assumptions and Descriptions") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+                font_size = 11, full_width = TRUE) %>%
+  column_spec(1, bold = TRUE, width = "15em") %>%
+  column_spec(2, width = "35em") %>%
+  column_spec(3, width = "35em"))
+
+if (nrow(all_combo_descriptions) > 0) {
+  cat("\n\n**Combination Models** — descriptions reflect the sector/stage run in which each combo first appeared:\n\n")
+  print(kable(all_combo_descriptions, format = "html", escape = FALSE,
+              caption = "Combination Model Descriptions") %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+                  font_size = 11, full_width = TRUE) %>%
+    column_spec(1, bold = TRUE, width = "15em") %>%
+    column_spec(2, width = "70em"))
+}
+```
+
+## Combo Assembly {.tabset}
+
+```{r ref-combo-assembly, echo=FALSE, results='asis'}
+if (nrow(combo_summary_df) == 0) {
+  cat("> No combination models were generated.\n")
+} else {
+  for (sec_stg in unique(combo_summary_df$Sector_Stage)) {
+    cat(sprintf("\n### %s\n\n", sec_stg))
+    sub_combos <- combo_summary_df[combo_summary_df$Sector_Stage == sec_stg, ]
+    sub_combos$Sector_Stage <- NULL
+    print(kable(sub_combos, format = "html", row.names = FALSE,
+                caption = paste("Combo Ingredients —", sec_stg)) %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+                    font_size = 11) %>%
+      column_spec(1, bold = TRUE, width = "18em") %>%
+      scroll_box(width = "100%"))
+    cat("\n<br>\n")
+  }
+}
+```
+
+## Selection Criteria
+
+The decision procedure for identifying the best model candidate(s), applied in this order:
+
+<table style="width:100%;border-collapse:collapse;font-size:0.92em;">
+<colgroup>
+  <col style="width:4%"/>
+  <col style="width:14%"/>
+  <col style="width:16%"/>
+  <col style="width:66%"/>
+</colgroup>
+<thead>
+<tr style="background:#f5f5f5;">
+  <th style="padding:6px 8px;border:1px solid #ddd;">Step</th>
+  <th style="padding:6px 8px;border:1px solid #ddd;">Criterion</th>
+  <th style="padding:6px 8px;border:1px solid #ddd;">Direction</th>
+  <th style="padding:6px 8px;border:1px solid #ddd;">Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">1–2</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>Converged + no flags</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">TRUE / FALSE required</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>Hard gates.</strong> Eliminate models that did not converge or are flagged for Separation, High-Z, or Overfitting. Flagged models sink to the bottom of any ranking.</td></tr>
+<tr style="background:#fafafa;"><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">3</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>Theory significance tier</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">All three &gt; at least one &gt; none</td><td style="padding:6px 8px;border:1px solid #ddd;">Prefer 🟢 green (Interactions + InstQual + ActorPower all significant) over 🔵 blue (at least one) over 🟡 yellow (none). Theory must be present to win.</td></tr>
+<tr><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">4</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>ΔR²(theory)</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">Higher is better</td><td style="padding:6px 8px;border:1px solid #ddd;">Within the best tier: theory channels must add unique explanatory power beyond controls and FE. A high Pseudo-R² with low ΔR²(theory) signals controls are doing the work, not theory.</td></tr>
+<tr style="background:#fafafa;"><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">5</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>AIC / AICc / BIC / HQIC</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">Lower is better</td><td style="padding:6px 8px;border:1px solid #ddd;">Fit-vs-complexity penalty. BIC is strictest on parsimony; prefer models where multiple criteria agree. A model that wins all four is a strong candidate.</td></tr>
+<tr><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">6</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>Pseudo-R²</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">Higher is better</td><td style="padding:6px 8px;border:1px solid #ddd;">Overall model fit against the null model (McFadden). Combined with ΔR²(theory) this shows whether the total fit and the theory contribution move together.</td></tr>
+<tr style="background:#fafafa;"><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">7</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>Theory Frac.</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">Higher is better (≥ 0.25)</td><td style="padding:6px 8px;border:1px solid #ddd;">Theory channels should drive ≥ 25% of the non-intercept linear predictor. Values below 0.25 indicate the model is mostly explained by controls, time trend, or FE.</td></tr>
+<tr><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">8</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>FE / Theory</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">Lower is better (0 = Mundlak)</td><td style="padding:6px 8px;border:1px solid #ddd;">Ratio of region-FE contribution to theory score. Values &gt; 1 mean dummies dominate theory. Mundlak models are always 0. Prefer models where theory dominates FE.</td></tr>
+<tr style="background:#fafafa;"><td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">9</td><td style="padding:6px 8px;border:1px solid #ddd;"><strong>k / N</strong></td><td style="padding:6px 8px;border:1px solid #ddd;">Lower is better (&lt; 0.1)</td><td style="padding:6px 8px;border:1px solid #ddd;">Parsimony guard: ratio of predictors to observations. Values above 0.1 risk overfitting; models exceeding this threshold are already flagged in Step 2.</td></tr>
+</tbody>
+</table>
+
+<br>Steps 1–2 are eliminatory. Step 3 defines the tier. Within a tier, steps 4–8 resolve ties in priority order: a model with high ΔR²(theory) and slightly worse AIC beats one with the best AIC but minimal theory contribution.
+
+# Model Rankings {.tabset}
+
+All fitted models ranked from best to worst per sector/stage using the Selection Criteria sort key: flagged models last → theory tier (🟢 green first) → ΔR²(theory) descending → AIC ascending.
+
+**Rank columns (Rk.\*)** show each model's position on that individual criterion across all models in the table — **1 = best**. When a model's Rk.\* value is much lower than its overall position `#`, that criterion favours it more than the composite sort does; when it is much higher, that criterion works against it. A consistent pattern across multiple Rk.\* columns confirms the ranking; diverging ranks signal trade-offs worth scrutinising.
+
+```{r model-rankings, echo=FALSE, results='asis', warning=FALSE}
+rank_asc  <- function(x) rank( x, ties.method = "min", na.last = TRUE)
+rank_desc <- function(x) rank(-x, ties.method = "min", na.last = TRUE)
+
+tier_label <- function(inter, iq, ap) {
+  ifelse(inter > 0 & iq > 0 & ap > 0, "\U0001f7e2 Green",
+    ifelse(inter > 0 | iq > 0 | ap > 0, "\U0001f535 Blue", "\U0001f7e1 Yellow"))
+}
+
+for (stg in c("Adoption", "Stringency")) {
+  for (sec in c("Diffuse", "Bulk")) {
+    sec_stg <- paste0(stg, ": ", sec)
+    cat(sprintf("\n## %s\n\n", sec_stg))
+
+    sub_df <- all_aics %>% filter(Sector_Stage == sec_stg) %>% select(-Sector_Stage)
+    if (nrow(sub_df) == 0) { cat("> No models available.\n\n"); next }
+    if (!"ModelNum" %in% names(sub_df)) sub_df$ModelNum <- NA_integer_
+    sub_df <- sub_df %>% select(-any_of("ModelNum"))
+
+    is_flagged   <- sub_df$Overfitting == TRUE | sub_df$Separation == TRUE |
+                    sub_df$`High-Z` == TRUE | sub_df$Converged == FALSE
+    theory_tier  <- ifelse(sub_df$`Sig. Interactions` > 0 & sub_df$`Sig. InstQual` > 0 &
+                             sub_df$`Sig. ActorPower` > 0, 1L,
+                    ifelse(sub_df$`Sig. Interactions` > 0 | sub_df$`Sig. InstQual` > 0 |
+                             sub_df$`Sig. ActorPower` > 0, 2L, 3L))
+    dr2_vals     <- if ("ΔR²(theory)" %in% names(sub_df)) sub_df[["ΔR²(theory)"]] else rep(NA_real_, nrow(sub_df))
+    aic_vals     <- sub_df$AIC
+
+    ord <- order(as.integer(is_flagged), theory_tier, -dr2_vals, aic_vals, na.last = TRUE)
+    sub_df       <- sub_df[ord, ]
+    is_flagged   <- is_flagged[ord]
+    theory_tier  <- theory_tier[ord]
+    dr2_vals     <- dr2_vals[ord]
+    aic_vals     <- aic_vals[ord]
+
+    n <- nrow(sub_df)
+
+    # Per-criterion ranks (1 = best for that criterion)
+    rk_flag <- rank(as.integer(is_flagged), ties.method = "min")
+    rk_tier <- rank(theory_tier,            ties.method = "min")
+    rk_dr2  <- rank_desc(dr2_vals)
+    rk_aic  <- rank_asc(aic_vals)
+    rk_bic  <- rank_asc(sub_df$BIC)
+    rk_hqic <- rank_asc(sub_df$HQIC)
+    rk_r2   <- rank_desc(sub_df$`Pseudo-R2`)
+    rk_tf   <- if ("Theory Frac." %in% names(sub_df)) rank_desc(sub_df[["Theory Frac."]]) else rep(NA_integer_, n)
+    rk_fet  <- if ("FE / Theory"  %in% names(sub_df)) rank_asc(sub_df[["FE / Theory"]])   else rep(NA_integer_, n)
+    rk_kn   <- rank_asc(sub_df$`k / N`)
+
+    # Helper: rank (value) — rank outside, value in parentheses
+    vr <- function(vals, ranks, digits = 2) {
+      mapply(function(v, r) {
+        vstr <- if (is.na(v) || !is.finite(v)) "—" else formatC(round(v, digits), digits = digits, format = "f")
+        paste0(r, " (", vstr, ")")
+      }, vals, ranks, SIMPLIFY = TRUE)
+    }
+
+    tier_names <- c("1" = "Green", "2" = "Blue", "3" = "Yellow")
+
+    out <- data.frame(
+      `#`      = seq_len(n),
+      Model    = sub_df$Model,
+      Flag     = paste0(rk_flag, " (", ifelse(is_flagged, "Yes", "No"), ")"),
+      Tier     = paste0(rk_tier, " (", tier_names[as.character(theory_tier)], ")"),
+      `ΔR²` = vr(dr2_vals,           rk_dr2,  3),
+      AIC      = vr(aic_vals,                   rk_aic,  1),
+      BIC      = vr(sub_df$BIC,                 rk_bic,  1),
+      HQIC     = vr(sub_df$HQIC,                rk_hqic, 1),
+      `R²`= vr(sub_df$`Pseudo-R2`,         rk_r2,   3),
+      TFrac    = vr(if ("Theory Frac." %in% names(sub_df)) sub_df[["Theory Frac."]] else rep(NA_real_, n), rk_tf, 3),
+      `FE/Th`  = vr(if ("FE / Theory"  %in% names(sub_df)) sub_df[["FE / Theory"]]  else rep(NA_real_, n), rk_fet, 3),
+      `k/N`    = vr(sub_df$`k / N`,             rk_kn,   3),
+      check.names = FALSE,
+      stringsAsFactors = FALSE
+    )
+
+    # Colour maps
+    ramp_green <- grDevices::colorRampPalette(c("#a5d6a7", "white"))(n)
+    tier_bg  <- c("Green" = "#c8e6c9", "Blue" = "#bbdefb", "Yellow" = "#fff9c4")
+
+    make_bg <- function(ranks) {
+      ifelse(is.na(ranks), "white", ramp_green[pmin(pmax(as.integer(ranks), 1L), n)])
+    }
+
+    k <- kable(out, format = "html", caption = paste("Model Rankings —", sec_stg),
+               escape = FALSE) %>%
+      kable_styling(bootstrap_options = c("hover", "condensed", "responsive"),
+                    font_size = 12, full_width = TRUE) %>%
+      row_spec(0, extra_css = "white-space:normal;word-break:break-word;padding:3px 5px;font-size:0.9em;") %>%
+      column_spec(1, bold = TRUE, width = "2em",  extra_css = "padding:2px 4px;") %>%
+      column_spec(2, width = "26em", extra_css = "padding:2px 4px;") %>%
+      column_spec(3,  # Flag
+        background = ifelse(is_flagged, "#ffcdd2", make_bg(rk_flag)),
+        color      = ifelse(is_flagged, "#c62828", "black")) %>%
+      column_spec(4,  # Tier
+        background = tier_bg[sub("^\\d+\\s*\\((.+)\\)$", "\\1", out$Tier)]) %>%
+      column_spec(5,  background = make_bg(rk_dr2))  %>%
+      column_spec(6,  background = make_bg(rk_aic))  %>%
+      column_spec(7,  background = make_bg(rk_bic))  %>%
+      column_spec(8,  background = make_bg(rk_hqic)) %>%
+      column_spec(9,  background = make_bg(rk_r2))   %>%
+      column_spec(10, background = make_bg(rk_tf))   %>%
+      column_spec(11, background = make_bg(rk_fet))  %>%
+      column_spec(12, background = make_bg(rk_kn))
+
+    k <- k %>% scroll_box(width = "100%")
+    print(k)
+    cat("\n<br>\n")
+  }
+}
+```
 
 # Average Marginal Effects (AME) Comparison {.tabset}
 

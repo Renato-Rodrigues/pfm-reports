@@ -224,6 +224,34 @@ getPanelDataHistoricalCached <- function(
 #' @param forceRecompute Logical. If TRUE, bypasses cache and recomputes.
 #' @return A magpie object.
 #' @export
+#' Load a model config entry from a best-green-models-style YAML file
+#'
+#' Reads a YAML file containing PFM model specifications (same format as
+#' model-configs/*.yml but with an added \code{model_type} field).
+#' Returns the first entry matching \code{model_type}, or NULL if none found.
+#'
+#' @param yaml_path Character. Path to the YAML file.
+#' @param model_type Character. Value to match against the entry's \code{model_type}
+#'   field, e.g. "Adoption: Bulk", "Stringency: Diffuse".
+#' @return A named list of the matching entry, or NULL.
+#' @export
+loadPfmModelConfig <- function(yaml_path, model_type) {
+  if (is.null(yaml_path) || !nzchar(yaml_path)) return(NULL)
+  if (!is_absolute_path(yaml_path)) {
+    yaml_path <- file.path(find_rstudio_root_file(), yaml_path)
+  }
+  if (!file.exists(yaml_path)) {
+    warning("loadPfmModelConfig: file not found: ", yaml_path)
+    return(NULL)
+  }
+  entries <- tryCatch(yaml::read_yaml(yaml_path), error = function(e) NULL)
+  if (is.null(entries) || !is.list(entries)) return(NULL)
+  for (entry in entries) {
+    if (identical(entry$model_type, model_type)) return(entry)
+  }
+  NULL
+}
+
 getPanelDataScenarioCached <- function(
     gdxFile,
     aggregate = TRUE,

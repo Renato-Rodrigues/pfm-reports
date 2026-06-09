@@ -86,3 +86,86 @@ get_best_diag <- function(wf, sector, stage) {
   }
   sel$bestModel
 }
+
+#' Format model coefficients into a LaTeX aligned equation for RMarkdown
+#'
+#' @param coefficients A data frame with columns \code{term}, \code{estimate}, and \code{pValue}.
+#' @param actorPowerIndex Character or NULL.
+#' @param actorPowerDrivers Character vector.
+#' @param instQualityDrivers Character vector.
+#' @param controlDrivers Character vector.
+#' @param depVar Character. Left-hand side variable (e.g. "Pr(Adoption)").
+#' @return A MathJax LaTeX block string.
+formatModelEquationLatex <- function(coefficients, actorPowerIndex = NULL, actorPowerDrivers = NULL,
+                                     instQualityDrivers = NULL, controlDrivers = NULL,
+                                     depVar = "y") {
+  if (nrow(coefficients) == 0) return("")
+
+  # Helper for significance stars
+  getStarsLatex <- function(p) {
+    if (is.na(p)) return("")
+    if (p < 0.01) return("^{***}")
+    if (p < 0.05) return("^{**}")
+    if (p < 0.1) return("^{*}")
+    return("")
+  }
+
+  # Helper for formatting individual terms
+  formatTermLatex <- function(estimate, term, pValue, isIntercept = FALSE) {
+    stars <- getStarsLatex(pValue)
+    val   <- abs(round(estimate, 3))
+    
+    if (isIntercept) {
+      sign <- if (estimate >= 0) "" else "- "
+      return(paste0(sign, val, stars))
+    } else {
+      sign  <- if (estimate >= 0) "+ " else "- "
+      
+      clean_lbl <- clean_term_plain(term)
+      clean_lbl <- gsub(" × ", " \\times ", clean_lbl)
+      
+      return(paste0(sign, val, stars, " \\cdot \\text{", clean_lbl, "}"))
+    }
+  }
+
+  safeAPI <- if (!is.null(actorPowerIndex)) make.names(actorPowerIndex) else NULL
+  safeAPD <- if (!is.null(actorPowerDrivers)) make.names(actorPowerDrivers) else NULL
+  safeIQD <- if (!is.null(instQualityDrivers)) make.names(instQualityDrivers) else NULL
+  safeCD  <- if (!is.null(controlDrivers)) make.names(controlDrivers) else NULL
+
+  df <- coefficients |>
+    dplyr::mutate(
+      group = dplyr::case_when(
+        term == "(Intercept)" ~ "1_intercept",
+        term == safeAPI | term %in% safeAPD ~ "2_actor",
+        term %in% safeIQD ~ "3_inst",
+        grepl("_x_|_interaction_", term) ~ "4_interaction",
+        term %in% safeCD ~ "5_controls",
+        term == "timeTrend" ~ "6_time",
+        grepl("regionFE", term) ~ "7_fixed_effects",
+        TRUE ~ "5_controls"
+      ),
+      term_txt = mapply(
+        formatTermLatex, estimate, term, pValue, term == "(Intercept)"
+      )
+    ) |>
+    dplyr::group_by(group) |>
+    dplyr::summarise(group_txt = paste(term_txt, collapse = " "), .groups = "drop")
+
+  eqParts <- stats::setNames(df$group_txt, df$group)
+
+  out <- paste0("$$\n\\begin{aligned}\n", depVar, " = & ")
+  if ("1_intercept" %in% names(eqParts)) {
+    out <- paste0(out, eqParts["1_intercept"])
+  }
+  
+  orderedGroups <- c("2_actor", "3_inst", "4_interaction", "5_controls", "6_time", "7_fixed_effects")
+  for (g in orderedGroups) {
+    if (g %in% names(eqParts)) {
+      out <- paste0(out, " \\\\\n& ", eqParts[g])
+    }
+  }
+  out <- paste0(out, "\n\\end{aligned}\n$$")
+  return(out)
+}
+

@@ -92,6 +92,7 @@ library(rprojroot)
 
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/modelHelpers.R"))
 
 `%||%` <- function(x, y) if (!is.null(x) && length(x) > 0 && nchar(as.character(x[1])) > 0) x else y
 
@@ -2408,33 +2409,33 @@ cat(sprintf("**Adoption threshold:** %s\n\n", adoption_threshold))
 
 **Bulk model formula:**
 
-```{r formula-bulk, echo=FALSE, comment=""}
+```{r formula-bulk, echo=FALSE, results='asis'}
 if (!is.null(fit_bulk)) {
-  cat(pfm::formatModelEquation(
+  cat(formatModelEquationLatex(
     coefficients       = pfm::coeftestToDataFrame(fit_bulk$coeftest),
     actorPowerIndex    = "Actor Power Index",
     actorPowerDrivers  = NULL,
     instQualityDrivers = model_instQualityDrivers,
     controlDrivers     = model_controlDrivers,
-    includeLegend      = FALSE,
-    prefix             = "  Pr(Bulk Adoption) ~ "
-  ), "\n")
+    depVar             = "\\text{logit}\\left(\\text{Pr}(\\text{Bulk Adoption})\\right)"
+  ), "\n\n")
+  cat("Significance codes: $^{***}\\ p < 0.01$, $^{**}\\ p < 0.05$, $^{*}\\ p < 0.1$.\n")
 }
 ```
 
 **Diffuse model formula:**
 
-```{r formula-diffuse, echo=FALSE, comment=""}
+```{r formula-diffuse, echo=FALSE, results='asis'}
 if (!is.null(fit_diffuse)) {
-  cat(pfm::formatModelEquation(
+  cat(formatModelEquationLatex(
     coefficients       = pfm::coeftestToDataFrame(fit_diffuse$coeftest),
     actorPowerIndex    = "Actor Power Index",
     actorPowerDrivers  = NULL,
     instQualityDrivers = model_instQualityDrivers,
     controlDrivers     = model_controlDrivers,
-    includeLegend      = TRUE,
-    prefix             = "  Pr(Diffuse Adoption) ~ "
-  ), "\n")
+    depVar             = "\\text{logit}\\left(\\text{Pr}(\\text{Diffuse Adoption})\\right)"
+  ), "\n\n")
+  cat("Significance codes: $^{***}\\ p < 0.01$, $^{**}\\ p < 0.05$, $^{*}\\ p < 0.1$.\n")
 }
 ```
 

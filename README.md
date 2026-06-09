@@ -69,7 +69,14 @@ You can build a specific report and customize its paths interactively.
   Rscript createReports.R 5   # Builds panel-data-input
   ```
 
-### Method C: Manual Render (R Console)
+### Method C: Running Selected Models with Custom Configuration
+To run the adoption model (`1`) and price stringency model (`7`) using the configurations defined in `selected-models.yml` (naming the output report `selected-models` and keeping caches):
+
+```powershell
+PS C:\Users\renatoro\Desktop\Projects\Elevate\code\_code\pfm-reports> Rscript createReports.R 1,7 --adoptionConfig=reports/model-selection/model-configs/selected-models.yml --stringencyConfig=reports/model-selection/model-configs/selected-models.yml --reportName=selected-models --no-clear
+```
+
+### Method D: Manual Render (R Console)
 If you prefer to render a single report manually without the launcher:
 ```R
 library(rmarkdown)

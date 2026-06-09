@@ -69,7 +69,10 @@ cli_country        <- NULL
 cli_country_name   <- NULL
 cli_model_configs  <- NULL    # comma-separated config names/paths for model-selection
 cli_adoption_name  <- NULL    # --reportName= suffix for adoption-model output file
+cli_adoption_config  <- NULL  # --adoptionConfig=  YAML path for adoption-model
+cli_stringency_config <- NULL # --stringencyConfig= YAML path for stringency-model
 cli_verbose        <- FALSE   # --verbose / -v: show all subprocess output
+cli_timeline_classification <- NULL
 
 for (a in args) {
   if (a %in% c("--madrat", "--all-caches")) {
@@ -86,6 +89,12 @@ for (a in args) {
     cli_model_configs  <- trimws(strsplit(sub("^--modelConfig=", "", a), ",")[[1]])
   } else if (startsWith(a, "--reportName=")) {
     cli_adoption_name  <- trimws(sub("^--reportName=", "", a))
+  } else if (startsWith(a, "--adoptionConfig=")) {
+    cli_adoption_config  <- trimws(sub("^--adoptionConfig=", "", a))
+  } else if (startsWith(a, "--timelineClassification=")) {
+    cli_timeline_classification <- trimws(sub("^--timelineClassification=", "", a))
+  } else if (startsWith(a, "--stringencyConfig=")) {
+    cli_stringency_config <- trimws(sub("^--stringencyConfig=", "", a))
   } else if (a %in% c("--verbose", "-v")) {
     cli_verbose <- TRUE
   } else if (!startsWith(a, "--")) {
@@ -275,7 +284,7 @@ if ("model-selection" %in% chosen) {
   })
 }
 
-# ── Resolve report name for adoption-model report ────────────────────────────
+# ── Resolve report name and optional model config for adoption-model ──────────
 if ("adoption-model" %in% chosen) {
   if (!is.null(cli_adoption_name)) {
     adoption_name <- cli_adoption_name
@@ -287,7 +296,21 @@ if ("adoption-model" %in% chosen) {
   } else {
     adoption_name <- "default"
   }
-  report_extra_args[["adoption-model"]] <- list(paste0("--reportName=", adoption_name))
+  adp_args <- paste0("--reportName=", adoption_name)
+  if (!is.null(cli_adoption_config))
+    adp_args <- c(adp_args, paste0("--modelConfig=", cli_adoption_config))
+  if (!is.null(cli_timeline_classification))
+    adp_args <- c(adp_args, paste0("--timelineClassification=", cli_timeline_classification))
+  report_extra_args[["adoption-model"]] <- list(adp_args)
+}
+
+# ── Resolve optional model config for stringency-model ────────────────────────
+if ("stringency-model" %in% chosen) {
+  str_name <- if (!is.null(cli_adoption_name)) cli_adoption_name else "default"
+  str_args <- paste0("--reportName=", str_name)
+  if (!is.null(cli_stringency_config))
+    str_args <- c(str_args, paste0("--modelConfig=", cli_stringency_config))
+  report_extra_args[["stringency-model"]] <- list(str_args)
 }
 
 cat(sprintf("Cache mode  : %s\n", switch(cache_mode,
@@ -308,8 +331,16 @@ if ("model-selection" %in% chosen) {
   cat(sprintf("Model configs: %s\n", paste(mc_stems, collapse = ", ")))
 }
 if ("adoption-model" %in% chosen) {
-  an <- sub("^--reportName=", "", report_extra_args[["adoption-model"]][[1]])
+  an <- sub("^--reportName=", "", report_extra_args[["adoption-model"]][[1]][1])
   cat(sprintf("Adoption name: %s\n", an))
+  if (!is.null(cli_adoption_config))
+    cat(sprintf("Adoption config: %s\n", cli_adoption_config))
+}
+if ("stringency-model" %in% chosen) {
+  sn <- sub("^--reportName=", "", report_extra_args[["stringency-model"]][[1]][1])
+  cat(sprintf("Stringency name: %s\n", sn))
+  if (!is.null(cli_stringency_config))
+    cat(sprintf("Stringency config: %s\n", cli_stringency_config))
 }
 cat("\n")
 
