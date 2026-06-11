@@ -1,5 +1,12 @@
 library(pfm)
 
+# Null-coalescing operator — returns x if non-NULL, otherwise y.
+# Defined here so all reports that source modelHelpers.R have it available
+# without relying on rlang being on the search path.
+if (!exists("%||%", mode = "function")) {
+  `%||%` <- function(x, y) if (!is.null(x)) x else y
+}
+
 #' Convert a model-matrix term name to a plain-text label (for ggplot2 axes)
 #'
 #' Handles interactions, (WGI)/(VDem) suffixes, regionFE prefix, timeTrend,

@@ -24,12 +24,15 @@ render_report <- function(
     cacheDir                   = getPfmConfig("cacheDir",    ""),
     gdxPath                    = getPfmConfig("gdxPath",     "data/fulldata.gdx"),
     modelName                  = getPfmConfig("modelName",   "Baseline + Rule of Law"),
-    modelConfigFile            = NULL,
+    modelConfigFile            = getPfmConfig("stringencyModelConfig",
+                                               "reports/model-selection/model-configs/selected-models-v2.yml"),
     # Bulk stringency config
     instQualityDriversBulk     = c("Government Effectiveness (WGI)", "Rule of Law (VDem)"),
     controlDriversBulk         = c("GDP per Capita", "Hydro Nuclear Share"),
     regionMappingFEBulk        = getPfmConfig("regionMappingFE", "regionmappingH12.csv"),
     includeLaggedBulk          = getPfmConfig("includeLagged", FALSE),
+    logisticTimeTrendBulk      = FALSE,
+    useMundlakBulk             = FALSE,
     actorPowerDriversBulk      = NULL,
     actorPowerIndexBulk        = "Actor Power Index",
     # Diffuse stringency config (NULL → fall back to Bulk values)
@@ -37,6 +40,8 @@ render_report <- function(
     controlDriversDiffuse      = NULL,
     regionMappingFEDiffuse     = NULL,
     includeLaggedDiffuse       = NULL,
+    logisticTimeTrendDiffuse   = NULL,
+    useMundlakDiffuse          = NULL,
     actorPowerDriversDiffuse   = NULL,
     actorPowerIndexDiffuse     = NULL,
     # Adoption model config (for projection gating)
@@ -73,6 +78,8 @@ render_report <- function(
       if (!is.null(cfg_bulk$regionMappingFixedEffects))
         regionMappingFEBulk <- cfg_bulk$regionMappingFixedEffects
       if (!is.null(cfg_bulk$includeLagged))       includeLaggedBulk        <- isTRUE(cfg_bulk$includeLagged)
+      if (!is.null(cfg_bulk$logisticTimeTrend))  logisticTimeTrendBulk    <- isTRUE(cfg_bulk$logisticTimeTrend)
+      if (!is.null(cfg_bulk$useMundlak))         useMundlakBulk           <- isTRUE(cfg_bulk$useMundlak)
       if (!is.null(cfg_bulk$actorPowerDrivers))  actorPowerDriversBulk    <- cfg_bulk$actorPowerDrivers
       if (!is.null(cfg_bulk$actorPowerIndex))    actorPowerIndexBulk      <- cfg_bulk$actorPowerIndex
       if (!is.null(cfg_bulk$name) && reportName == "default")
@@ -87,7 +94,9 @@ render_report <- function(
       if (!is.null(cfg_diffuse$controlDrivers))     controlDriversDiffuse     <- cfg_diffuse$controlDrivers
       if (!is.null(cfg_diffuse$regionMappingFixedEffects))
         regionMappingFEDiffuse <- cfg_diffuse$regionMappingFixedEffects
-      if (!is.null(cfg_diffuse$includeLagged))       includeLaggedDiffuse      <- isTRUE(cfg_diffuse$includeLagged)
+      if (!is.null(cfg_diffuse$includeLagged))      includeLaggedDiffuse      <- isTRUE(cfg_diffuse$includeLagged)
+      if (!is.null(cfg_diffuse$logisticTimeTrend))  logisticTimeTrendDiffuse  <- isTRUE(cfg_diffuse$logisticTimeTrend)
+      if (!is.null(cfg_diffuse$useMundlak))         useMundlakDiffuse         <- isTRUE(cfg_diffuse$useMundlak)
       if (!is.null(cfg_diffuse$actorPowerDrivers))  actorPowerDriversDiffuse  <- cfg_diffuse$actorPowerDrivers
       if (!is.null(cfg_diffuse$actorPowerIndex))    actorPowerIndexDiffuse    <- cfg_diffuse$actorPowerIndex
     }
@@ -121,6 +130,8 @@ render_report <- function(
       controlDriversBulk         = controlDriversBulk,
       regionMappingFEBulk        = if (is.null(regionMappingFEBulk)) "" else regionMappingFEBulk,
       includeLaggedBulk          = isTRUE(includeLaggedBulk),
+      logisticTimeTrendBulk      = isTRUE(logisticTimeTrendBulk),
+      logisticTimeTrendDiffuse   = logisticTimeTrendDiffuse,
       actorPowerDriversBulk      = actorPowerDriversBulk,
       actorPowerIndexBulk        = actorPowerIndexBulk,
       instQualityDriversDiffuse  = instQualityDriversDiffuse,
@@ -155,5 +166,10 @@ for (a in args) {
 render_report(
   reportName      = if (!is.null(report_name_arg)) report_name_arg
                     else getPfmConfig("reportName", "default"),
-  modelConfigFile = model_config_arg
+  modelConfigFile = if (!is.null(model_config_arg)) model_config_arg
+                    else if (!is.null(report_name_arg) && report_name_arg == "best")
+                      "reports/model-selection/model-configs/selected-models-best.yml"
+                    else if (!is.null(report_name_arg) && report_name_arg == "best-prediction")
+                      "reports/model-selection/model-configs/selected-models-v2-prediction.yml"
+                    else NULL
 )

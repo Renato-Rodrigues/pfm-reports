@@ -31,3 +31,8 @@ env/
 
 # User config file
 config.yml
+scripts/
+
+# Model-selection configuration files
+reports/model-selection/model-configs/*.yml
+reports/model-selection/model-configs/*.yaml

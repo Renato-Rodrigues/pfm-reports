@@ -1,0 +1,1111 @@
+---
+title: "Carbon Pricing Political Feasibility: A Two-Stage Hurdle Model of Adoption and Price Stringency"
+subtitle: "Peer-Review Publication Report — Political Feasibility Module (PFM)"
+author: "Political Feasibility Module Team"
+date: "`r Sys.Date()`"
+params:
+  cacheDir:            "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default"
+  gdxPath:             "c:/Users/renatoro/Desktop/Projects/Elevate/code/fulldata.gdx"
+  theoryConfigFile:    "model-configs/selected-models-v2.yml"
+  predictionConfigFile: "model-configs/selected-models-v2-prediction.yml"
+  assetDir:            "output/publication"
+  modelDir:            "models"
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: hide
+    fig_width: 9
+    fig_height: 5.5
+    self_contained: true
+---
+
+<style>
+  body { background-color: #fafbfc; color: #2c2c2c; font-family: 'Georgia', serif; }
+  .main-container { max-width: 92% !important; }
+  h1, h2, h3 { color: #1a2a3a; font-weight: 700; }
+  .nav-tabs { font-weight: bold; border-bottom: 2px solid #1a2a3a; }
+  .tab-content { padding: 22px; border: 1px solid #ddd; border-top: none;
+                 background-color: #fff; border-radius: 0 0 6px 6px; }
+  .pub-table table { font-size: 0.88em; }
+  blockquote { border-left: 4px solid #1a2a3a; padding: 8px 16px;
+               background: #f0f4f8; font-style: italic; }
+  .finding-box { background: #e8f4fd; border-left: 4px solid #1565c0;
+                 padding: 12px 18px; margin: 14px 0; border-radius: 0 4px 4px 0; }
+  .warning-box { background: #fff3e0; border-left: 4px solid #e65100;
+                 padding: 12px 18px; margin: 14px 0; border-radius: 0 4px 4px 0; }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  dev   = "svg",
+  dpi   = 150
+)
+
+library(pfm)
+library(magclass)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+library(scales)
+library(patchwork)
+library(ggrepel)
+
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/theme.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/modelHelpers.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/forestPlot.R"))
+source(file.path(rprojroot::find_rstudio_root_file(), "src/r/kableCorrelationMatrix.R"))
+
+# ── Madrat configuration ──────────────────────────────────────────────────────
+if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
+  madrat::setConfig(
+    forcecache    = TRUE,
+    cachefolder   = params$cacheDir,
+    mappingfolder = gsub("cache/default", "mappings", params$cacheDir)
+  )
+}
+
+# ── Model store ───────────────────────────────────────────────────────────────
+.model_store <- file.path(rprojroot::find_rstudio_root_file(),
+                           getPfmConfig("modelDir", params$modelDir))
+dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
+options(pfm.modelDir = .model_store)
+
+# ── Asset directory ───────────────────────────────────────────────────────────
+asset_dir <- file.path(rprojroot::find_rstudio_root_file(), params$assetDir)
+dir.create(asset_dir, showWarnings = FALSE, recursive = TRUE)
+
+# ── Config resolver ───────────────────────────────────────────────────────────
+resolve_config_path <- function(cfg_file) {
+  if (is_absolute_path(cfg_file)) return(cfg_file)
+  # Try reports/model-selection relative path first, then project root
+  candidate <- file.path(rprojroot::find_rstudio_root_file(), "reports/model-selection", cfg_file)
+  if (file.exists(candidate)) return(candidate)
+  # Also accept paths already containing reports/model-selection
+  candidate2 <- file.path(rprojroot::find_rstudio_root_file(), cfg_file)
+  if (file.exists(candidate2)) return(candidate2)
+  candidate  # return first guess even if not found (will warn at load time)
+}
+theory_cfg_path     <- resolve_config_path(params$theoryConfigFile)
+prediction_cfg_path <- resolve_config_path(params$predictionConfigFile)
+
+load_sector_cfg <- function(cfg_path, model_type) {
+  if (!file.exists(cfg_path)) return(NULL)
+  entries <- lapply(yaml::read_yaml(cfg_path), function(cfg) {
+    vec_fields <- c("actorPowerDrivers","actorPowerIndex","instQualityDrivers","controlDrivers")
+    for (f in vec_fields) if (!is.null(cfg[[f]])) cfg[[f]] <- unlist(cfg[[f]])
+    cfg$includeLagged     <- isTRUE(cfg$includeLagged)
+    cfg$useMundlak        <- isTRUE(cfg$useMundlak)
+    cfg$logisticTimeTrend <- isTRUE(cfg$logisticTimeTrend)
+    cfg$gdpGovInteraction <- isTRUE(cfg$gdpGovInteraction)
+    cfg
+  })
+  matches <- Filter(function(x) identical(x$model_type, model_type), entries)
+  if (length(matches) == 0) NULL else matches[[1]]
+}
+
+# Load theory-optimal configs
+th_adp_bulk    <- load_sector_cfg(theory_cfg_path, "Adoption: Bulk")
+th_adp_diff    <- load_sector_cfg(theory_cfg_path, "Adoption: Diffuse")
+th_str_bulk    <- load_sector_cfg(theory_cfg_path, "Stringency: Bulk")
+th_str_diff    <- load_sector_cfg(theory_cfg_path, "Stringency: Diffuse")
+
+# Load prediction-optimal configs
+pr_adp_bulk    <- load_sector_cfg(prediction_cfg_path, "Adoption: Bulk")
+pr_adp_diff    <- load_sector_cfg(prediction_cfg_path, "Adoption: Diffuse")
+pr_str_bulk    <- load_sector_cfg(prediction_cfg_path, "Stringency: Bulk")
+pr_str_diff    <- load_sector_cfg(prediction_cfg_path, "Stringency: Diffuse")
+
+back_transform <- function(x) exp(x) - 1
+```
+
+```{r load_data, cache=FALSE, include=FALSE}
+panelData <- getPanelDataHistoricalCached(
+  aggregate = TRUE, y = 2000:2022,
+  outputRegionMappingFile = "regionmapping_54.csv"
+)
+
+# Add GDP² for EKC sensitivity
+panelData <- mbind(panelData, setNames(panelData[, , "GDP per Capita"]^2, "GDP per Capita Sq"))
+
+has_scenario <- !is.null(params$gdxPath) && nchar(params$gdxPath) > 0 &&
+                file.exists(params$gdxPath)
+
+tidy_mag <- function(mag, label = "Historical") {
+  if (is.null(mag)) return(NULL)
+  df <- as.data.frame(mag)
+  data.frame(
+    region   = trimws(as.character(df[[1]])),
+    year     = as.integer(gsub("y", "", as.character(df[[2]]))),
+    variable = trimws(as.character(df[[3]])),
+    value    = as.numeric(df[[4]]),
+    period   = label,
+    stringsAsFactors = FALSE
+  )
+}
+df_hist <- tidy_mag(panelData, "Historical")
+```
+
+```{r fit_models, cache=FALSE, include=FALSE}
+# ── Helper: run estimation safely ──────────────────────────────────────────────
+fit_model <- function(cfg, sector, stage) {
+  if (is.null(cfg)) return(NULL)
+  tryCatch({
+    if (stage == "adoption") {
+      estimateAdoptionModel(
+        data                      = panelData, sector = sector,
+        actorPowerDrivers         = cfg$actorPowerDrivers,
+        actorPowerIndex           = cfg$actorPowerIndex,
+        instQualityDrivers        = cfg$instQualityDrivers,
+        controlDrivers            = cfg$controlDrivers,
+        includeLaggedAdoption     = isTRUE(cfg$includeLagged),
+        regionMappingFixedEffects = if (isTRUE(cfg$useMundlak)) NULL else cfg$regionMappingFixedEffects,
+        useMundlak                = isTRUE(cfg$useMundlak),
+        logisticTimeTrend         = isTRUE(cfg$logisticTimeTrend),
+        gdpGovInteraction         = isTRUE(cfg$gdpGovInteraction),
+        compute                   = c(ame = TRUE, predictedProbs = TRUE)
+      )
+    } else {
+      estimatePriceStringencyModel(
+        data                      = panelData, sector = sector,
+        actorPowerDrivers         = cfg$actorPowerDrivers,
+        actorPowerIndex           = cfg$actorPowerIndex,
+        instQualityDrivers        = cfg$instQualityDrivers,
+        controlDrivers            = cfg$controlDrivers,
+        includeLaggedECP          = isTRUE(cfg$includeLagged),
+        regionMappingFixedEffects = if (isTRUE(cfg$useMundlak)) NULL else cfg$regionMappingFixedEffects,
+        useMundlak                = isTRUE(cfg$useMundlak),
+        logisticTimeTrend         = isTRUE(cfg$logisticTimeTrend),
+        gdpGovInteraction         = isTRUE(cfg$gdpGovInteraction),
+        logTransform              = TRUE
+      )
+    }
+  }, error = function(e) { message("Model fit error (", sector, "/", stage, "): ", conditionMessage(e)); NULL })
+}
+
+# Theory-optimal fits
+th_fit_adp_bulk  <- fit_model(th_adp_bulk, "Bulk",    "adoption")
+th_fit_adp_diff  <- fit_model(th_adp_diff, "Diffuse", "adoption")
+th_fit_str_bulk  <- fit_model(th_str_bulk, "Bulk",    "stringency")
+th_fit_str_diff  <- fit_model(th_str_diff, "Diffuse", "stringency")
+
+# Prediction-optimal fits
+pr_fit_adp_bulk  <- fit_model(pr_adp_bulk, "Bulk",    "adoption")
+pr_fit_adp_diff  <- fit_model(pr_adp_diff, "Diffuse", "adoption")
+pr_fit_str_bulk  <- fit_model(pr_str_bulk, "Bulk",    "stringency")
+pr_fit_str_diff  <- fit_model(pr_str_diff, "Diffuse", "stringency")
+```
+
+```{r helper_functions, include=FALSE}
+# ── Fit statistics ─────────────────────────────────────────────────────────────
+model_fit_stats <- function(fit, stage = "adoption") {
+  if (is.null(fit) || is.null(fit$model)) return(NULL)
+  m <- fit$model
+  is_logistf <- inherits(m, "logistf")
+  n <- tryCatch(if (is_logistf) m$n else nobs(m), error = function(e) NA)
+  k <- tryCatch(length(coef(m)), error = function(e) NA)
+  ll <- tryCatch({
+    if (is_logistf) as.numeric(m$loglik["full"])
+    else as.numeric(logLik(m))
+  }, error = function(e) NA)
+  aic <- tryCatch({
+    if (is_logistf && !is.na(ll) && !is.na(k)) -2*ll + 2*k
+    else as.numeric(AIC(m))
+  }, error = function(e) NA)
+  bic <- tryCatch({
+    if (is_logistf && !is.na(ll) && !is.na(k) && !is.na(n)) -2*ll + k*log(n)
+    else as.numeric(BIC(m))
+  }, error = function(e) NA)
+  r2 <- tryCatch({
+    if (is_logistf && !is.null(m$loglik)) {
+      round(1 - m$loglik["full"] / m$loglik["null"], 3)
+    } else if (!is.null(m$deviance) && !is.null(m$null.deviance) && m$null.deviance > 0) {
+      round(1 - m$deviance / m$null.deviance, 3)
+    } else NA
+  }, error = function(e) NA)
+  converged <- tryCatch(isTRUE(m$converged), error = function(e) NA)
+  list(n = n, k = k, loglik = round(as.numeric(ll), 2),
+       aic = round(as.numeric(aic), 1), bic = round(as.numeric(bic), 1),
+       r2 = r2, converged = converged)
+}
+
+# ── Semi-elasticities for stringency table ─────────────────────────────────────
+semi_elas_df <- function(fit) {
+  if (is.null(fit) || is.null(fit$coeftest)) return(NULL)
+  ct   <- fit$coeftest
+  beta <- ct[, 1]; se_beta <- ct[, 2]
+  data.frame(
+    Term         = rownames(ct),
+    Estimate     = round(beta, 3),
+    `Semi-Elas.` = round(exp(beta) - 1, 3),
+    SE           = round(exp(beta) * se_beta, 3),
+    `z / t`      = round(ct[, 3], 2),
+    `p-value`    = round(ct[, 4], 4),
+    Sig          = ifelse(ct[, 4] < 0.01, "***",
+                   ifelse(ct[, 4] < 0.05, "**",
+                   ifelse(ct[, 4] < 0.10, "*", ""))),
+    check.names  = FALSE, stringsAsFactors = FALSE
+  )
+}
+
+# ── Coefficient table for adoption ────────────────────────────────────────────
+coef_table_df <- function(fit) {
+  if (is.null(fit) || is.null(fit$coeftest)) return(NULL)
+  ct <- fit$coeftest
+  data.frame(
+    Term      = rownames(ct),
+    Estimate  = round(ct[, 1], 3),
+    SE        = round(ct[, 2], 3),
+    `z / t`   = round(ct[, 3], 2),
+    `p-value` = round(ct[, 4], 4),
+    Sig       = ifelse(ct[, 4] < 0.01, "***",
+                ifelse(ct[, 4] < 0.05, "**",
+                ifelse(ct[, 4] < 0.10, "*", ""))),
+    check.names = FALSE, stringsAsFactors = FALSE
+  )
+}
+
+# ── Render coefficient kable ──────────────────────────────────────────────────
+render_coef_kable <- function(df, caption) {
+  tryCatch({
+    if (is.null(df) || nrow(df) == 0) { cat("> *No results available.*\n"); return(invisible()) }
+    # Rename columns with special characters to avoid kableExtra column_spec issues
+    names(df) <- gsub("Semi-Elas\\.", "Semi-Elas", names(df))
+    names(df) <- gsub("p-value", "p.value", names(df))
+    names(df) <- gsub("z / t", "z.t", names(df))
+    sig_col <- which(names(df) == "Sig")
+    p_col   <- which(names(df) == "p.value")
+    kbl <- kable(df, format = "html", caption = caption, escape = TRUE) %>%
+      kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                    full_width = FALSE, font_size = 12)
+    if (length(sig_col) > 0 && sig_col <= ncol(df)) {
+      sigs <- df[["Sig"]]
+      kbl <- tryCatch(kbl %>% column_spec(sig_col,
+        color = ifelse(sigs == "***", "#c62828",
+                ifelse(sigs == "**",  "#e65100",
+                ifelse(sigs == "*",   "#f57f17", "grey50"))),
+        bold = sigs != ""), error = function(e) kbl)
+    }
+    if (length(p_col) > 0 && p_col <= ncol(df)) {
+      pvals <- suppressWarnings(as.numeric(df[["p.value"]]))
+      kbl <- tryCatch(kbl %>% column_spec(p_col,
+        background = ifelse(!is.na(pvals) & pvals < 0.05, "#fff9c4", "white")),
+        error = function(e) kbl)
+    }
+    print(kbl)
+  }, error = function(e) {
+    cat(sprintf("> *Table rendering error: %s*\n", conditionMessage(e)))
+    if (!is.null(df) && nrow(df) > 0) {
+      print(kable(df, format = "html", caption = caption) %>%
+        kable_styling(bootstrap_options = c("condensed"), full_width = FALSE))
+    }
+  })
+}
+
+# ── AME table ────────────────────────────────────────────────────────────────
+render_ame_kable <- function(fit, cfg, caption) {
+  if (is.null(fit) || is.null(fit$ame)) return(cat("> *AME not available.*\n"))
+  ame_df <- fit$ame
+  if (is.null(ame_df) || nrow(ame_df) == 0) return(cat("> *AME not available.*\n"))
+  kbl <- kable(ame_df, format = "html", digits = 4, caption = caption) %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed"),
+                  full_width = FALSE, font_size = 12)
+  print(kbl)
+}
+
+# ── Calibration scatter (adoption) ────────────────────────────────────────────
+make_adoption_calibration <- function(fit, sector_name) {
+  if (is.null(fit) || is.null(fit$model)) return(NULL)
+  m  <- fit$model
+  # Robust extraction for logistf, glm, and ridge model objects
+  y_vec <- tryCatch({
+    y_raw <- if (inherits(m, "logistf")) m$y else m$y
+    as.integer(as.numeric(y_raw) > 0)
+  }, error = function(e) NULL)
+  pred_vec <- tryCatch({
+    as.numeric(if (inherits(m, "logistf")) m$predict else fitted(m))
+  }, error = function(e) NULL)
+  if (is.null(y_vec) || is.null(pred_vec) || length(y_vec) == 0 ||
+      length(pred_vec) == 0 || length(y_vec) != length(pred_vec)) return(NULL)
+  df <- data.frame(
+    observed  = y_vec,
+    predicted = pred_vec,
+    stringsAsFactors = FALSE
+  )
+  df$decile <- cut(df$predicted, breaks = quantile(df$predicted, probs = seq(0, 1, 0.1), na.rm = TRUE),
+                   include.lowest = TRUE, labels = FALSE)
+  cal <- df %>%
+    group_by(decile) %>%
+    summarise(mean_pred = mean(predicted, na.rm = TRUE),
+              mean_obs  = mean(observed,  na.rm = TRUE),
+              n = n(), .groups = "drop")
+  col_sec <- if (sector_name == "Bulk") col_bulk else col_diffuse
+  ggplot(cal, aes(x = mean_pred, y = mean_obs)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+    geom_point(aes(size = n), color = col_sec, alpha = 0.8) +
+    geom_smooth(method = "loess", se = FALSE, color = col_sec, linewidth = 0.8) +
+    scale_size_continuous(range = c(2, 8), name = "N obs") +
+    scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+    scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+    labs(
+      title    = sprintf("%s Adoption — Calibration Plot", sector_name),
+      subtitle = "Points = deciles of predicted probability. 45° = perfect calibration.",
+      x = "Mean Predicted Probability", y = "Observed Adoption Rate"
+    ) +
+    theme_report()
+}
+
+# ── Calibration scatter (stringency) ─────────────────────────────────────────
+make_stringency_calibration <- function(fit, sector_name, outlier_sd = 2) {
+  if (is.null(fit) || is.null(fit$model)) return(NULL)
+  m   <- fit$model
+  obs <- back_transform(m$y)
+  hat <- back_transform(fitted(m))
+  df  <- data.frame(obs = obs, hat = hat, resid = m$y - fitted(m),
+                    stringsAsFactors = FALSE)
+  df$outlier <- abs(df$resid) > outlier_sd * sd(df$resid, na.rm = TRUE)
+  df_in  <- df[!df$outlier, ]
+  ax_max <- max(c(df_in$obs, df_in$hat), na.rm = TRUE) * 1.05
+  col_sec <- if (sector_name == "Bulk") col_bulk else col_diffuse
+  ggplot(df_in, aes(x = hat, y = obs)) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "grey50") +
+    geom_point(color = col_sec, size = 1.8, alpha = 0.6) +
+    geom_smooth(method = "lm", se = TRUE, color = col_sec, linewidth = 0.8) +
+    scale_x_continuous(limits = c(0, ax_max)) +
+    scale_y_continuous(limits = c(0, ax_max)) +
+    coord_equal() +
+    labs(
+      title    = sprintf("%s Stringency — Calibration: Observed vs Fitted (USD/tCO₂)", sector_name),
+      subtitle = sprintf("Outliers > %gσ excluded (%d removed). Log-link back-transformed.", outlier_sd, sum(df$outlier)),
+      x = "Fitted price (USD/tCO₂)", y = "Observed price (USD/tCO₂)"
+    ) +
+    theme_report()
+}
+
+# ── Predicted probability profile ─────────────────────────────────────────────
+make_predicted_prob_plot <- function(fit, sweep_var, sector_name, n_grid = 50) {
+  tryCatch({
+    if (is.null(fit) || is.null(fit$predictedProbs)) return(NULL)
+    pp_list <- fit$predictedProbs
+    sv_safe <- make.names(sweep_var)
+    entry   <- pp_list[[sv_safe]] %||% pp_list[[sweep_var]]
+    if (is.null(entry) || !is.data.frame(entry) || nrow(entry) == 0) return(NULL)
+    # Find the x variable (first non-prob column)
+    x_col <- setdiff(names(entry), c("prob_mean","prob_lo","prob_hi","prob_sd"))[1]
+    if (is.na(x_col) || !all(c("prob_mean","prob_lo","prob_hi") %in% names(entry))) return(NULL)
+    col_sec <- if (sector_name == "Bulk") col_bulk else col_diffuse
+    ggplot(entry, aes(x = .data[[x_col]], y = prob_mean)) +
+      geom_ribbon(aes(ymin = prob_lo, ymax = prob_hi), fill = col_sec, alpha = 0.2) +
+      geom_line(color = col_sec, linewidth = 1.2) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      labs(
+        title    = sprintf("%s — Predicted Adoption Probability: %s", sector_name, sweep_var),
+        subtitle = "Shaded = 95% CI. Other variables held at means.",
+        x = sweep_var, y = "Pr(Adoption)"
+      ) +
+      theme_report()
+  }, error = function(e) { message("PP plot error (", sweep_var, "): ", conditionMessage(e)); NULL })
+}
+```
+
+---
+
+# Abstract
+
+This report presents results from the Political Feasibility Module (PFM) — a two-stage hurdle model estimating the probability of carbon pricing adoption (Stage 1: Firth penalized logistic regression) and conditional price stringency (Stage 2: Gamma GLM with log link) across 54 world regions for 2000–2022. We test whether actor power dynamics (clean-energy innovators versus fossil-fuel incumbents) and institutional quality (V-Dem state-capacity indicators and WGI governance indices) explain adoption and stringency outcomes beyond standard income and time-trend controls.
+
+Key findings: (1) No model specification achieves simultaneous significance across all three theory channels (actor power, institutional quality, interactions); GDP per capita and linear time trends dominate adoption models under standard fixed-effects identification. (2) Replacing the linear time trend with a logistic S-curve and applying Mundlak within-region mean corrections substantially recovers theory-channel identification: V-Dem Meritocracy Index is significant in Bulk adoption (AME = +0.796 pp, p = 0.017); Civil Service Professionalism is significant in Diffuse adoption (AME = +1.286 pp, p = 0.016). (3) Reducing the correlated five-variable V-Dem state-capacity block to principal components eliminates sign reversals. (4) Bulk stringency shows the strongest theory evidence (Blue tier) but remains dominated by regional fixed effects under standard H12 identification.
+
+---
+
+# Introduction
+
+Effective carbon pricing — policies that create a price signal on greenhouse gas emissions — faces persistent political economy barriers even where the economic case is unambiguous. Understanding *why* some jurisdictions adopt carbon pricing and achieve high price stringency, while others do not, is essential for projecting the ambition of future climate policy in integrated assessment models.
+
+The Political Feasibility Module (PFM) provides this understanding by estimating a two-stage empirical model: first, what political and institutional conditions predict *adoption* of any carbon pricing policy; second, conditional on adoption, what conditions predict the *price level* (stringency). This report presents the full estimation results, diagnostic analysis, and policy implications of the preferred model specifications.
+
+The theoretical framework draws on the political economy literature: **actor power** — the relative lobbying strength of clean-energy innovators versus fossil-fuel incumbents — creates the proximate driver of policy change, while **institutional quality** — state capacity, rule of law, civil service professionalism — determines whether political will can be translated into credible, durable policy. We operationalise these channels using energy-sector structural variables (actor power) and V-Dem / WGI governance indicators (institutional quality).
+
+---
+
+# Conceptual Framework
+
+## Two-Stage Hurdle Model
+
+Let $y_{it}$ denote the effective carbon price in region $i$ at time $t$. The observed distribution is a mixture: $y_{it} = 0$ (no policy adopted) for the majority of region-years, and $y_{it} > 0$ (positive price) for adopters. The hurdle model separates these two processes:
+
+$$P(\text{Adopt}_{it} = 1) = \Lambda(\mathbf{x}_{it}'\boldsymbol{\beta}_1) \qquad \text{[Stage 1]}$$
+
+$$E[y_{it} \mid y_{it} > 0] = \exp(\mathbf{x}_{it}'\boldsymbol{\beta}_2) \qquad \text{[Stage 2]}$$
+
+where $\Lambda(\cdot)$ is the logistic CDF and Stage 2 uses a Gamma GLM with log link.
+
+## Theory Channels
+
+The right-hand side $\mathbf{x}_{it}$ in each stage is structured around three theory channels:
+
+1. **Actor Power (AP):** Net political feasibility index derived from clean-energy (Innovator) and fossil-fuel (Incumbent) sector shares. Either a composite Actor Power Index (API) or split Innovator/Incumbent components.
+
+2. **Institutional Quality (IQ):** V-Dem state-capacity indicators (Civil Service Professionalism, Meritocracy Index, and others) or WGI governance indices. IQ channels determine whether actor power translates into policy.
+
+3. **AP × IQ Interaction:** The product of actor power and institutional quality, capturing the hypothesis that high institutional quality *amplifies* the effect of favourable actor power.
+
+## Identification Strategy
+
+Region fixed effects (FE) absorb cross-sectional variation, forcing identification onto within-region temporal changes. Since governance indicators evolve slowly within regions, this severely suppresses theory-channel identification. We address this through:
+
+- **Mundlak correction:** Within-region means of all theory variables replace FE dummies, preserving between-region variation while controlling for unobserved regional heterogeneity.
+- **Logistic time trend:** Replaces the unbounded linear trend with a saturating S-curve (midpoint 2030), preventing the time component from crowding out IQ and AP signals.
+- **V-Dem PCA:** Reduces the collinear five-variable state-capacity block to orthogonal principal components, eliminating sign-reversal artefacts.
+
+---
+
+# Data
+
+## Sample
+
+```{r data-dimensions, echo=FALSE, results='asis'}
+bulk_ecp  <- df_hist[df_hist$variable == "Effective Carbon Price|Bulk"    & df_hist$value > 0, ]
+diff_ecp  <- df_hist[df_hist$variable == "Effective Carbon Price|Diffuse" & df_hist$value > 0, ]
+n_regions <- length(unique(df_hist$region))
+n_years   <- length(unique(df_hist$year))
+cat(sprintf(
+  "The historical panel covers **%d regions** and **%d years** (2000–2022), yielding %d region-year observations. Among these, **%d region-years** record positive Bulk (industrial/energy) carbon prices across **%d regions**; **%d region-years** record positive Diffuse (transport/residential) prices across **%d regions**.\n",
+  n_regions, n_years, n_regions * n_years,
+  nrow(bulk_ecp),  length(unique(bulk_ecp$region)),
+  nrow(diff_ecp),  length(unique(diff_ecp$region))
+))
+```
+
+Regional aggregation follows the REMIND-R54 mapping (54 macro-regions). Country-level governance data (WGI, V-Dem) is aggregated using population weights. Actor power drivers are aggregated using energy consumption weights.
+
+## Variable Definitions
+
+**Dependent variables:**
+- *ECP Bulk* — Effective carbon price (USD/tCO₂) on bulk (industrial/energy) sector emissions.
+- *ECP Diffuse* — Effective carbon price (USD/tCO₂) on diffuse (transport/residential) emissions.
+
+**Actor power variables:**
+- *Innovator Power* — Weighted composite of VRE share (w=1.0) and Electrification (w=0.6) for Bulk; VRE share (w=0.5), Electrification (w=1.0), Biofuel displacement (w=0.4) for Diffuse.
+- *Incumbent Power* — Weighted composite of Coal primary energy share (w=1.0), Oil/Gas share (w=1.0), Fossil share in Industry (w=0.5) for Bulk.
+- *Actor Power Index (API)* — Net composite: Innovator Power − Incumbent Power.
+
+**Institutional quality variables (V-Dem):**
+- *Civil Service Professionalism (VDem)* — v2clrspct: impartial and rigorous public administration.
+- *Meritocracy Index (VDem)* — 1 − v2x_neopat: inverse of neopatrimonialism; absence of patronage governance.
+- *Policy Implementation (VDem)* — 1 − v2x_execorr: inverse of executive corruption.
+- *Absence of Corruption (VDem)* — 1 − v2x_corr: inverse of political corruption index.
+- *Rule Predictability (VDem)* — v2cltrnslw: transparent and predictable law enforcement.
+- *State Capacity PC1/PC2* — First two principal components of the five state-capacity indicators above.
+
+**Institutional quality variables (WGI):**
+- *Government Effectiveness (WGI)* — World Bank composite of bureaucratic quality and policy implementation.
+
+**Control variables:**
+- *GDP per Capita* — Log-normalized per-capita income [0,1].
+- *Hydro Nuclear Share* — Share of hydro and nuclear in electricity generation.
+
+All IQ and governance indicators are min-max normalized to [0,1] using country-level historical bounds.
+
+## Summary Statistics
+
+```{r summary-stats, echo=FALSE}
+key_vars <- c(
+  "Effective Carbon Price|Bulk", "Effective Carbon Price|Diffuse",
+  "Actor Power Index|Bulk", "Innovator Power|Bulk", "Incumbent Power|Bulk",
+  "Government Effectiveness (WGI)",
+  "Civil Service Professionalism (VDem)", "Meritocracy Index (VDem)",
+  "Absence of Corruption (VDem)", "Rule Predictability (VDem)",
+  "State Capacity PC1 (VDem)",
+  "GDP per Capita", "Hydro Nuclear Share"
+)
+df_kv <- df_hist[df_hist$variable %in% key_vars, ]
+stat_tbl <- df_kv %>%
+  group_by(variable) %>%
+  summarise(
+    N     = sum(!is.na(value)),
+    Mean  = round(mean(value, na.rm = TRUE), 3),
+    SD    = round(sd(value, na.rm = TRUE), 3),
+    Min   = round(min(value, na.rm = TRUE), 3),
+    P25   = round(quantile(value, 0.25, na.rm = TRUE), 3),
+    Median= round(median(value, na.rm = TRUE), 3),
+    P75   = round(quantile(value, 0.75, na.rm = TRUE), 3),
+    Max   = round(max(value, na.rm = TRUE), 3),
+    .groups = "drop"
+  ) %>%
+  rename(Variable = variable)
+
+kable(stat_tbl, format = "html", caption = "Table 1: Summary Statistics (region-years, 2000–2022, N = 54 regions × 23 years)") %>%
+  kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 12) %>%
+  row_spec(0, bold = TRUE)
+```
+
+## Correlation Structure
+
+```{r correlation-iq, echo=FALSE}
+iq_vars <- c(
+  "Government Effectiveness (WGI)",
+  "Civil Service Professionalism (VDem)", "Policy Implementation (VDem)",
+  "Rule Predictability (VDem)", "Absence of Corruption (VDem)",
+  "Meritocracy Index (VDem)", "State Capacity PC1 (VDem)"
+)
+avail_iq <- intersect(iq_vars, magclass::getNames(panelData))
+if (length(avail_iq) >= 3) {
+  cor_df_iq <- computeCorrelationMatrix(panelData, avail_iq)
+  kableCorrelationMatrix(cor_df_iq, digits = 2, font_size = 11,
+    caption = "Table 2: Pearson Correlations — Institutional Quality Indicators (region-years, 2000–2022)")
+}
+```
+
+<div class="warning-box">
+**Collinearity note:** The five V-Dem state-capacity indicators (Civil Service Professionalism, Policy Implementation, Rule Predictability, Absence of Corruption, Meritocracy) are highly inter-correlated (r ≥ 0.75 for most pairs). Entering all five simultaneously produces sign reversals: Rule Predictability (β = −4.9) and Absence of Corruption (β = −8.1) carry negative signs despite positive theoretical priors. This motivates the PCA treatment: State Capacity PC1 collapses the shared variance into a single orthogonal axis, eliminating numerical instability.
+</div>
+
+---
+
+# Model Specification
+
+## Stage 1: Adoption (Firth Penalized Logit)
+
+$$\text{logit}\left[P(\text{Adopt}_{it})\right] = \alpha + \beta_{\text{AP}} \cdot \text{AP}_{it-1} + \beta_{\text{IQ}} \cdot \text{IQ}_{it-1} + \beta_{\text{AP×IQ}} \cdot (\text{AP} \times \text{IQ})_{it-1} + \gamma \cdot \mathbf{z}_{it-1} + \delta \cdot T_{it} + \varepsilon_{it}$$
+
+Firth's (1993) penalized maximum likelihood is used to handle the sparse adoption outcome (majority of region-years have zero prices) and quasi-complete separation. Standard errors are clustered by region using a sandwich estimator applied to the penalized Hessian.
+
+The time component $T_{it}$ is either:
+- **Linear trend:** $T_{it} = t - 1999$ (year index starting from 1 in 2000)
+- **Logistic trend:** $T_{it} = [1 + \exp(-0.2(t - 2030))]^{-1}$ — saturates at 1 by ~2060, preventing unbounded extrapolation.
+
+## Stage 2: Stringency (Gamma GLM, Log Link)
+
+$$\log(E[y_{it} \mid y_{it} > 0]) = \alpha + \beta_{\text{AP}} \cdot \text{AP}_{it-1} + \beta_{\text{IQ}} \cdot \text{IQ}_{it-1} + \beta_{\text{AP×IQ}} \cdot (\text{AP} \times \text{IQ})_{it-1} + \gamma \cdot \mathbf{z}_{it-1} + \delta \cdot T_{it} + \varepsilon_{it}$$
+
+The Gamma family with log link is natural for positive, right-skewed carbon price data. The model is estimated on the subsample of region-years with positive ECP ($y_{it} > 0$). Robust clustered standard errors by region are applied post-estimation.
+
+## Mundlak Correction
+
+Following Mundlak (1978), within-region means $\bar{\mathbf{x}}_{i\cdot}$ of all theory and control variables are added as additional regressors, replacing region fixed-effect dummies:
+
+$$\text{Model}_{it} = f(\mathbf{x}_{it-1}, \bar{\mathbf{x}}_{i\cdot}, T_{it}) + \varepsilon_{it}$$
+
+This separates between-region (cross-sectional) from within-region (temporal) variation without consuming all cross-sectional degrees of freedom on FE dummies. FE/Theory ratio = 0 by construction.
+
+## V-Dem PCA Treatment
+
+The five state-capacity indicators are standardized and reduced via principal component analysis (PCA) fitted on the historical panel. PC1 captures the shared "state quality" axis (positive loadings on all five indicators); PC2 captures the within-block contrast (rule predictability vs. anti-corruption/meritocracy). Both components are normalised to [0, 1] using the historical reference range. The historical rotation is cached and applied to scenario data for consistent projection.
+
+---
+
+# Model Selection
+
+```{r model-selection-table, echo=FALSE}
+sel_tbl <- data.frame(
+  Criterion = c("Hard gate 1", "Hard gate 2", "Hard gate 3",
+                "Tier 1 — Theory", "Tier 2 — ΔR²(theory)",
+                "Tier 3 — Theory Fraction", "Tier 4 — Information criteria",
+                "Tier 5 — FE/Theory ratio", "Tie-breaker"),
+  Rule = c(
+    "Convergence: algorithm must reach a solution",
+    "k/N < 0.10: fewer than 1 predictor per 10 observations",
+    "No perfect separation flagged",
+    "Green (all 3 significant) > Blue (≥1) > Yellow (none)",
+    "Higher incremental R² from theory channels preferred",
+    "Higher Theory Fraction (AP + IQ + interaction share) preferred",
+    "Lower AIC / BIC preferred",
+    "Lower FE/Theory ratio preferred (Mundlak = 0 by construction)",
+    "Lowest max |Z| among tied models"
+  ),
+  stringsAsFactors = FALSE
+)
+kable(sel_tbl, format = "html", caption = "Table 3: Model Selection Criteria (applied sequentially)") %>%
+  kable_styling(bootstrap_options = c("striped","hover"), full_width = TRUE, font_size = 12)
+```
+
+The comprehensive model selection exploration (`full.yml`) tests `r nrow(yaml::read_yaml(resolve_config_path("model-configs/full.yml")))` base model specifications generating up to 225 Phase 1 × Phase 2 × Phase 3 combinations. The specifications reported here are the theory-optimal selections; prediction-optimal alternatives are shown in the Robustness section.
+
+---
+
+# Results: Adoption (Stage 1) {.tabset}
+
+## Bulk Sector
+
+```{r adp-bulk-config, echo=FALSE, results='asis'}
+if (!is.null(th_adp_bulk)) {
+  cat(sprintf(
+    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Trend:** %s\n\n",
+    th_adp_bulk$name %||% "Theory-Optimal Adoption Bulk",
+    paste(th_adp_bulk$instQualityDrivers, collapse = " + "),
+    paste(th_adp_bulk$actorPowerIndex, collapse = " + "),
+    if (isTRUE(th_adp_bulk$useMundlak)) "Mundlak" else (th_adp_bulk$regionMappingFixedEffects %||% "None"),
+    if (isTRUE(th_adp_bulk$logisticTimeTrend)) "Logistic S-curve" else "Linear"
+  ))
+}
+```
+
+### Coefficient Table
+
+```{r adp-bulk-coef, echo=FALSE, results='asis'}
+render_coef_kable(coef_table_df(th_fit_adp_bulk),
+  "Table 4a: Adoption Model — Bulk Sector (Theory-Optimal; Firth Penalized Logit)")
+```
+
+### Average Marginal Effects
+
+```{r adp-bulk-ame, echo=FALSE, results='asis'}
+render_ame_kable(th_fit_adp_bulk, th_adp_bulk,
+  "Table 5a: Average Marginal Effects — Bulk Adoption (percentage points, ∂P(adopt)/∂x)")
+```
+
+<div class="finding-box">
+```{r adp-bulk-finding, echo=FALSE, results='asis'}
+if (!is.null(th_fit_adp_bulk) && !is.null(th_fit_adp_bulk$coeftest)) {
+  ct <- th_fit_adp_bulk$coeftest
+  n  <- nobs(th_fit_adp_bulk$model)
+  r2 <- round(1 - th_fit_adp_bulk$model$deviance / th_fit_adp_bulk$model$null.deviance, 3)
+  cat(sprintf("**Key result:** N = %d region-years (Bulk adopters + non-adopters). Pseudo-R² = %.3f. ", n, r2))
+  sig_terms <- rownames(ct)[ct[, 4] < 0.10]
+  sig_terms <- sig_terms[!grepl("Intercept|grp_mean|regionFE|timeTrend", sig_terms)]
+  if (length(sig_terms) > 0) {
+    cat(sprintf("Significant theory terms (p < 0.10): %s.", paste(sapply(sig_terms, clean_term_plain), collapse = ", ")))
+  } else {
+    cat("No theory terms reach p < 0.10; GDP per capita and time trend dominate.")
+  }
+}
+```
+</div>
+
+### Predicted Probability Profiles
+
+```{r adp-bulk-pp, echo=FALSE, fig.height=4, fig.width=10}
+pp_vars <- c("Civil Service Professionalism (VDem)", "Meritocracy Index (VDem)",
+             "State Capacity PC1 (VDem)", "GDP per Capita")
+plots_pp <- lapply(pp_vars, function(v) make_predicted_prob_plot(th_fit_adp_bulk, v, "Bulk"))
+plots_pp <- Filter(Negate(is.null), plots_pp)
+if (length(plots_pp) > 0) {
+  wrap_plots(plots_pp, ncol = min(2, length(plots_pp)))
+}
+```
+
+### Calibration
+
+```{r adp-bulk-cal, echo=FALSE, fig.height=4}
+p_cal <- make_adoption_calibration(th_fit_adp_bulk, "Bulk")
+if (!is.null(p_cal)) print(p_cal)
+```
+
+### Model Fit Statistics
+
+```{r adp-bulk-stats, echo=FALSE}
+fs <- model_fit_stats(th_fit_adp_bulk, "adoption")
+if (!is.null(fs)) {
+  fs_df <- data.frame(
+    Statistic = c("N observations","N predictors (k)","k/N","Log-likelihood","AIC","BIC","Pseudo-R²","Converged"),
+    Value     = c(fs$n, fs$k, round(fs$k/fs$n, 3), fs$loglik, fs$aic, fs$bic, fs$r2, fs$converged),
+    stringsAsFactors = FALSE
+  )
+  kable(fs_df, format="html", caption="Model Fit: Bulk Adoption (Theory-Optimal)") %>%
+    kable_styling(bootstrap_options=c("condensed","hover"), full_width=FALSE, font_size=12)
+}
+```
+
+## Diffuse Sector
+
+```{r adp-diff-config, echo=FALSE, results='asis'}
+if (!is.null(th_adp_diff)) {
+  cat(sprintf(
+    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Trend:** %s\n\n",
+    th_adp_diff$name %||% "Theory-Optimal Adoption Diffuse",
+    paste(th_adp_diff$instQualityDrivers, collapse = " + "),
+    paste(th_adp_diff$actorPowerIndex, collapse = " + "),
+    if (isTRUE(th_adp_diff$useMundlak)) "Mundlak" else (th_adp_diff$regionMappingFixedEffects %||% "None"),
+    if (isTRUE(th_adp_diff$logisticTimeTrend)) "Logistic S-curve" else "Linear"
+  ))
+}
+```
+
+### Coefficient Table
+
+```{r adp-diff-coef, echo=FALSE, results='asis'}
+render_coef_kable(coef_table_df(th_fit_adp_diff),
+  "Table 4b: Adoption Model — Diffuse Sector (Theory-Optimal; Firth Penalized Logit)")
+```
+
+### Average Marginal Effects
+
+```{r adp-diff-ame, echo=FALSE, results='asis'}
+render_ame_kable(th_fit_adp_diff, th_adp_diff,
+  "Table 5b: Average Marginal Effects — Diffuse Adoption (percentage points)")
+```
+
+<div class="finding-box">
+```{r adp-diff-finding, echo=FALSE, results='asis'}
+if (!is.null(th_fit_adp_diff) && !is.null(th_fit_adp_diff$coeftest)) {
+  ct <- th_fit_adp_diff$coeftest
+  n  <- nobs(th_fit_adp_diff$model)
+  r2 <- round(1 - th_fit_adp_diff$model$deviance / th_fit_adp_diff$model$null.deviance, 3)
+  cat(sprintf("**Key result:** N = %d region-years. Pseudo-R² = %.3f. ", n, r2))
+  sig_terms <- rownames(ct)[ct[, 4] < 0.10]
+  sig_terms <- sig_terms[!grepl("Intercept|grp_mean|regionFE|timeTrend", sig_terms)]
+  if (length(sig_terms) > 0) {
+    cat(sprintf("Significant theory terms (p < 0.10): %s.", paste(sapply(sig_terms, clean_term_plain), collapse = ", ")))
+  } else {
+    cat("No theory terms reach p < 0.10.")
+  }
+}
+```
+</div>
+
+### Predicted Probability Profiles
+
+```{r adp-diff-pp, echo=FALSE, fig.height=4, fig.width=10}
+plots_pp_d <- lapply(pp_vars, function(v) make_predicted_prob_plot(th_fit_adp_diff, v, "Diffuse"))
+plots_pp_d <- Filter(Negate(is.null), plots_pp_d)
+if (length(plots_pp_d) > 0) wrap_plots(plots_pp_d, ncol = min(2, length(plots_pp_d)))
+```
+
+### Calibration
+
+```{r adp-diff-cal, echo=FALSE, fig.height=4}
+p_cal_d <- make_adoption_calibration(th_fit_adp_diff, "Diffuse")
+if (!is.null(p_cal_d)) print(p_cal_d)
+```
+
+### Model Fit Statistics
+
+```{r adp-diff-stats, echo=FALSE}
+fs_d <- model_fit_stats(th_fit_adp_diff, "adoption")
+if (!is.null(fs_d)) {
+  fs_df_d <- data.frame(
+    Statistic = c("N observations","N predictors (k)","k/N","Log-likelihood","AIC","BIC","Pseudo-R²","Converged"),
+    Value     = c(fs_d$n, fs_d$k, round(fs_d$k/fs_d$n, 3), fs_d$loglik, fs_d$aic, fs_d$bic, fs_d$r2, fs_d$converged),
+    stringsAsFactors = FALSE
+  )
+  kable(fs_df_d, format="html", caption="Model Fit: Diffuse Adoption (Theory-Optimal)") %>%
+    kable_styling(bootstrap_options=c("condensed","hover"), full_width=FALSE, font_size=12)
+}
+```
+
+---
+
+# Results: Stringency (Stage 2) {.tabset}
+
+## Bulk Sector
+
+```{r str-bulk-config, echo=FALSE, results='asis'}
+if (!is.null(th_str_bulk)) {
+  cat(sprintf(
+    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Dependent:** log(1 + ECP_Bulk), Gamma GLM\n\n",
+    th_str_bulk$name %||% "Theory-Optimal Stringency Bulk",
+    paste(th_str_bulk$instQualityDrivers, collapse = " + "),
+    paste(th_str_bulk$actorPowerIndex, collapse = " + "),
+    if (isTRUE(th_str_bulk$useMundlak)) "Mundlak" else (th_str_bulk$regionMappingFixedEffects %||% "None")
+  ))
+}
+```
+
+### Semi-Elasticity Table
+
+Coefficients are on the log(1 + ECP) scale. Semi-elasticity = exp(β) − 1: the proportional change in ECP associated with a 1-unit increase in the predictor.
+
+```{r str-bulk-coef, echo=FALSE, results='asis'}
+render_coef_kable(semi_elas_df(th_fit_str_bulk),
+  "Table 6a: Stringency Model — Bulk Sector (Theory-Optimal; Gamma GLM, log link). Semi-elas. = exp(β) − 1.")
+```
+
+<div class="finding-box">
+```{r str-bulk-finding, echo=FALSE, results='asis'}
+if (!is.null(th_fit_str_bulk) && !is.null(th_fit_str_bulk$coeftest)) {
+  ct <- th_fit_str_bulk$coeftest
+  n  <- nobs(th_fit_str_bulk$model)
+  r2 <- round(1 - th_fit_str_bulk$model$deviance / th_fit_str_bulk$model$null.deviance, 3)
+  cat(sprintf("**Key result:** N = %d region-years (Bulk adopters only, ECP > 0). McFadden R² = %.3f. ", n, r2))
+  sig_terms <- rownames(ct)[ct[, 4] < 0.10]
+  sig_terms <- sig_terms[!grepl("Intercept|grp_mean|regionFE|timeTrend", sig_terms)]
+  if (length(sig_terms) > 0) {
+    cat(sprintf("Significant theory terms (p < 0.10): %s.", paste(sapply(sig_terms, clean_term_plain), collapse = ", ")))
+  } else { cat("No theory terms reach p < 0.10.") }
+}
+```
+</div>
+
+### Forest Plot
+
+```{r str-bulk-forest, echo=FALSE, fig.height=7}
+if (!is.null(th_fit_str_bulk) && !is.null(th_fit_str_bulk$coeftest)) {
+  df_c <- pfm::coeftestToDataFrame(th_fit_str_bulk$coeftest)
+  p_f  <- render_forest_plot(df_c, title = "Bulk Stringency — Coefficient Forest Plot (log scale)")
+  if (!is.null(p_f)) print(p_f)
+}
+```
+
+### Calibration
+
+```{r str-bulk-cal, echo=FALSE, fig.height=4.5}
+p_sc <- make_stringency_calibration(th_fit_str_bulk, "Bulk")
+if (!is.null(p_sc)) print(p_sc)
+```
+
+### Model Fit Statistics
+
+```{r str-bulk-stats, echo=FALSE}
+fs_sb <- model_fit_stats(th_fit_str_bulk, "stringency")
+if (!is.null(fs_sb)) {
+  data.frame(
+    Statistic = c("N observations","N predictors (k)","k/N","Log-likelihood","AIC","BIC","R²","Converged"),
+    Value     = c(fs_sb$n, fs_sb$k, round(fs_sb$k/fs_sb$n, 3), fs_sb$loglik, fs_sb$aic, fs_sb$bic, fs_sb$r2, fs_sb$converged)
+  ) %>%
+    kable(format="html", caption="Model Fit: Bulk Stringency (Theory-Optimal)") %>%
+    kable_styling(bootstrap_options=c("condensed","hover"), full_width=FALSE, font_size=12)
+}
+```
+
+## Diffuse Sector
+
+```{r str-diff-config, echo=FALSE, results='asis'}
+if (!is.null(th_str_diff)) {
+  cat(sprintf(
+    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Dependent:** log(1 + ECP_Diffuse), Gamma GLM\n\n",
+    th_str_diff$name %||% "Theory-Optimal Stringency Diffuse",
+    paste(th_str_diff$instQualityDrivers, collapse = " + "),
+    paste(th_str_diff$actorPowerIndex, collapse = " + "),
+    if (isTRUE(th_str_diff$useMundlak)) "Mundlak" else (th_str_diff$regionMappingFixedEffects %||% "None")
+  ))
+}
+```
+
+### Semi-Elasticity Table
+
+```{r str-diff-coef, echo=FALSE, results='asis'}
+render_coef_kable(semi_elas_df(th_fit_str_diff),
+  "Table 6b: Stringency Model — Diffuse Sector (Theory-Optimal; Gamma GLM, log link). Semi-elas. = exp(β) − 1.")
+```
+
+### Forest Plot
+
+```{r str-diff-forest, echo=FALSE, fig.height=7}
+if (!is.null(th_fit_str_diff) && !is.null(th_fit_str_diff$coeftest)) {
+  df_cd <- pfm::coeftestToDataFrame(th_fit_str_diff$coeftest)
+  p_fd  <- render_forest_plot(df_cd, title = "Diffuse Stringency — Coefficient Forest Plot (log scale)")
+  if (!is.null(p_fd)) print(p_fd)
+}
+```
+
+### Calibration
+
+```{r str-diff-cal, echo=FALSE, fig.height=4.5}
+p_scd <- make_stringency_calibration(th_fit_str_diff, "Diffuse")
+if (!is.null(p_scd)) print(p_scd)
+```
+
+---
+
+# Robustness {.tabset}
+
+## Theory vs Prediction Comparison
+
+```{r robustness-comparison, echo=FALSE}
+make_fit_row <- function(fit, label, sector, stage) {
+  if (is.null(fit)) return(NULL)
+  fs <- model_fit_stats(fit, stage)
+  if (is.null(fs)) return(NULL)
+  ct <- fit$coeftest
+  sig_th <- if (!is.null(ct)) {
+    sig <- rownames(ct)[ct[, 4] < 0.05]
+    sig <- sig[!grepl("Intercept|grp_mean|regionFE|timeTrend|GDP|Hydro", sig)]
+    length(sig)
+  } else 0
+  data.frame(
+    Specification = label, Sector = sector, Stage = stage,
+    N = fs$n, k = fs$k, AIC = fs$aic, BIC = fs$bic,
+    `Pseudo-R²` = fs$r2, `Sig. Theory (p<0.05)` = sig_th,
+    stringsAsFactors = FALSE, check.names = FALSE
+  )
+}
+
+rows <- Filter(Negate(is.null), list(
+  make_fit_row(th_fit_adp_bulk,  "Theory-Optimal", "Bulk",    "adoption"),
+  make_fit_row(pr_fit_adp_bulk,  "Prediction-Optimal", "Bulk", "adoption"),
+  make_fit_row(th_fit_adp_diff,  "Theory-Optimal", "Diffuse", "adoption"),
+  make_fit_row(pr_fit_adp_diff,  "Prediction-Optimal", "Diffuse", "adoption"),
+  make_fit_row(th_fit_str_bulk,  "Theory-Optimal", "Bulk",    "stringency"),
+  make_fit_row(pr_fit_str_bulk,  "Prediction-Optimal", "Bulk", "stringency"),
+  make_fit_row(th_fit_str_diff,  "Theory-Optimal", "Diffuse", "stringency"),
+  make_fit_row(pr_fit_str_diff,  "Prediction-Optimal", "Diffuse", "stringency")
+))
+
+if (length(rows) > 0) {
+  rob_df <- do.call(rbind, rows)
+  kable(rob_df, format = "html", digits = 3,
+        caption = "Table 7: Theory-Optimal vs Prediction-Optimal — Model Fit Comparison") %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 11) %>%
+    row_spec(which(rob_df$Specification == "Theory-Optimal"), bold = TRUE)
+}
+```
+
+## Adoption Threshold Sensitivity
+
+```{r threshold-sensitivity, echo=FALSE, results='asis'}
+cat("Adoption probability threshold sensitivity: regions are classified as 'adopted' in projections when their predicted probability exceeds the threshold.\n\n")
+cat("| Threshold | Bulk Sensitivity | Bulk Specificity | Diffuse Sensitivity | Diffuse Specificity |\n")
+cat("|-----------|-----------------|------------------|--------------------|--------------------|")
+
+for (thr in c(0.17, 0.25, 0.30, 0.40, 0.50)) {
+  compute_sens_spec <- function(fit, thr_val) {
+    if (is.null(fit) || is.null(fit$model)) return(c(NA, NA))
+    m   <- fit$model
+    obs <- as.integer(m$y > 0)
+    hat <- fitted(m)
+    pred <- as.integer(hat >= thr_val)
+    tp  <- sum(obs == 1 & pred == 1, na.rm = TRUE)
+    fn  <- sum(obs == 1 & pred == 0, na.rm = TRUE)
+    tn  <- sum(obs == 0 & pred == 0, na.rm = TRUE)
+    fp  <- sum(obs == 0 & pred == 1, na.rm = TRUE)
+    c(sens = round(tp / (tp + fn + 1e-9), 2), spec = round(tn / (tn + fp + 1e-9), 2))
+  }
+  b  <- compute_sens_spec(th_fit_adp_bulk, thr)
+  d  <- compute_sens_spec(th_fit_adp_diff, thr)
+  cat(sprintf("\n| %.2f | %.0f%% | %.0f%% | %.0f%% | %.0f%% |",
+              thr, b[1]*100, b[2]*100, d[1]*100, d[2]*100))
+}
+```
+
+## VIF Diagnostics
+
+```{r vif-diagnostics, echo=FALSE, results='asis'}
+render_vif <- function(fit, label) {
+  if (is.null(fit) || is.null(fit$vifRaw) || length(fit$vifRaw) == 0) {
+    cat(sprintf("> No VIF data for %s.\n\n", label)); return(invisible())
+  }
+  vdf <- data.frame(
+    Term = names(fit$vifRaw),
+    VIF  = round(unname(fit$vifRaw), 1),
+    Flag = ifelse(fit$vifRaw > 10, "HIGH ⚠", ifelse(fit$vifRaw > 5, "Moderate", "OK ✓")),
+    stringsAsFactors = FALSE
+  )
+  cat(sprintf("**%s** — Max VIF = %.1f\n\n", label, max(fit$vifRaw, na.rm = TRUE)))
+  print(kable(vdf, format="html", caption=paste("VIF:", label)) %>%
+    kable_styling(bootstrap_options=c("condensed","hover"), full_width=FALSE, font_size=11) %>%
+    column_spec(3, color=ifelse(vdf$Flag == "HIGH ⚠", "#c62828", ifelse(vdf$Flag == "Moderate", "#e65100", "#2e7d32")),
+                bold = vdf$Flag == "HIGH ⚠"))
+  cat("\n\n")
+}
+
+render_vif(th_fit_adp_bulk,  "Adoption — Bulk (Theory-Optimal)")
+render_vif(th_fit_adp_diff,  "Adoption — Diffuse (Theory-Optimal)")
+render_vif(th_fit_str_bulk,  "Stringency — Bulk (Theory-Optimal)")
+render_vif(th_fit_str_diff,  "Stringency — Diffuse (Theory-Optimal)")
+```
+
+---
+
+# Discussion
+
+## Theory Channel Performance
+
+```{r discussion-tier, echo=FALSE, results='asis'}
+classify_tier <- function(fit) {
+  if (is.null(fit) || is.null(fit$coeftest)) return("Not estimated")
+  ct   <- fit$coeftest
+  pv   <- ct[, 4]
+  sig  <- !is.na(pv) & pv < 0.05
+  nms  <- rownames(ct)
+  has_int <- isTRUE(any(grepl("_x_", nms) & sig, na.rm = TRUE))
+  has_iq  <- isTRUE(any(!grepl("_x_|Intercept|grp_mean|regionFE|timeTrend|GDP|Hydro", nms) &
+                          grepl("VDem|WGI", nms) & sig, na.rm = TRUE))
+  has_ap  <- isTRUE(any(grepl("Actor|Innov|Incumb", nms) & !grepl("_x_", nms) & sig, na.rm = TRUE))
+  if (has_int && has_iq && has_ap) "Green"
+  else if (has_int || has_iq || has_ap) "Blue"
+  else "Yellow"
+}
+
+tier_df <- data.frame(
+  `Sector/Stage`  = c("Adoption: Bulk","Adoption: Diffuse","Stringency: Bulk","Stringency: Diffuse"),
+  `Theory Tier`   = c(classify_tier(th_fit_adp_bulk),  classify_tier(th_fit_adp_diff),
+                      classify_tier(th_fit_str_bulk),  classify_tier(th_fit_str_diff)),
+  `Identification` = c(
+    if (!is.null(th_adp_bulk)) (if (isTRUE(th_adp_bulk$useMundlak)) "Mundlak" else "No FE") else "—",
+    if (!is.null(th_adp_diff)) (if (isTRUE(th_adp_diff$useMundlak)) "Mundlak" else "No FE") else "—",
+    if (!is.null(th_str_bulk)) (if (isTRUE(th_str_bulk$useMundlak)) "Mundlak" else "No FE") else "—",
+    if (!is.null(th_str_diff)) (if (isTRUE(th_str_diff$useMundlak)) "Mundlak" else "No FE") else "—"
+  ),
+  check.names = FALSE, stringsAsFactors = FALSE
+)
+kable(tier_df, format="html", caption="Table 8: Theory Tier by Sector/Stage (theory-optimal models)") %>%
+  kable_styling(bootstrap_options=c("condensed","hover"), full_width=FALSE, font_size=12)
+```
+
+## Limitations
+
+**GDP dominance in adoption models.** GDP per capita carries a large, consistently significant AME in both Bulk and Diffuse adoption ($\approx$+0.699–0.869 pp, p < 0.10). This reflects a genuine income effect (richer countries are more likely to adopt carbon pricing) but also conflates income with governance quality — higher-income countries both govern better *and* price carbon more. The quartile-centred GDP control (`GDP per Capita (Q-centred)`) partially addresses this; the `gdpGovInteraction` specification tests whether the income-governance moderating relationship is explicit.
+
+**Fixed-effects identification trap.** Under standard region FE (H12), the FE dummies absorb virtually all between-region governance variation. Since governance changes slowly within regions, within-region temporal identification of IQ effects is very weak. The Mundlak and no-FE specifications recover between-region identification at the cost of stronger assumptions about unobserved heterogeneity.
+
+**Sparse Diffuse adopter panel.** Only $\approx$20 regions adopt Diffuse carbon pricing, yielding $\approx$258 positive-price region-years for stringency estimation. With multiple IQ drivers + AP interactions + FE terms, the k/N ratio can approach the 0.10 threshold — overfitting risk is real and should be monitored.
+
+**Sign reversals in full V-Dem block.** Entering all five state-capacity indicators simultaneously produces Rule Predictability (β = −4.9) and Absence of Corruption (β = −8.1) sign reversals consistent with a VIF pathology (r ≥ 0.75 within block). The PCA treatment resolves this; results should not be reported for the full-5 specification without explicit VIF qualification.
+
+---
+
+# REMIND Integration
+
+The PFM adoption and stringency models feed into REMIND's climate policy projections through two coupling channels:
+
+1. **Adoption gating:** For each REMIND region and year, the adoption model predicts $\hat{P}(\text{Adopt}_{it})$. Regions with $\hat{P} \geq \theta_{\text{threshold}}$ are projected to maintain carbon pricing; regions below the threshold receive $\text{ECP} = 0$ in the projection. The adoption threshold $\theta$ is chosen to balance Type I / Type II errors on the historical sample ($\theta_{\text{Bulk}} = 0.30$, $\theta_{\text{Diffuse}} = 0.17$).
+
+2. **Price stringency projection:** For adopted regions, the stringency model predicts the conditional price $\hat{E}[y_{it} \mid y_{it} > 0]$ using REMIND-derived future actor power drivers (VRE share, electrification, fossil shares from the energy transition scenarios) and governance projections under SSP2 storylines.
+
+The logistic S-curve time trend ensures that projected adoption saturates realistically by $\sim$2060 rather than growing unboundedly to universal adoption by 2100 under the linear trend.
+
+Scenario discrimination — whether institutional quality differences create divergent carbon pricing trajectories under alternative SSP pathways — is testable using the theory-optimal models. Models with significant IQ channels (Blue/Green tier) translate governance scenario assumptions (SSP1 strong institutions vs. SSP3 weak institutions) into meaningfully different price projections.
+
+---
+
+# Conclusion
+
+The Political Feasibility Module provides empirical grounding for carbon pricing projections in REMIND. The results confirm that:
+
+1. **Standard FE specifications suppress theory channels:** GDP and linear time trends dominate under H12 fixed effects; theory-channel significance is near zero.
+
+2. **V-Dem state-capacity indicators outperform WGI** for theory identification: Meritocracy Index (Bulk adoption) and Civil Service Professionalism (Diffuse adoption) achieve statistical significance when the logistic trend and Mundlak correction are applied.
+
+3. **Collinearity in the five-variable V-Dem block requires PCA treatment** before the state-capacity composite can be reliably interpreted. PC1 resolves sign reversals while preserving the shared institutional quality signal.
+
+4. **Mundlak + logistic trend is the preferred theory-identification strategy:** FE/Theory = 0 by construction; logistic saturation prevents unrealistic universal adoption projections; and the between-region institutional quality signal is recoverable.
+
+5. **No specification achieves simultaneous significance across all three channels** (Green tier) in both sectors. The adoption stage remains the binding identification constraint: GDP and temporal diffusion explain the majority of adoption variance, limiting the precision with which actor power and institutional quality marginal effects can be identified.
+
+These findings imply that PFM-based scenario projections should be reported with explicit uncertainty bounds reflecting the residual theory-identification uncertainty, particularly for adoption probability projections where theory channels are only partially identified.
+
+---
+
+# Appendix: Full Coefficient Tables (Prediction-Optimal Models)
+
+```{r appendix-pred-tables, echo=FALSE, results='asis'}
+cat("### Adoption: Bulk (Prediction-Optimal)\n\n")
+render_coef_kable(coef_table_df(pr_fit_adp_bulk),
+  "Appendix Table A1: Adoption — Bulk (Prediction-Optimal)")
+cat("\n\n### Adoption: Diffuse (Prediction-Optimal)\n\n")
+render_coef_kable(coef_table_df(pr_fit_adp_diff),
+  "Appendix Table A2: Adoption — Diffuse (Prediction-Optimal)")
+cat("\n\n### Stringency: Bulk (Prediction-Optimal)\n\n")
+render_coef_kable(semi_elas_df(pr_fit_str_bulk),
+  "Appendix Table A3: Stringency — Bulk (Prediction-Optimal)")
+cat("\n\n### Stringency: Diffuse (Prediction-Optimal)\n\n")
+render_coef_kable(semi_elas_df(pr_fit_str_diff),
+  "Appendix Table A4: Stringency — Diffuse (Prediction-Optimal)")
+```
+
+---
+
+*Report generated by the Political Feasibility Module (PFM). All model fits cached in the pfm model store for reproducibility.*

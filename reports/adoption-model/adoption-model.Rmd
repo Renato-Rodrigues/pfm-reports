@@ -12,7 +12,14 @@ params:
   controlDrivers: !r c("GDP per Capita", "Hydro Nuclear Share")
   regionMappingFE: "regionmappingH12.csv"
   includeLagged: false
+  logisticTimeTrend: false
   adoptionThreshold: 0.5
+  # 90%-sensitivity thresholds derived from historical calibration (see Threshold Guide section).
+  # Bulk: 30% correctly classifies 90% of historical Bulk adopters.
+  # Diffuse: 17% correctly classifies 90% of historical Diffuse adopters.
+  # Default falls back to adoptionThreshold when not set.
+  adoptionThresholdBulk: 0.30
+  adoptionThresholdDiffuse: 0.17
   snapshotYears: !r c(2030, 2040, 2050, 2070, 2100)
   reportName: "default"
   timelineClassification: "five_groups"
@@ -23,12 +30,14 @@ params:
   controlDriversBulk: ~
   regionMappingFEBulk: ~
   includeLaggedBulk: ~
+  logisticTimeTrendBulk: ~
   actorPowerDriversBulk: ~
   actorPowerIndexBulk: ~
   instQualityDriversDiffuse: ~
   controlDriversDiffuse: ~
   regionMappingFEDiffuse: ~
   includeLaggedDiffuse: ~
+  logisticTimeTrendDiffuse: ~
   actorPowerDriversDiffuse: ~
   actorPowerIndexDiffuse: ~
 output:
@@ -174,25 +183,28 @@ bulk_iq  <- resolve_sector_adp(params$instQualityDriversBulk, params$instQuality
 bulk_ctl <- resolve_sector_adp(params$controlDriversBulk,     params$controlDrivers)
 bulk_fe  <- resolve_fe_adp(resolve_sector_adp(params$regionMappingFEBulk,  params$regionMappingFE))
 bulk_lag <- isTRUE(resolve_sector_adp(params$includeLaggedBulk,  params$includeLagged))
+bulk_lt  <- isTRUE(resolve_sector_adp(params$logisticTimeTrendBulk, params$logisticTimeTrend))
 bulk_ap  <- resolve_sector_adp(params$actorPowerDriversBulk,  params$actorPowerDrivers)
 bulk_ai  <- resolve_ai_adp(resolve_sector_adp(params$actorPowerIndexBulk, params$actorPowerIndex))
 
 cfg <- list(
   Bulk = list(
-    instQuality = bulk_iq,
-    controls    = bulk_ctl,
-    regionFE    = bulk_fe,
-    lagged      = bulk_lag,
-    actorPower  = bulk_ap,
-    actorIndex  = bulk_ai
+    instQuality        = bulk_iq,
+    controls           = bulk_ctl,
+    regionFE           = bulk_fe,
+    lagged             = bulk_lag,
+    logisticTimeTrend  = bulk_lt,
+    actorPower         = bulk_ap,
+    actorIndex         = bulk_ai
   ),
   Diffuse = list(
-    instQuality = resolve_sector_adp(params$instQualityDriversDiffuse, bulk_iq),
-    controls    = resolve_sector_adp(params$controlDriversDiffuse,     bulk_ctl),
-    regionFE    = resolve_fe_adp(resolve_sector_adp(params$regionMappingFEDiffuse,  params$regionMappingFEBulk  %||% params$regionMappingFE)),
-    lagged      = isTRUE(resolve_sector_adp(params$includeLaggedDiffuse,  bulk_lag)),
-    actorPower  = resolve_sector_adp(params$actorPowerDriversDiffuse,  bulk_ap),
-    actorIndex  = resolve_ai_adp(resolve_sector_adp(params$actorPowerIndexDiffuse, bulk_ai))
+    instQuality        = resolve_sector_adp(params$instQualityDriversDiffuse, bulk_iq),
+    controls           = resolve_sector_adp(params$controlDriversDiffuse,     bulk_ctl),
+    regionFE           = resolve_fe_adp(resolve_sector_adp(params$regionMappingFEDiffuse,  params$regionMappingFEBulk  %||% params$regionMappingFE)),
+    lagged             = isTRUE(resolve_sector_adp(params$includeLaggedDiffuse,  bulk_lag)),
+    logisticTimeTrend  = isTRUE(resolve_sector_adp(params$logisticTimeTrendDiffuse, bulk_lt)),
+    actorPower         = resolve_sector_adp(params$actorPowerDriversDiffuse,  bulk_ap),
+    actorIndex         = resolve_ai_adp(resolve_sector_adp(params$actorPowerIndexDiffuse, bulk_ai))
   )
 )
 
@@ -203,7 +215,9 @@ model_regionMappingFE    <- bulk_fe
 model_includeLagged      <- bulk_lag
 model_actorPowerDrivers  <- bulk_ap
 model_actorPowerIndex    <- bulk_ai
-adoption_threshold       <- as.numeric(params$adoptionThreshold)
+adoption_threshold         <- as.numeric(params$adoptionThreshold)
+adoption_threshold_bulk    <- as.numeric(params$adoptionThresholdBulk    %||% params$adoptionThreshold)
+adoption_threshold_diffuse <- as.numeric(params$adoptionThresholdDiffuse %||% params$adoptionThreshold)
 snapshot_years           <- as.integer(params$snapshotYears)
 
 # Variables shown in the input data section — union across both sectors
@@ -273,7 +287,8 @@ fit_bulk <- estimateAdoptionModel(
   controlDrivers            = cfg$Bulk$controls,
   includeLaggedAdoption     = cfg$Bulk$lagged,
   interactRegionFE          = FALSE,
-  regionMappingFixedEffects = cfg$Bulk$regionFE
+  regionMappingFixedEffects = cfg$Bulk$regionFE,
+  logisticTimeTrend         = isTRUE(cfg$Bulk$logisticTimeTrend)
 )
 
 fit_diffuse <- estimateAdoptionModel(
@@ -285,7 +300,8 @@ fit_diffuse <- estimateAdoptionModel(
   controlDrivers            = cfg$Diffuse$controls,
   includeLaggedAdoption     = cfg$Diffuse$lagged,
   interactRegionFE          = FALSE,
-  regionMappingFixedEffects = cfg$Diffuse$regionFE
+  regionMappingFixedEffects = cfg$Diffuse$regionFE,
+  logisticTimeTrend         = isTRUE(cfg$Diffuse$logisticTimeTrend)
 )
 
 future_df_bulk    <- NULL
@@ -315,6 +331,8 @@ if (!is.null(future_mag)) {
 }
 
 compute_fit_stats <- function(fit) {
+  if (is.null(fit) || is.null(fit$model))
+    return(list(k=NA, nObs=NA, loglik=NA, aic=NA, bic=NA, pseudoR2=NA, nSig=NA, converged=NA))
   m          <- fit$model
   is_logistf <- inherits(m, "logistf")
   k          <- length(coef(m))
@@ -399,7 +417,7 @@ This report documents a single-model deep dive into the **`r params$modelName`**
 <div class="card-header">Projection Settings</div>
 <div class="card-body">
 <ul>
-  <li><strong>Adoption threshold:</strong> `r adoption_threshold` (Pr(Adoption) &ge; threshold &rarr; adopted)</li>
+  <li><strong>Adoption threshold:</strong> Bulk `r adoption_threshold_bulk` · Diffuse `r adoption_threshold_diffuse` — 90%-sensitivity calibrated (Pr(Adoption) &ge; threshold &rarr; adopted)</li>
   <li><strong>Snapshot years:</strong> `r paste(snapshot_years, collapse = ", ")`</li>
   <li><strong>Scenario data:</strong> `r if (has_scenario) paste0("Loaded from ", basename(params$gdxPath)) else "Not provided — projection sections disabled"`</li>
   <li><strong>Historical range:</strong> 2000–2022</li>
@@ -1089,7 +1107,7 @@ cat('</div>')
 cat('<div class="bulk-only">')
 ```
 ```{r hist-timeline-bulk, echo=FALSE, fig.width=11, fig.height=9}
-p <- make_timeline_plot(hist_fit_bulk, "Bulk", adoption_threshold)
+p <- make_timeline_plot(hist_fit_bulk, "Bulk", adoption_threshold_bulk)
 if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_timeline_bulk.png"), p, width=11, height=9, dpi=300) }
 ```
 <div class="chart-description">
@@ -1102,7 +1120,7 @@ cat('</div>')
 cat('<div class="diffuse-only">')
 ```
 ```{r hist-timeline-diffuse, echo=FALSE, fig.width=11, fig.height=9}
-p <- make_timeline_plot(hist_fit_diffuse, "Diffuse", adoption_threshold)
+p <- make_timeline_plot(hist_fit_diffuse, "Diffuse", adoption_threshold_diffuse)
 if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_timeline_diffuse.png"), p, width=11, height=9, dpi=300) }
 ```
 <div class="chart-description">
@@ -1247,10 +1265,10 @@ make_partial_regression_plots_adoption <- function(fit, sector_name, instQuality
   if (is.null(ct) || is.null(train)) return(NULL)
   beta  <- coef(m)
   
-  # For logistf/GLM, we have fitted.values and y
+  # logistf stores fitted probabilities in m$predict; GLM uses m$fitted.values
   y     <- m$y
-  p     <- m$fitted.values
-  if (is.null(y) || is.null(p)) return(NULL)
+  p     <- if (inherits(m, "logistf")) m$predict else m$fitted.values
+  if (is.null(y) || is.null(p) || length(y) == 0 || length(p) == 0) return(NULL)
   
   # Compute working residuals: (y - p) / (p * (1 - p))
   # Capping the denominator to avoid division by zero or extreme outliers
@@ -1395,16 +1413,16 @@ cat('<div class="bulk-only">')
 ```
 ```{r traj-bulk-key, echo=FALSE, fig.width=12, fig.height=6}
 if (has_scenario && !is.null(proj_bulk)) {
-  p <- make_trajectory_plot(proj_bulk, "Bulk", key_regions, adoption_threshold, full_facet = FALSE)
+  p <- make_trajectory_plot(proj_bulk, "Bulk", key_regions, adoption_threshold_bulk, full_facet = FALSE)
   if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "prob_trajectory_bulk.png"), p, width=12, height=6, dpi=300) }
 } else cat("> Scenario data not available.")
 ```
 <div class="chart-description">
-**How to read this chart:** Each line is one region's projected Pr(Adoption) trajectory under the scenario. Key regions are highlighted in distinct colours; all others are grey. The dashed horizontal line marks the adoption threshold — regions whose probability crosses this line are projected to adopt. A steep upward trajectory means fast-approaching adoption; a flat line near zero means adoption is not projected in the scenario window.
+**How to read this chart:** Each line is one region's projected Pr(Adoption) trajectory under the scenario. Key regions are highlighted in distinct colours; all others are grey. The dashed horizontal line marks the 90%-sensitivity adoption threshold (`r adoption_threshold_bulk` for Bulk) — regions whose probability crosses this line are projected to adopt. A steep upward trajectory means fast-approaching adoption; a flat line near zero means adoption is not projected in the scenario window.
 </div>
 ```{r traj-bulk-full, echo=FALSE, fig.width=16, fig.height=20, class.output="fold-hide"}
 if (has_scenario && !is.null(proj_bulk)) {
-  p_full <- make_trajectory_plot(proj_bulk, "Bulk", key_regions, adoption_threshold, full_facet = TRUE)
+  p_full <- make_trajectory_plot(proj_bulk, "Bulk", key_regions, adoption_threshold_bulk, full_facet = TRUE)
   if (!is.null(p_full)) print(p_full)
 }
 ```
@@ -1416,16 +1434,16 @@ cat('<div class="diffuse-only">')
 ```
 ```{r traj-diffuse-key, echo=FALSE, fig.width=12, fig.height=6}
 if (has_scenario && !is.null(proj_diffuse)) {
-  p <- make_trajectory_plot(proj_diffuse, "Diffuse", key_regions, adoption_threshold, full_facet = FALSE)
+  p <- make_trajectory_plot(proj_diffuse, "Diffuse", key_regions, adoption_threshold_diffuse, full_facet = FALSE)
   if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "prob_trajectory_diffuse.png"), p, width=12, height=6, dpi=300) }
 } else cat("> Scenario data not available.")
 ```
 <div class="chart-description">
-**How to read this chart:** Same interpretation as Bulk — projected Pr(Diffuse Adoption) for all regions. Diffuse-sector adoption is typically slower and more heterogeneous across regions due to different political economy dynamics for transport and building sectors.
+**How to read this chart:** Same interpretation as Bulk — projected Pr(Diffuse Adoption) for all regions. The dashed horizontal line marks the 90%-sensitivity threshold (`r adoption_threshold_diffuse` for Diffuse). Diffuse-sector adoption is typically slower and more heterogeneous across regions due to different political economy dynamics for transport and building sectors.
 </div>
 ```{r traj-diffuse-full, echo=FALSE, fig.width=16, fig.height=20, class.output="fold-hide"}
 if (has_scenario && !is.null(proj_diffuse)) {
-  p_full <- make_trajectory_plot(proj_diffuse, "Diffuse", key_regions, adoption_threshold, full_facet = TRUE)
+  p_full <- make_trajectory_plot(proj_diffuse, "Diffuse", key_regions, adoption_threshold_diffuse, full_facet = TRUE)
   if (!is.null(p_full)) print(p_full)
 }
 ```

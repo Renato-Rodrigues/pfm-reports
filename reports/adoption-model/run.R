@@ -39,7 +39,8 @@ render_report <- function(
     cacheDir                  = getPfmConfig("cacheDir", ""),
     gdxPath                   = getPfmConfig("gdxPath", "data/fulldata.gdx"),
     modelName                 = getPfmConfig("modelName", "Baseline + Rule of Law"),
-    modelConfigFile           = NULL,
+    modelConfigFile           = getPfmConfig("adoptionModelConfig",
+                                             "reports/model-selection/model-configs/selected-models-v2.yml"),
     sector                    = "Bulk",
     # Single-sector defaults (backward compat — used when no *Bulk/*Diffuse override)
     instQualityDrivers        = c("Government Effectiveness (WGI)", "Rule of Law (VDem)"),
@@ -53,13 +54,15 @@ render_report <- function(
     controlDriversBulk        = NULL,
     regionMappingFEBulk       = NULL,
     includeLaggedBulk         = NULL,
+    logisticTimeTrendBulk     = NULL,
     actorPowerDriversBulk     = NULL,
     actorPowerIndexBulk       = NULL,
     instQualityDriversDiffuse = NULL,
     controlDriversDiffuse     = NULL,
     regionMappingFEDiffuse    = NULL,
-    includeLaggedDiffuse      = NULL,
-    actorPowerDriversDiffuse  = NULL,
+    includeLaggedDiffuse       = NULL,
+    logisticTimeTrendDiffuse   = NULL,
+    actorPowerDriversDiffuse   = NULL,
     actorPowerIndexDiffuse    = NULL,
     adoptionThreshold         = getPfmConfig("adoptionThreshold", 0.5),
     snapshotYears             = c(2030L, 2040L, 2050L, 2070L, 2100L),
@@ -80,7 +83,9 @@ render_report <- function(
              if (is.null(cfg$regionMappingFixedEffects)) "" else cfg$regionMappingFixedEffects,
              envir = parent.env(environment()))
     if (!is.null(cfg$includeLagged))
-      assign(paste0("includeLagged",      prefix), isTRUE(cfg$includeLagged), envir = parent.env(environment()))
+      assign(paste0("includeLagged",      prefix), isTRUE(cfg$includeLagged),       envir = parent.env(environment()))
+    if (!is.null(cfg$logisticTimeTrend))
+      assign(paste0("logisticTimeTrend",  prefix), isTRUE(cfg$logisticTimeTrend),   envir = parent.env(environment()))
     if (!is.null(cfg$actorPowerDrivers))
       assign(paste0("actorPowerDrivers",  prefix), cfg$actorPowerDrivers,   envir = parent.env(environment()))
     if (!is.null(cfg$actorPowerIndex))
@@ -162,12 +167,14 @@ render_report <- function(
       controlDriversBulk        = controlDriversBulk,
       regionMappingFEBulk       = if (is.null(regionMappingFEBulk)) "" else regionMappingFEBulk,
       includeLaggedBulk         = includeLaggedBulk,
+      logisticTimeTrendBulk     = logisticTimeTrendBulk,
       actorPowerDriversBulk     = actorPowerDriversBulk,
       actorPowerIndexBulk       = actorPowerIndexBulk,
       instQualityDriversDiffuse = instQualityDriversDiffuse,
       controlDriversDiffuse     = controlDriversDiffuse,
       regionMappingFEDiffuse    = if (is.null(regionMappingFEDiffuse)) "" else regionMappingFEDiffuse,
       includeLaggedDiffuse      = includeLaggedDiffuse,
+      logisticTimeTrendDiffuse  = logisticTimeTrendDiffuse,
       actorPowerDriversDiffuse  = actorPowerDriversDiffuse,
       actorPowerIndexDiffuse    = actorPowerIndexDiffuse,
       adoptionThreshold         = as.numeric(adoptionThreshold),
@@ -198,7 +205,12 @@ for (a in args) {
 render_report_args <- list(
   reportName      = if (!is.null(report_name_arg)) report_name_arg
                     else getPfmConfig("reportName", "default"),
-  modelConfigFile = model_config_arg,
+  modelConfigFile = if (!is.null(model_config_arg)) model_config_arg
+                    else if (!is.null(report_name_arg) && report_name_arg == "best")
+                      "reports/model-selection/model-configs/selected-models-best.yml"
+                    else if (!is.null(report_name_arg) && report_name_arg == "best-prediction")
+                      "reports/model-selection/model-configs/selected-models-v2-prediction.yml"
+                    else NULL,
   sector          = sector_arg
 )
 if (!is.null(timeline_classification_arg)) {

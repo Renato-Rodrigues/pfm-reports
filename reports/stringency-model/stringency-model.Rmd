@@ -13,10 +13,14 @@ params:
   controlDriversBulk: !r c("GDP per Capita", "Hydro Nuclear Share")
   regionMappingFEBulk: "regionmappingH12.csv"
   includeLaggedBulk: false
+  logisticTimeTrendBulk: false
+  logisticTimeTrendDiffuse: ~
+  useMundlakBulk: false
   instQualityDriversDiffuse: ~
   controlDriversDiffuse: ~
   regionMappingFEDiffuse: ~
   includeLaggedDiffuse: ~
+  useMundlakDiffuse: ~
   actorPowerDriversBulk: ~
   actorPowerIndexBulk: "Actor Power Index"
   actorPowerDriversDiffuse: ~
@@ -25,6 +29,8 @@ params:
   adoptionControlDrivers: !r c("GDP per Capita", "Hydro Nuclear Share")
   adoptionRegionMappingFE: "regionmappingH12.csv"
   adoptionThreshold: 0.5
+  adoptionThresholdBulk: 0.30
+  adoptionThresholdDiffuse: 0.17
   snapshotYears: !r c(2030L, 2040L, 2050L, 2070L, 2100L)
 output:
   html_document:
@@ -111,7 +117,6 @@ output:
     // Toggle tab header visibility for duplicate tabs
     var snapshotTabs = [];
     var rankingTabs = [];
-    var hurdleTabs = [];
     document.querySelectorAll('.nav-tabs li').forEach(function(li) {
       var a = li.querySelector('a');
       if (a) {
@@ -122,8 +127,6 @@ output:
           snapshotTabs.push(li);
         } else if (cleanText === 'Regional Price Ranking') {
           rankingTabs.push(li);
-        } else if (cleanText === 'Hurdle Decomposition') {
-          hurdleTabs.push(li);
         }
       }
     });
@@ -152,7 +155,6 @@ output:
 
     updateTabGroup(snapshotTabs);
     updateTabGroup(rankingTabs);
-    updateTabGroup(hurdleTabs);
   };
   // Run after the full page (including rmarkdown's buildTabsets) has loaded
   window.addEventListener('load', function() { setSector('Bulk'); });
@@ -209,25 +211,29 @@ resolve_actor_index <- function(val, default = "Actor Power Index") {
 
 cfg <- list(
   Bulk = list(
-    instQuality  = params$instQualityDriversBulk,
-    controls     = params$controlDriversBulk,
-    regionFE     = if (is.null(params$regionMappingFEBulk) ||
-                       nchar(as.character(params$regionMappingFEBulk)) == 0)
-                     NULL else params$regionMappingFEBulk,
-    lagged       = isTRUE(params$includeLaggedBulk),
-    actorPower   = params$actorPowerDriversBulk,
-    actorIndex   = resolve_actor_index(params$actorPowerIndexBulk)
+    instQuality       = params$instQualityDriversBulk,
+    controls          = params$controlDriversBulk,
+    regionFE          = if (is.null(params$regionMappingFEBulk) ||
+                            nchar(as.character(params$regionMappingFEBulk)) == 0)
+                          NULL else params$regionMappingFEBulk,
+    lagged            = isTRUE(params$includeLaggedBulk),
+    logisticTimeTrend = isTRUE(params$logisticTimeTrendBulk),
+    useMundlak        = isTRUE(params$useMundlakBulk),
+    actorPower        = params$actorPowerDriversBulk,
+    actorIndex        = resolve_actor_index(params$actorPowerIndexBulk)
   ),
   Diffuse = list(
-    instQuality  = resolve_sector(params$instQualityDriversDiffuse, params$instQualityDriversBulk),
-    controls     = resolve_sector(params$controlDriversDiffuse,     params$controlDriversBulk),
-    regionFE     = {
+    instQuality       = resolve_sector(params$instQualityDriversDiffuse, params$instQualityDriversBulk),
+    controls          = resolve_sector(params$controlDriversDiffuse,     params$controlDriversBulk),
+    regionFE          = {
       raw <- resolve_sector(params$regionMappingFEDiffuse, params$regionMappingFEBulk)
       if (is.null(raw) || nchar(as.character(raw)) == 0) NULL else raw
     },
-    lagged       = isTRUE(resolve_sector(params$includeLaggedDiffuse, params$includeLaggedBulk)),
-    actorPower   = resolve_sector(params$actorPowerDriversDiffuse, params$actorPowerDriversBulk),
-    actorIndex   = resolve_actor_index(resolve_sector(params$actorPowerIndexDiffuse, params$actorPowerIndexBulk))
+    lagged            = isTRUE(resolve_sector(params$includeLaggedDiffuse,        params$includeLaggedBulk)),
+    logisticTimeTrend = isTRUE(resolve_sector(params$logisticTimeTrendDiffuse,    params$logisticTimeTrendBulk)),
+    useMundlak        = isTRUE(resolve_sector(params$useMundlakDiffuse,           params$useMundlakBulk)),
+    actorPower        = resolve_sector(params$actorPowerDriversDiffuse, params$actorPowerDriversBulk),
+    actorIndex        = resolve_actor_index(resolve_sector(params$actorPowerIndexDiffuse, params$actorPowerIndexBulk))
   )
 )
 
@@ -239,7 +245,9 @@ adp_cfg <- list(
                   NULL else params$adoptionRegionMappingFE
 )
 
-adoption_threshold <- as.numeric(params$adoptionThreshold)
+adoption_threshold         <- as.numeric(params$adoptionThreshold)
+adoption_threshold_bulk    <- as.numeric(params$adoptionThresholdBulk    %||% params$adoptionThreshold)
+adoption_threshold_diffuse <- as.numeric(params$adoptionThresholdDiffuse %||% params$adoptionThreshold)
 snapshot_years     <- as.integer(params$snapshotYears)
 key_regions        <- c("USA", "CHA", "DEU", "IND", "JPN", "BRA", "RUS", "ZAF")
 LOG_TRANSFORM      <- TRUE  # always TRUE — matches estimatePriceStringencyModel default
@@ -299,8 +307,10 @@ fit_str <- list(
     instQualityDrivers        = cfg$Bulk$instQuality,
     controlDrivers            = cfg$Bulk$controls,
     includeLaggedECP          = cfg$Bulk$lagged,
-    regionMappingFixedEffects = cfg$Bulk$regionFE,
-    logTransform              = LOG_TRANSFORM
+    regionMappingFixedEffects = if (isTRUE(cfg$Bulk$useMundlak)) NULL else cfg$Bulk$regionFE,
+    logTransform              = LOG_TRANSFORM,
+    logisticTimeTrend         = isTRUE(cfg$Bulk$logisticTimeTrend),
+    useMundlak                = isTRUE(cfg$Bulk$useMundlak)
   ),
   Diffuse = estimatePriceStringencyModel(
     data                      = panelData, sector = "Diffuse",
@@ -309,8 +319,10 @@ fit_str <- list(
     instQualityDrivers        = cfg$Diffuse$instQuality,
     controlDrivers            = cfg$Diffuse$controls,
     includeLaggedECP          = cfg$Diffuse$lagged,
-    regionMappingFixedEffects = cfg$Diffuse$regionFE,
-    logTransform              = LOG_TRANSFORM
+    regionMappingFixedEffects = if (isTRUE(cfg$Diffuse$useMundlak)) NULL else cfg$Diffuse$regionFE,
+    logTransform              = LOG_TRANSFORM,
+    logisticTimeTrend         = isTRUE(cfg$Diffuse$logisticTimeTrend),
+    useMundlak                = isTRUE(cfg$Diffuse$useMundlak)
   )
 )
 
@@ -346,7 +358,8 @@ if (!is.null(future_mag)) {
       actorPowerIndex           = union(cfg[[sec]]$actorIndex, "Actor Power Index"),
       instQualityDrivers        = union(cfg[[sec]]$instQuality, adp_cfg$instQuality),
       controlDrivers            = union(cfg[[sec]]$controls, adp_cfg$controls),
-      regionMappingFixedEffects = cfg[[sec]]$regionFE,
+      regionMappingFixedEffects = if (isTRUE(cfg[[sec]]$useMundlak)) NULL else cfg[[sec]]$regionFE,
+      useMundlak                = isTRUE(cfg[[sec]]$useMundlak),
       lag = 1
     )
   }
@@ -1020,7 +1033,8 @@ ensure_str_data <- function(fit, sec, cfg_sec, panel_data) {
       actorPowerIndex           = cfg_sec$actorIndex,
       instQualityDrivers        = cfg_sec$instQuality,
       controlDrivers            = cfg_sec$controls,
-      regionMappingFixedEffects = cfg_sec$regionFE,
+      regionMappingFixedEffects = if (isTRUE(cfg_sec$useMundlak)) NULL else cfg_sec$regionFE,
+      useMundlak                = isTRUE(cfg_sec$useMundlak),
       lag = 1
     ),
     error = function(e) NULL
@@ -1033,16 +1047,20 @@ fit_str$Bulk    <- ensure_str_data(fit_str$Bulk,    "Bulk",    cfg$Bulk,    pane
 fit_str$Diffuse <- ensure_str_data(fit_str$Diffuse, "Diffuse", cfg$Diffuse, panelData)
 
 proj_str <- list(
-  Bulk    = get_gated_projections(fit_str$Bulk,    fit_adp$Bulk,    future_df$Bulk,    adoption_threshold,
-                                   str_regionFE = cfg$Bulk$regionFE,    adp_regionFE = adp_cfg$regionFE),
-  Diffuse = get_gated_projections(fit_str$Diffuse, fit_adp$Diffuse, future_df$Diffuse, adoption_threshold,
-                                   str_regionFE = cfg$Diffuse$regionFE, adp_regionFE = adp_cfg$regionFE)
+  Bulk    = get_gated_projections(fit_str$Bulk,    fit_adp$Bulk,    future_df$Bulk,    adoption_threshold_bulk,
+                                   str_regionFE = if (isTRUE(cfg$Bulk$useMundlak))    NULL else cfg$Bulk$regionFE,
+                                   adp_regionFE = adp_cfg$regionFE),
+  Diffuse = get_gated_projections(fit_str$Diffuse, fit_adp$Diffuse, future_df$Diffuse, adoption_threshold_diffuse,
+                                   str_regionFE = if (isTRUE(cfg$Diffuse$useMundlak)) NULL else cfg$Diffuse$regionFE,
+                                   adp_regionFE = adp_cfg$regionFE)
 )
 hurdle <- list(
   Bulk    = get_hurdle_projections(fit_str$Bulk,    fit_adp$Bulk,    future_df$Bulk,
-                                    str_regionFE = cfg$Bulk$regionFE,    adp_regionFE = adp_cfg$regionFE),
+                                    str_regionFE = if (isTRUE(cfg$Bulk$useMundlak))    NULL else cfg$Bulk$regionFE,
+                                    adp_regionFE = adp_cfg$regionFE),
   Diffuse = get_hurdle_projections(fit_str$Diffuse, fit_adp$Diffuse, future_df$Diffuse,
-                                    str_regionFE = cfg$Diffuse$regionFE, adp_regionFE = adp_cfg$regionFE)
+                                    str_regionFE = if (isTRUE(cfg$Diffuse$useMundlak)) NULL else cfg$Diffuse$regionFE,
+                                    adp_regionFE = adp_cfg$regionFE)
 )
 
 # Maps setup (same pattern as adoption report)
@@ -1083,7 +1101,7 @@ mem_diffuse <- compute_mem(fit_str$Diffuse)
   <li><strong>Sample:</strong> Region-years with ECP_Bulk &gt; 0</li>
   <li><strong>IQ drivers:</strong> `r paste(cfg$Bulk$instQuality, collapse = ", ")`</li>
   <li><strong>Controls:</strong> `r paste(cfg$Bulk$controls, collapse = ", ")`</li>
-  <li><strong>Region FE:</strong> `r if (is.null(cfg$Bulk$regionFE)) "None" else cfg$Bulk$regionFE`</li>
+  <li><strong>`r if (isTRUE(cfg$Bulk$useMundlak)) "Mundlak correction" else "Region FE"`:</strong> `r if (isTRUE(cfg$Bulk$useMundlak)) "ON (within-region group means)" else if (is.null(cfg$Bulk$regionFE)) "None" else cfg$Bulk$regionFE`</li>
   <li><strong>Lagged ECP:</strong> `r cfg$Bulk$lagged`</li>
 </ul>
 </div></div></div>
@@ -1097,7 +1115,7 @@ mem_diffuse <- compute_mem(fit_str$Diffuse)
   <li><strong>Sample:</strong> Region-years with ECP_Diffuse &gt; 0</li>
   <li><strong>IQ drivers:</strong> `r paste(cfg$Diffuse$instQuality, collapse = ", ")`</li>
   <li><strong>Controls:</strong> `r paste(cfg$Diffuse$controls, collapse = ", ")`</li>
-  <li><strong>Region FE:</strong> `r if (is.null(cfg$Diffuse$regionFE)) "None" else cfg$Diffuse$regionFE`</li>
+  <li><strong>`r if (isTRUE(cfg$Diffuse$useMundlak)) "Mundlak correction" else "Region FE"`:</strong> `r if (isTRUE(cfg$Diffuse$useMundlak)) "ON (within-region group means)" else if (is.null(cfg$Diffuse$regionFE)) "None" else cfg$Diffuse$regionFE`</li>
   <li><strong>Lagged ECP:</strong> `r cfg$Diffuse$lagged`</li>
 </ul>
 </div></div></div>
@@ -2043,51 +2061,48 @@ if (has_scenario && !is.null(hurdle$Diffuse)) {
 
 </div>
 
-```{r hurdle-decomp-bulk, echo=FALSE, results='asis'}
-if (has_scenario && !is.null(hurdle$Bulk) && !is.null(proj_str$Bulk)) {
-  cat('<div class="bulk-only">\n\n')
-  cat('## Hurdle Decomposition {.tabset}\n\n')
-  cat('Shows Pr(Adoption), Conditional Price, Expected ECP, and the hard-gated price side-by-side. Where hard-gated and expected diverge most indicates where the threshold assumption is load-bearing.\n\n')
-  for (yr in snapshot_years) {
-    h <- hurdle$Bulk[hurdle$Bulk$year == yr, ]
-    g <- proj_str$Bulk[proj_str$Bulk$year == yr, c("region", "price_gated")]
-    if (nrow(h) == 0) next
-    df_dec <- merge(h[, c("region", "pr_adoption", "price_hat_usd", "expected_ecp")],
-                    g, by = "region", all.x = TRUE)
-    df_dec <- df_dec[order(-df_dec$expected_ecp), ]
-    df_dec[, 2:5] <- round(df_dec[, 2:5], 2)
-    names(df_dec) <- c("Region", "Pr(Adoption)", "Cond. Price (USD/tCO₂)", "Expected ECP (USD/tCO₂)", "Gated Price (USD/tCO₂)")
-    cat(sprintf("\n### %d\n\n", yr))
-    cat(sprintf("\n**Bulk Hurdle Decomposition — %d:**\n\n", yr))
-    print(kable(df_dec, format="html") %>%
-      kable_styling(bootstrap_options=c("striped","hover","condensed"),
-                    full_width=FALSE))
-    cat("\n\n")
-  }
-  cat('\n</div>\n\n')
-}
+```{r hurdle-decomp, echo=FALSE, results='asis'}
+has_bulk_decomp    <- has_scenario && !is.null(hurdle$Bulk)   && !is.null(proj_str$Bulk)
+has_diffuse_decomp <- has_scenario && !is.null(hurdle$Diffuse) && !is.null(proj_str$Diffuse)
 
-if (has_scenario && !is.null(hurdle$Diffuse) && !is.null(proj_str$Diffuse)) {
-  cat('<div class="diffuse-only">\n\n')
+if (has_bulk_decomp || has_diffuse_decomp) {
   cat('## Hurdle Decomposition {.tabset}\n\n')
   cat('Shows Pr(Adoption), Conditional Price, Expected ECP, and the hard-gated price side-by-side. Where hard-gated and expected diverge most indicates where the threshold assumption is load-bearing.\n\n')
   for (yr in snapshot_years) {
-    h <- hurdle$Diffuse[hurdle$Diffuse$year == yr, ]
-    g <- proj_str$Diffuse[proj_str$Diffuse$year == yr, c("region", "price_gated")]
-    if (nrow(h) == 0) next
-    df_dec <- merge(h[, c("region", "pr_adoption", "price_hat_usd", "expected_ecp")],
-                    g, by = "region", all.x = TRUE)
-    df_dec <- df_dec[order(-df_dec$expected_ecp), ]
-    df_dec[, 2:5] <- round(df_dec[, 2:5], 2)
-    names(df_dec) <- c("Region", "Pr(Adoption)", "Cond. Price (USD/tCO₂)", "Expected ECP (USD/tCO₂)", "Gated Price (USD/tCO₂)")
     cat(sprintf("\n### %d\n\n", yr))
-    cat(sprintf("\n**Diffuse Hurdle Decomposition — %d:**\n\n", yr))
-    print(kable(df_dec, format="html") %>%
-      kable_styling(bootstrap_options=c("striped","hover","condensed"),
-                    full_width=FALSE))
-    cat("\n\n")
+    if (has_bulk_decomp) {
+      h <- hurdle$Bulk[hurdle$Bulk$year == yr, ]
+      g <- proj_str$Bulk[proj_str$Bulk$year == yr, c("region", "price_gated")]
+      if (nrow(h) > 0) {
+        df_dec <- merge(h[, c("region", "pr_adoption", "price_hat_usd", "expected_ecp")],
+                        g, by = "region", all.x = TRUE)
+        df_dec <- df_dec[order(-df_dec$expected_ecp), ]
+        df_dec[, 2:5] <- round(df_dec[, 2:5], 2)
+        names(df_dec) <- c("Region", "Pr(Adoption)", "Cond. Price (USD/tCO₂)", "Expected ECP (USD/tCO₂)", "Gated Price (USD/tCO₂)")
+        cat('<div class="bulk-only">\n\n')
+        cat(sprintf("**Bulk Hurdle Decomposition — %d:**\n\n", yr))
+        print(kable(df_dec, format="html") %>%
+          kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=FALSE))
+        cat("\n\n</div>\n\n")
+      }
+    }
+    if (has_diffuse_decomp) {
+      h <- hurdle$Diffuse[hurdle$Diffuse$year == yr, ]
+      g <- proj_str$Diffuse[proj_str$Diffuse$year == yr, c("region", "price_gated")]
+      if (nrow(h) > 0) {
+        df_dec <- merge(h[, c("region", "pr_adoption", "price_hat_usd", "expected_ecp")],
+                        g, by = "region", all.x = TRUE)
+        df_dec <- df_dec[order(-df_dec$expected_ecp), ]
+        df_dec[, 2:5] <- round(df_dec[, 2:5], 2)
+        names(df_dec) <- c("Region", "Pr(Adoption)", "Cond. Price (USD/tCO₂)", "Expected ECP (USD/tCO₂)", "Gated Price (USD/tCO₂)")
+        cat('<div class="diffuse-only">\n\n')
+        cat(sprintf("**Diffuse Hurdle Decomposition — %d:**\n\n", yr))
+        print(kable(df_dec, format="html") %>%
+          kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=FALSE))
+        cat("\n\n</div>\n\n")
+      }
+    }
   }
-  cat('\n</div>\n\n')
 }
 
 if (!has_scenario) cat('\n## Hurdle Decomposition\n\n> Scenario data not available.\n\n')
