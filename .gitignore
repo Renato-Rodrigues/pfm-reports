@@ -6,9 +6,10 @@
 data/
 
 # Rendered output
-models/
+cache/
 output/
 *.html
+*.md
 
 # R session artefacts
 *.Rproj
@@ -36,3 +37,4 @@ scripts/
 # Model-selection configuration files
 reports/model-selection/model-configs/*.yml
 reports/model-selection/model-configs/*.yaml
+

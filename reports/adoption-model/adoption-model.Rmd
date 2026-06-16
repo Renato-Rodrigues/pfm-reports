@@ -160,7 +160,7 @@ if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
 # Load fits from the shared PFM model store (populated by model-selection).
 # Same formula + same data → same cache key → same Ridge λ → matching forest plots.
 .model_store <- file.path(rprojroot::find_rstudio_root_file(),
-                           getPfmConfig("modelDir", "models"))
+                           getPfmConfig("modelDir", "cache"))
 dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
 options(pfm.modelDir = .model_store)
 
@@ -308,6 +308,10 @@ future_df_bulk    <- NULL
 future_df_diffuse <- NULL
 
 if (!is.null(future_mag)) {
+  # Reuse the driver-standardization mean/sd FROZEN on the historical fit (ADR
+  # 0007): the fit's coefficients are on the historical-frozen scale, so the
+  # scenario design must be standardized with the same reference (attr on the
+  # fitted df), not re-standardized on the scenario's own distribution.
   future_df_bulk <- preparePanelData(
     data                      = future_mag,
     sector                    = "Bulk",
@@ -316,7 +320,9 @@ if (!is.null(future_mag)) {
     instQualityDrivers        = cfg$Bulk$instQuality,
     controlDrivers            = cfg$Bulk$controls,
     regionMappingFixedEffects = cfg$Bulk$regionFE,
-    lag                       = 1
+    lag                       = 1,
+    driverScaling             = attr(fit_bulk$data, "driverScaling"),
+    trendFreezeYear           = max(magclass::getYears(panelData, as.integer = TRUE))
   )
   future_df_diffuse <- preparePanelData(
     data                      = future_mag,
@@ -326,7 +332,9 @@ if (!is.null(future_mag)) {
     instQualityDrivers        = cfg$Diffuse$instQuality,
     controlDrivers            = cfg$Diffuse$controls,
     regionMappingFixedEffects = cfg$Diffuse$regionFE,
-    lag                       = 1
+    lag                       = 1,
+    driverScaling             = attr(fit_diffuse$data, "driverScaling"),
+    trendFreezeYear           = max(magclass::getYears(panelData, as.integer = TRUE))
   )
 }
 

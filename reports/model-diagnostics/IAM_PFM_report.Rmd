@@ -6,7 +6,7 @@ date: "`r Sys.Date()`"
 params:
   modelData:     NULL
   modelDataFile: "data/modelData.RData"
-  modelDir:      "models"
+  modelDir:      "cache"
   cacheDir:      ""
   gdxPath:       ""
   assetDir:      "output/IAM_PFM_report"
@@ -80,7 +80,7 @@ diag_results <- diagnoseModelResults(
 The **IAM-PFM** (Integrated Assessment Model with Political Feasibility Module) embeds two-stage hurdle models for carbon-pricing into the REMIND integrated assessment model. For each of two electricity-sector archetypes — **Bulk** (large industrial/utility consumers) and **Diffuse** (transport, buildings, small industry) — the hurdle comprises:
 
 * **Stage 1 — Adoption** (`logistf`): penalised logistic regression predicting whether a jurisdiction has adopted carbon pricing (binary outcome).
-* **Stage 2 — Stringency** (Gamma GLM with log link, bias-reduced via `brglm2`): conditional on adoption, a GLM predicts the level of the Effective Carbon Price (ECP).
+* **Stage 2 — Stringency** (gaussian GLM, identity link on log(1+ECP); ADR 0007): conditional on adoption, a GLM predicts log(1+ECP), back-transformed to the Effective Carbon Price (ECP) as `exp(Xβ)−1`.
 
 Four model variants were estimated:
 
@@ -143,7 +143,7 @@ nodes <- data.frame(
   y     = c(2, 2, 3, 1),
   label = c(
     "Panel Data\n2000–2022", "Stage 1\nAdoption\n(logistf)",
-    "Stage 2\nStringency\n(Gamma GLM)", "ECP = 0\n(no policy)"
+    "Stage 2\nStringency\n(gaussian GLM)", "ECP = 0\n(no policy)"
   ),
   fill  = c("grey70", col_md, col_bulk, "grey85")
 )
@@ -212,7 +212,7 @@ Predicts the probability that a jurisdiction $i$ at time $t$ has adopted carbon 
 
 $$\text{logit}(Pr(ECP_{i,t,s} > 0)) = \alpha_{0,s} + \sum_l \alpha_{1,l,s} AP_{i,t-1,s,l} + \sum_k \alpha_{2,k,s} IQ_{i,t-1,s,k} + AP\_Index_{i,t-1,s} \times \sum_k \alpha_{e,k,s} IQ_{i,t-1,s,k} + \sum_j \alpha_{4,j,s} Ctrl_{i,t-1,s,j} + CRFE + TT + \epsilon_{i,t-1,s}$$
 
-### Stage 2: Stringency (Gamma GLM)
+### Stage 2: Stringency (Gaussian GLM, identity link on log(1+ECP))
 
 Conditional on adoption, predicts the level of the Effective Carbon Price (ECP) using a log-link:
 

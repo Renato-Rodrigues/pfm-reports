@@ -30,54 +30,50 @@ The directory contains five core analytical R Markdown reports:
 
 ---
 
-## 🚀 How to Run the Reports (Consolidated Builder)
+## 🚀 How to Run the Reports
 
-We provide a central launcher script (`createReports.R`) at the root of `pfm-reports` that automates compiling the reports. It reads default paths dynamically from `config.yml` (copy from `config.yml.example` to customize).
+Each report is a self-contained `.Rmd` with its own `run.R` launcher in
+`reports/<name>/`. Launchers read default paths dynamically from `config.yml`
+(copy from `config.yml.example` to customize) via `src/r/configHelper.R`.
 
-### Method A: Parallel Build (Recommended)
-You can compile **all 5 reports in parallel** using background workers. This runs extremely fast and handles cache population automatically.
+### Method A: Full Channels Workflow (Recommended)
 
-* **Via Command Line / Terminal:**
-  ```bash
-  # Run from the pfm-reports folder
-  Rscript createReports.R 0
-  ```
-  *(You can also use `Rscript createReports.R --parallel` or `Rscript createReports.R all`)*
+The end-to-end driver `run-channels-workflow.R` generates the sweep config, runs
+model selection (maximin + Projection Sanity), writes the selected-models config,
+and renders the consumer reports (`selection`, `results-adoption`,
+`results-stringency`, `publication`) automatically. Run from the `pfm-reports` root:
 
-* **Via R Console / RStudio:**
-  ```R
-  source("createReports.R")
-  # Select option [0] when prompted
-  ```
-
-### Method B: Single Report (Interactive CLI)
-You can build a specific report and customize its paths interactively.
-
-* **Via R Console / RStudio:**
-  ```R
-  source("createReports.R")
-  # Select the report index [1-5] when prompted
-  # Press Enter to accept the default configuration shown in brackets
-  ```
-
-* **Via CLI:**
-  ```bash
-  Rscript createReports.R 1   # Builds adoption-model
-  Rscript createReports.R 2   # Builds downscale
-  Rscript createReports.R 3   # Builds model-diagnostics
-  Rscript createReports.R 4   # Builds model-selection
-  Rscript createReports.R 5   # Builds panel-data-input
-  ```
-
-### Method C: Running Selected Models with Custom Configuration
-To run the adoption model (`1`) and price stringency model (`7`) using the configurations defined in `selected-models.yml` (naming the output report `selected-models` and keeping caches):
-
-```powershell
-PS C:\Users\renatoro\Desktop\Projects\Elevate\code\_code\pfm-reports> Rscript createReports.R 1,7 --adoptionConfig=reports/model-selection/model-configs/selected-models.yml --stringencyConfig=reports/model-selection/model-configs/selected-models.yml --reportName=selected-models --no-clear
+```bash
+Rscript run-channels-workflow.R --mode=guided      # fast curated suite
+Rscript run-channels-workflow.R --mode=exhaustive  # full combination sweep
 ```
 
-### Method D: Manual Render (R Console)
-If you prefer to render a single report manually without the launcher:
+Fitted models and panels are cached under `cache/` (content-addressed, ADR 0009),
+so reruns reuse completed fits.
+
+### Method B: Single Report
+
+Render any individual report via its `run.R` launcher. From the `pfm-reports` root:
+
+```bash
+Rscript reports/adoption-model/run.R
+Rscript reports/stringency-model/run.R
+Rscript reports/model-selection/run.R --modelConfig=model-configs/selected-models-channels-exhaustive.yml
+Rscript reports/country-adoption/run.R --country=IND
+Rscript reports/downscale/run.R
+Rscript reports/model-diagnostics/run.R
+```
+
+Most launchers accept `--reportName=<label>` (output suffix) and `--modelConfig=`
+(or `--theoryConfig=` / `--adoptionConfig=` / `--stringencyConfig=`) to point at a
+selected-models YAML in `reports/model-selection/model-configs/`.
+
+> **Note:** the model-diagnostics report generates the shared `data/modelData.RData`
+> cache consumed by the Python dashboard. Delete that file to force a recompute
+> against a new selection.
+
+### Method C: Manual Render (R Console)
+To render a single report manually without its launcher:
 ```R
 library(rmarkdown)
 rmarkdown::render("reports/model-selection/model-selection.Rmd", output_dir = "output")

@@ -9,7 +9,7 @@ params:
   theoryConfigFile:    "model-configs/selected-models-v2.yml"
   predictionConfigFile: "model-configs/selected-models-v2-prediction.yml"
   assetDir:            "output/publication"
-  modelDir:            "models"
+  modelDir:            "cache"
 output:
   html_document:
     toc: true
@@ -448,9 +448,9 @@ Let $y_{it}$ denote the effective carbon price in region $i$ at time $t$. The ob
 
 $$P(\text{Adopt}_{it} = 1) = \Lambda(\mathbf{x}_{it}'\boldsymbol{\beta}_1) \qquad \text{[Stage 1]}$$
 
-$$E[y_{it} \mid y_{it} > 0] = \exp(\mathbf{x}_{it}'\boldsymbol{\beta}_2) \qquad \text{[Stage 2]}$$
+$$E[\log(1 + y_{it}) \mid y_{it} > 0] = \mathbf{x}_{it}'\boldsymbol{\beta}_2 \qquad \text{[Stage 2]}$$
 
-where $\Lambda(\cdot)$ is the logistic CDF and Stage 2 uses a Gamma GLM with log link.
+where $\Lambda(\cdot)$ is the logistic CDF and Stage 2 uses a gaussian (identity-link) GLM on $\log(1+\text{ECP})$, back-transformed as $\widehat{\text{ECP}} = e^{\mathbf{x}'\boldsymbol{\beta}_2}-1$.
 
 ## Theory Channels
 
@@ -587,11 +587,11 @@ The time component $T_{it}$ is either:
 - **Linear trend:** $T_{it} = t - 1999$ (year index starting from 1 in 2000)
 - **Logistic trend:** $T_{it} = [1 + \exp(-0.2(t - 2030))]^{-1}$ — saturates at 1 by ~2060, preventing unbounded extrapolation.
 
-## Stage 2: Stringency (Gamma GLM, Log Link)
+## Stage 2: Stringency (Gaussian GLM, Identity Link on log(1+ECP))
 
-$$\log(E[y_{it} \mid y_{it} > 0]) = \alpha + \beta_{\text{AP}} \cdot \text{AP}_{it-1} + \beta_{\text{IQ}} \cdot \text{IQ}_{it-1} + \beta_{\text{AP×IQ}} \cdot (\text{AP} \times \text{IQ})_{it-1} + \gamma \cdot \mathbf{z}_{it-1} + \delta \cdot T_{it} + \varepsilon_{it}$$
+$$E[\log(1 + y_{it}) \mid y_{it} > 0] = \alpha + \beta_{\text{AP}} \cdot \text{AP}_{it-1} + \beta_{\text{IQ}} \cdot \text{IQ}_{it-1} + \beta_{\text{AP×IQ}} \cdot (\text{AP} \times \text{IQ})_{it-1} + \gamma \cdot \mathbf{z}_{it-1} + \delta \cdot T_{it} + \varepsilon_{it}$$
 
-The Gamma family with log link is natural for positive, right-skewed carbon price data. The model is estimated on the subsample of region-years with positive ECP ($y_{it} > 0$). Robust clustered standard errors by region are applied post-estimation.
+The outcome is the log-transformed price $\log(1 + y_{it})$ modelled with a **gaussian (identity-link) GLM**, back-transformed as $\widehat{\text{ECP}} = e^{X\beta} - 1$. This replaces the former Gamma-log specification, which double-exponentiated under projection and drove the price explosion (ADR 0007). The model is estimated on the subsample of region-years with positive ECP ($y_{it} > 0$); drivers are standardized and robust clustered standard errors by region are applied post-estimation.
 
 ## Mundlak Correction
 
@@ -805,7 +805,7 @@ if (!is.null(fs_d)) {
 ```{r str-bulk-config, echo=FALSE, results='asis'}
 if (!is.null(th_str_bulk)) {
   cat(sprintf(
-    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Dependent:** log(1 + ECP_Bulk), Gamma GLM\n\n",
+    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Dependent:** log(1 + ECP_Bulk), gaussian GLM (identity)\n\n",
     th_str_bulk$name %||% "Theory-Optimal Stringency Bulk",
     paste(th_str_bulk$instQualityDrivers, collapse = " + "),
     paste(th_str_bulk$actorPowerIndex, collapse = " + "),
@@ -820,7 +820,7 @@ Coefficients are on the log(1 + ECP) scale. Semi-elasticity = exp(β) − 1: the
 
 ```{r str-bulk-coef, echo=FALSE, results='asis'}
 render_coef_kable(semi_elas_df(th_fit_str_bulk),
-  "Table 6a: Stringency Model — Bulk Sector (Theory-Optimal; Gamma GLM, log link). Semi-elas. = exp(β) − 1.")
+  "Table 6a: Stringency Model — Bulk Sector (Theory-Optimal; gaussian GLM, identity link on log(1+ECP)). Semi-elas. = exp(β) − 1.")
 ```
 
 <div class="finding-box">
@@ -875,7 +875,7 @@ if (!is.null(fs_sb)) {
 ```{r str-diff-config, echo=FALSE, results='asis'}
 if (!is.null(th_str_diff)) {
   cat(sprintf(
-    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Dependent:** log(1 + ECP_Diffuse), Gamma GLM\n\n",
+    "> **Model:** %s | **IQ:** %s | **AP:** %s | **FE:** %s | **Dependent:** log(1 + ECP_Diffuse), gaussian GLM (identity)\n\n",
     th_str_diff$name %||% "Theory-Optimal Stringency Diffuse",
     paste(th_str_diff$instQualityDrivers, collapse = " + "),
     paste(th_str_diff$actorPowerIndex, collapse = " + "),
@@ -888,7 +888,7 @@ if (!is.null(th_str_diff)) {
 
 ```{r str-diff-coef, echo=FALSE, results='asis'}
 render_coef_kable(semi_elas_df(th_fit_str_diff),
-  "Table 6b: Stringency Model — Diffuse Sector (Theory-Optimal; Gamma GLM, log link). Semi-elas. = exp(β) − 1.")
+  "Table 6b: Stringency Model — Diffuse Sector (Theory-Optimal; gaussian GLM, identity link on log(1+ECP)). Semi-elas. = exp(β) − 1.")
 ```
 
 ### Forest Plot

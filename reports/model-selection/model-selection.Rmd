@@ -60,7 +60,7 @@ invisible(tryCatch(madrat::calcOutput("VDem", subtype = "stateCapacity", aggrega
 madrat::setConfig(forcecache = TRUE)
 
 # Resolve modelDir as an absolute path relative to the project root to prevent relative directory collisions
-model_dir <- getPfmConfig("modelDir", "models")
+model_dir <- getPfmConfig("modelDir", "cache")
 if (!is_absolute_path(model_dir)) {
   model_dir <- file.path(rprojroot::find_rstudio_root_file(), model_dir)
 }
@@ -102,6 +102,9 @@ normalize_model_config <- function(cfg) {
   cfg$gdpGovInteraction  <- isTRUE(cfg$gdpGovInteraction)
   # NULL ridgeInteractions defaults to FALSE (library default)
   cfg$ridgeInteractions  <- isTRUE(cfg$ridgeInteractions)
+  # Panel Transform axis (ADR 0005): levels (default) | hybridFD | pureFD
+  cfg$panelTransform <- if (is.null(cfg$panelTransform)) "levels" else
+    match.arg(cfg$panelTransform, c("levels", "hybridFD", "pureFD"))
   cfg
 }
 
@@ -116,7 +119,7 @@ model_configs <- lapply(yaml::read_yaml(model_config_file), normalize_model_conf
 # (formula + data hash). Adoption/stringency reports load from this store so
 # their forest plots match model-selection exactly (same fit, same Ridge λ).
 .model_store <- file.path(rprojroot::find_rstudio_root_file(),
-                           getPfmConfig("modelDir", "models"))
+                           getPfmConfig("modelDir", "cache"))
 dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
 options(pfm.modelDir = .model_store)
 
@@ -382,7 +385,9 @@ add_delta_r2 <- function(fit, sec_stg, model_name, cfg) {
   if (is.null(fml_base)) return(invisible(NULL))
 
   stage <- if (grepl("Adoption", sec_stg, ignore.case = TRUE)) "Adoption" else "Stringency"
-  fam   <- if (stage == "Adoption") binomial(link = "logit") else Gamma(link = "log")
+  # Stringency is now a gaussian (identity-link) GLM on log(1+ECP) (ADR 0007),
+  # so the baseline must share that family/link for a valid deviance-based ΔR².
+  fam   <- if (stage == "Adoption") binomial(link = "logit") else gaussian(link = "identity")
 
   base_fit <- tryCatch(
     suppressWarnings(glm(fml_base, data = df, family = fam,
@@ -659,6 +664,7 @@ model_specs <- map_df(model_configs, ~ tibble(
   instQualityDrivers = paste(.x$instQualityDrivers, collapse = "<br>"),
   controlDrivers = paste(.x$controlDrivers, collapse = "<br>"),
   `includeLagged*` = as.character(.x$includeLagged),
+  panelTransform = .x$panelTransform %||% "levels",
   logisticTrend = as.character(isTRUE(.x$logisticTimeTrend)),
   useMundlak = as.character(isTRUE(.x$useMundlak)),
   gdpGovInteraction = as.character(isTRUE(.x$gdpGovInteraction)),
@@ -737,7 +743,8 @@ for (stg in stages) {
             useMundlak               = isTRUE(cfg$useMundlak),
             gdpGovInteraction        = isTRUE(cfg$gdpGovInteraction),
             logisticTimeTrend        = isTRUE(cfg$logisticTimeTrend),
-            ridgeInteractions        = isTRUE(cfg$ridgeInteractions)
+            ridgeInteractions        = isTRUE(cfg$ridgeInteractions),
+            panelTransform           = cfg$panelTransform
           )
         } else {
           estimatePriceStringencyModel(
@@ -752,7 +759,8 @@ for (stg in stages) {
             useMundlak               = isTRUE(cfg$useMundlak),
             gdpGovInteraction        = isTRUE(cfg$gdpGovInteraction),
             logisticTimeTrend        = isTRUE(cfg$logisticTimeTrend),
-            ridgeInteractions        = isTRUE(cfg$ridgeInteractions)
+            ridgeInteractions        = isTRUE(cfg$ridgeInteractions),
+            panelTransform           = cfg$panelTransform
           )
         }
       }, error = function(e) {

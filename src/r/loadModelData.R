@@ -29,7 +29,7 @@ loadModelData <- function(params) {
 
   # Set pfm.modelDir unconditionally so loadPFMModel() / listPFMModels() work
   # regardless of whether we load from the modelData cache or recompute.
-  modelDir <- params$modelDir %||% getPfmConfig("modelDir", "models")
+  modelDir <- params$modelDir %||% getPfmConfig("modelDir", "cache")
   if (!is_absolute_path(modelDir)) {
     modelDir <- file.path(rprojroot::find_rstudio_root_file(), modelDir)
   }
@@ -133,17 +133,32 @@ loadModelData <- function(params) {
   future_df_diffuse <- NULL
 
   if (!is.null(future_mag)) {
+    # Reuse the driver-standardization mean/sd FROZEN on the historical panel
+    # (ADR 0007): the scenario design must share the historical reference, or the
+    # fitted coefficients no longer apply (biased/exploding projections).
+    .freezeScale <- function(sec) {
+      hp <- preparePanelData(
+        data = panelData, sector = sec,
+        actorPowerDrivers = ext_actorPowerDrivers, actorPowerIndex = "Actor Power Index",
+        instQualityDrivers = ext_instQualityDrivers_all, controlDrivers = ext_controlDrivers,
+        regionMappingFixedEffects = "regionmapping_EU_OECDp.csv", lag = 1
+      )
+      attr(hp, "driverScaling")
+    }
+    .lastHistYr <- max(magclass::getYears(panelData, as.integer = TRUE))
     future_df_bulk <- preparePanelData(
       data = future_mag, sector = "Bulk",
       actorPowerDrivers = ext_actorPowerDrivers, actorPowerIndex = "Actor Power Index",
       instQualityDrivers = ext_instQualityDrivers_all, controlDrivers = ext_controlDrivers,
-      regionMappingFixedEffects = "regionmapping_EU_OECDp.csv", lag = 1
+      regionMappingFixedEffects = "regionmapping_EU_OECDp.csv", lag = 1,
+      driverScaling = .freezeScale("Bulk"), trendFreezeYear = .lastHistYr
     )
     future_df_diffuse <- preparePanelData(
       data = future_mag, sector = "Diffuse",
       actorPowerDrivers = ext_actorPowerDrivers, actorPowerIndex = "Actor Power Index",
       instQualityDrivers = ext_instQualityDrivers_all, controlDrivers = ext_controlDrivers,
-      regionMappingFixedEffects = "regionmapping_EU_OECDp.csv", lag = 1
+      regionMappingFixedEffects = "regionmapping_EU_OECDp.csv", lag = 1,
+      driverScaling = .freezeScale("Diffuse"), trendFreezeYear = .lastHistYr
     )
   }
 

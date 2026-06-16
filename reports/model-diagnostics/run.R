@@ -27,7 +27,7 @@ source(file.path(rprojroot::find_rstudio_root_file(), "src/r/configHelper.R"))
 
 render_report <- function(
     modelDataFile = "data/modelData.RData",
-    modelDir      = getPfmConfig("modelDir", "../../models"),
+    modelDir      = getPfmConfig("modelDir", "cache"),
     cacheDir      = getPfmConfig("cacheDir", ""),
     gdxPath       = getPfmConfig("gdxPath", "data/fulldata.gdx"),
     outputFile    = "output/IAM_PFM_report.html",

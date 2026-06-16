@@ -8,8 +8,10 @@ cacheDir: ""
 # Path to the REMIND fulldata.gdx file for scenario projections
 gdxPath: "data/fulldata.gdx"
 
-# Folder where individual fitted .rds models are saved/loaded (relative to report root or absolute)
-modelDir: "models"
+# Cache root (ADR 0009). Holds models/, panels/, projections/ and index.json
+# (relative to report root or absolute). Fitted models, the shared training panel,
+# and persisted scenario projections live in separate subfolders here.
+modelDir: "cache"
 
 # Output folder for generated HTML reports (relative to report root or absolute)
 outputDir: "output"
@@ -20,5 +22,5 @@ regionMappingFE: "regionmappingH12.csv"
 includeLagged: false
 adoptionThreshold: 0.5
 
-# Dashboard configuration
-dashboardModelsDir: "models"
+# Dashboard configuration (cache root; reads index.json + models/ from here)
+dashboardModelsDir: "cache"

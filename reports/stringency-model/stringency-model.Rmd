@@ -192,7 +192,7 @@ if (!is.null(params$cacheDir) && nchar(params$cacheDir) > 0) {
 }
 
 .model_store <- file.path(rprojroot::find_rstudio_root_file(),
-                           getPfmConfig("modelDir", "models"))
+                           getPfmConfig("modelDir", "cache"))
 dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
 options(pfm.modelDir = .model_store)
 
@@ -349,18 +349,32 @@ fit_adp <- list(
 )
 
 # ── Prepare future panel data ──────────────────────────────────────────────────
+# Driver standardization (ADR 0007) must reuse the mean/sd FROZEN on the
+# historical panel; otherwise the scenario design is standardized on its own
+# scale and the historical-frozen coefficients no longer apply (biased/exploding
+# prices, seam discontinuity). We recompute the frozen scaling from the same
+# historical panel the models were fit on and pass it via `driverScaling=`.
 future_df <- list(Bulk = NULL, Diffuse = NULL)
 if (!is.null(future_mag)) {
   for (sec in c("Bulk", "Diffuse")) {
+    ap  <- union(cfg[[sec]]$actorPower, NULL)
+    ai  <- union(cfg[[sec]]$actorIndex, "Actor Power Index")
+    iq  <- union(cfg[[sec]]$instQuality, adp_cfg$instQuality)
+    ctl <- union(cfg[[sec]]$controls, adp_cfg$controls)
+    fe  <- if (isTRUE(cfg[[sec]]$useMundlak)) NULL else cfg[[sec]]$regionFE
+    histPrep <- preparePanelData(
+      data = panelData, sector = sec,
+      actorPowerDrivers = ap, actorPowerIndex = ai,
+      instQualityDrivers = iq, controlDrivers = ctl,
+      regionMappingFixedEffects = fe, useMundlak = isTRUE(cfg[[sec]]$useMundlak), lag = 1
+    )
     future_df[[sec]] <- preparePanelData(
-      data                      = future_mag, sector = sec,
-      actorPowerDrivers         = union(cfg[[sec]]$actorPower, NULL),
-      actorPowerIndex           = union(cfg[[sec]]$actorIndex, "Actor Power Index"),
-      instQualityDrivers        = union(cfg[[sec]]$instQuality, adp_cfg$instQuality),
-      controlDrivers            = union(cfg[[sec]]$controls, adp_cfg$controls),
-      regionMappingFixedEffects = if (isTRUE(cfg[[sec]]$useMundlak)) NULL else cfg[[sec]]$regionFE,
-      useMundlak                = isTRUE(cfg[[sec]]$useMundlak),
-      lag = 1
+      data = future_mag, sector = sec,
+      actorPowerDrivers = ap, actorPowerIndex = ai,
+      instQualityDrivers = iq, controlDrivers = ctl,
+      regionMappingFixedEffects = fe, useMundlak = isTRUE(cfg[[sec]]$useMundlak), lag = 1,
+      driverScaling = attr(histPrep, "driverScaling"),
+      trendFreezeYear = max(magclass::getYears(panelData, as.integer = TRUE))
     )
   }
 }
@@ -776,9 +790,22 @@ get_gated_projections <- function(fit_str, fit_adp, fdf, threshold,
   pr_adp   <- tryCatch(plogis(predict(m_adp, newdata = df_cc_adp)), error = function(e) rep(NA_real_, nrow(df_cc)))
   pred_log <- tryCatch(predict(m_str, newdata = df_cc_str),          error = function(e) rep(NA_real_, nrow(df_cc)))
 
+  # Projection Guards (ADR 0007), matching pfm::projectSpecScenario: the legacy
+  # report's own predict() path must clamp the log(1+ECP) response to the
+  # in-sample fitted maximum + extrapLogMargin (2) and cap the back-transformed
+  # price at priceCeiling (5000), or an out-of-sample driver/trend excursion
+  # explodes through expm1() (e.g. CHA Diffuse → 3e11 USD/tCO2). The time-trend
+  # freeze tames this at the source; the guard is the safety net.
+  extrapLogMargin <- 2; priceCeiling <- 5000
+  insResp <- tryCatch(as.numeric(fitted(m_str)), error = function(e) NULL)
+  capVal  <- if (!is.null(insResp) && length(insResp) > 0) max(insResp, na.rm = TRUE) + extrapLogMargin else Inf
+  if (is.finite(capVal)) pred_log <- pmin(pmax(pred_log, 0), capVal)
+  price_usd <- back_transform(pred_log)
+  price_usd <- pmin(price_usd, priceCeiling)
+
   df_cc$pr_adoption  <- pr_adp
   df_cc$price_hat_log <- pred_log
-  df_cc$price_hat_usd <- back_transform(pred_log)
+  df_cc$price_hat_usd <- price_usd
   df_cc$price_gated   <- ifelse(df_cc$pr_adoption >= threshold, df_cc$price_hat_usd, NA_real_)
   df_cc
 }
@@ -1097,7 +1124,7 @@ mem_diffuse <- compute_mem(fit_str$Diffuse)
 <div class="card-body">
 <ul>
   <li><strong>Model name:</strong> `r params$modelName`</li>
-  <li><strong>Response:</strong> log(1 + ECP_Bulk) — Gamma GLM with log link</li>
+  <li><strong>Response:</strong> log(1 + ECP_Bulk) — gaussian GLM (identity link)</li>
   <li><strong>Sample:</strong> Region-years with ECP_Bulk &gt; 0</li>
   <li><strong>IQ drivers:</strong> `r paste(cfg$Bulk$instQuality, collapse = ", ")`</li>
   <li><strong>Controls:</strong> `r paste(cfg$Bulk$controls, collapse = ", ")`</li>
@@ -1111,7 +1138,7 @@ mem_diffuse <- compute_mem(fit_str$Diffuse)
 <div class="card-body">
 <ul>
   <li><strong>Model name:</strong> `r params$modelName`</li>
-  <li><strong>Response:</strong> log(1 + ECP_Diffuse) — Gamma GLM with log link</li>
+  <li><strong>Response:</strong> log(1 + ECP_Diffuse) — gaussian GLM (identity link)</li>
   <li><strong>Sample:</strong> Region-years with ECP_Diffuse &gt; 0</li>
   <li><strong>IQ drivers:</strong> `r paste(cfg$Diffuse$instQuality, collapse = ", ")`</li>
   <li><strong>Controls:</strong> `r paste(cfg$Diffuse$controls, collapse = ", ")`</li>
@@ -1384,7 +1411,7 @@ make_comparison_table <- function(se_b, se_d) {
 
 # Model Formula
 
-The stringency model estimates $\log\left(\mathbb{E}[\text{ECP} \mid \text{adopted}]\right) = X\beta$ — a Gamma GLM with log link on the $\log(1 + \text{ECP})$ dependent variable. Each coefficient $\beta$ is shown with its significance level. A coefficient of $\beta = 0.3^{***}$ means a 1-unit increase in that predictor multiplies the expected ECP by $\exp(0.3) \approx 1.35$ (+35%).
+The stringency model estimates $\mathbb{E}\!\left[\log(1+\text{ECP}) \mid \text{adopted}\right] = X\beta$ — a **gaussian GLM with identity link** on the $\log(1 + \text{ECP})$ dependent variable (back-transformed as $\text{ECP} = e^{X\beta}-1$). This replaces the former Gamma-log link, which double-exponentiated under projection and drove the price explosion (ADR 0007). Drivers are **standardized**, so each coefficient $\beta$ is the additive effect on $\log(1+\text{ECP})$ per **one-standard-deviation** increase in the predictor; $\beta = 0.3^{***}$ means +1 SD multiplies $(1+\text{ECP})$ by $\exp(0.3) \approx 1.35$ (+35%).
 
 <div class="bulk-only">
 
@@ -2259,7 +2286,7 @@ cat(sprintf("\nAdoption threshold: **%.2f**\n", adoption_threshold))
 
 ## Interpretation Guide
 
-**Log-link GLM (Gamma):** The model estimates `log(E[ECP]) = Xβ`. A coefficient of β means a 1-unit increase in X multiplies expected ECP by `exp(β)` — a multiplicative effect of `(exp(β)−1)×100`%.
+**Gaussian GLM (identity link) on log(1+ECP):** The model estimates `E[log(1+ECP)] = Xβ` (back-transform `ECP = exp(Xβ)−1`). With standardized drivers, a coefficient β is the additive effect on `log(1+ECP)` per 1-SD increase in X, i.e. it multiplies `(1+ECP)` by `exp(β)` — a multiplicative effect of `(exp(β)−1)×100`%.
 
 **Log-transform of DV:** `ecp → log(1+ecp)` before fitting. Back-transform for display: `exp(fitted) − 1`. The +1 avoids log(0) and ensures non-negative predictions.
 
@@ -2271,7 +2298,7 @@ cat(sprintf("\nAdoption threshold: **%.2f**\n", adoption_threshold))
 
 **Expected ECP:** `E[ECP] = Pr(Adoption) × Conditional_Price`. The full two-stage hurdle model output — the probabilistically-correct expected carbon price.
 
-**Residual types:** Deviance residuals are shown throughout — comparable across GLM families and better-behaved than Pearson residuals for Gamma models.
+**Residual types:** Response residuals (observed − fitted on the `log(1+ECP)` scale) are shown throughout, appropriate for the gaussian (identity-link) model.
 
 ## Session Information
 

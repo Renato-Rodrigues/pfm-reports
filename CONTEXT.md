@@ -24,3 +24,21 @@ An R script inside each report folder that sets render params (paths, data objec
 
 ## Asset Folder
 The output subfolder named after the report (e.g. `output/IAM_PFM_report/`) that holds plots and other files saved during rendering. Gitignored.
+
+## Pure-Consumer Report
+A report that only visualizes precomputed artifacts (workflow RDS, model store, selected-models config) and never estimates models or recomputes selection results itself (ADR 0006). The redesigned reports (`panel-data`, `selection`, `results-adoption`, `results-stringency`) are pure consumers; scenario projection prediction is the one in-report computation allowed (presentation-specific). The deprecated self-computing reports are `panel-data-input`, `model-selection`, `adoption-model`, `stringency-model`.
+
+## Projection Convergence
+The behaviour of a panel input at and beyond the historical→scenario seam: its convergence target (e.g. V-Dem logistic convergence to the 75th global percentile by 2150, midpoint 2080), the stitched trajectory, and continuity at the seam. A mandatory subsection per data type in the panel-data report.
+
+## Seam-Continuity Table
+Per variable × region, the normalized jump between the last historical year and the first scenario year, sorted descending with flagged offenders. The panel-data report's primary instrument for catching historical/scenario misalignment (e.g. the 2026-06-12 GDP Q-centred reference-shift bug). Computed by a tested pfm helper, not report-local code.
+
+## Price Outlier
+A region-year whose observed, fitted, or projected ECP exceeds the 99th percentile of positive historical ECP (data-driven, recomputed per panel). Distinct from the Projection Sanity explosion threshold (2000 USD/tCO₂): outliers are *extreme*, sanity violations are *insane*. Handling rule: charts are display-capped at p99 with an "+N above cap" annotation, never dropped from estimation; every outlier is listed in a sortable table. The adoption-stage analogue is |Pearson residual| > 3 (badly mispredicted region-years), flagged in tables and highlighted in calibration plots.
+
+## How-to-Read Caption
+A mandatory explanatory block rendered below **every** chart and table in the redesigned reports, starting "How to read this chart/table:" and stating the units, what each visual element encodes, and what a problematic pattern would look like. Emitted by a shared helper so styling is uniform; a chart without one is a defect.
+
+## Dispersion Chart
+A per-data-type chart of cross-region dispersion over time (σ-convergence view) showing whether the regional variation that identifies the model is shrinking.

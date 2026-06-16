@@ -21,7 +21,7 @@ render_report <- function(
     gdxPath            = getPfmConfig("gdxPath",      "data/fulldata.gdx"),
     theoryConfigFile   = "model-configs/selected-models-v2.yml",
     predictionConfigFile = "model-configs/selected-models-v2-prediction.yml",
-    modelDir           = getPfmConfig("modelDir",     "models"),
+    modelDir           = getPfmConfig("modelDir",     "cache"),
     outputDir          = "output") {
 
   root         <- rprojroot::find_rstudio_root_file()

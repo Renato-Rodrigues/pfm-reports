@@ -275,6 +275,9 @@ fit_diffuse <- estimateAdoptionModel(
 future_df_bulk    <- NULL
 future_df_diffuse <- NULL
 if (!is.null(future_mag)) {
+  # Reuse the driver-standardization mean/sd FROZEN on the historical fit (ADR
+  # 0007) so the scenario design shares the historical reference (attr on the
+  # fitted df) rather than re-standardizing on the scenario distribution.
   future_df_bulk <- preparePanelData(
     data                      = future_mag,
     sector                    = "Bulk",
@@ -283,7 +286,9 @@ if (!is.null(future_mag)) {
     instQualityDrivers        = model_instQualityDrivers,
     controlDrivers            = model_controlDrivers,
     regionMappingFixedEffects = model_regionMappingFE,
-    lag                       = 1
+    lag                       = 1,
+    driverScaling             = attr(fit_bulk$data, "driverScaling"),
+    trendFreezeYear           = max(magclass::getYears(panelData, as.integer = TRUE))
   )
   future_df_diffuse <- preparePanelData(
     data                      = future_mag,
@@ -293,7 +298,9 @@ if (!is.null(future_mag)) {
     instQualityDrivers        = model_instQualityDrivers,
     controlDrivers            = model_controlDrivers,
     regionMappingFixedEffects = model_regionMappingFE,
-    lag                       = 1
+    lag                       = 1,
+    driverScaling             = attr(fit_diffuse$data, "driverScaling"),
+    trendFreezeYear           = max(magclass::getYears(panelData, as.integer = TRUE))
   )
 }
 ```

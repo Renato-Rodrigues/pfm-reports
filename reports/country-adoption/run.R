@@ -7,7 +7,7 @@
 #   source("reports/country-adoption/run.R")
 #   render_report(country = "IND", countryName = "India")
 #
-# CLI usage (via createReports.R or directly with Rscript):
+# CLI usage (with Rscript):
 #   Rscript run.R --country=IND
 #   Rscript run.R --country=ZAF --countryName="South Africa"
 #

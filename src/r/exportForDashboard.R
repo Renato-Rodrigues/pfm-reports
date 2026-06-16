@@ -265,10 +265,20 @@ exportForDashboard <- function(
   }
 
   # ---- 4. training_data.parquet -------------------------------------------
+  # ADR 0009: slim Fitted Models no longer embed the training panel (it lives
+  # once in the content-addressed Training Panel store, referenced by
+  # model$training_panel_hash). The dashboard's per-model training_data /
+  # fitted_values parquets are therefore not exported for slim models. Rewiring
+  # the dashboard to reconstruct them from the Training Panel + prepSpec is a
+  # follow-up; leaving them absent degrades gracefully (the dashboard guards on
+  # file presence).
   td <- model$training_data
   if (!is.null(td) && is.data.frame(td) && nrow(td) > 0) {
     td <- .toParquetSafe(td)
     arrow::write_parquet(td, file.path(outDir, "training_data.parquet"))
+  } else if (!is.null(model$training_panel_hash) && !is.na(model$training_panel_hash)) {
+    message("    (slim model ", model$id, ": training_data/fitted_values not embedded; ",
+            "panel hash ", model$training_panel_hash, " - dashboard reconstruction is a follow-up)")
   }
 
   # ---- 5. fitted_values.parquet -------------------------------------------

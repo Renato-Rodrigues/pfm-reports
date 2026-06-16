@@ -1,0 +1,333 @@
+---
+title: "PFM Results — Adoption Model (`r params$reportName`)"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_depth: 1
+    toc_float:
+      collapsed: true
+    number_sections: true
+    code_folding: hide
+params:
+  modelConfig: "reports/model-selection/model-configs/selected-models-channels.yml"
+  reportName: "default"
+  gdxPath: "data/fulldata.gdx"
+  cacheDir: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 10, fig.height = 5.5)
+library(ggplot2)
+library(dplyr)
+library(magclass)
+library(pfm)
+library(rprojroot)
+
+root <- find_rstudio_root_file()
+source(file.path(root, "src/r/configHelper.R"))
+source(file.path(root, "src/r/theme.R"))
+source(file.path(root, "src/r/reportHelpers.R"))
+
+if (nzchar(params$cacheDir)) madrat::setConfig(cachefolder = params$cacheDir)
+madrat::setConfig(forcecache = TRUE)
+model_dir <- getPfmConfig("modelDir", "cache")
+if (!is_absolute_path(model_dir)) model_dir <- file.path(root, model_dir)
+options(pfm.modelDir = model_dir)
+
+# ── Config: one entry per sector (model_type "Adoption: <Sector>") ─────────────
+cfg_path <- params$modelConfig
+if (!is_absolute_path(cfg_path)) cfg_path <- file.path(root, cfg_path)
+all_cfg <- yaml::read_yaml(cfg_path)
+norm_cfg <- function(cfg) {
+  for (f in c("actorPowerDrivers", "actorPowerIndex", "instQualityDrivers", "controlDrivers"))
+    if (!is.null(cfg[[f]])) cfg[[f]] <- unlist(cfg[[f]])
+  cfg$panelTransform <- cfg$panelTransform %||% "levels"
+  cfg
+}
+sectors <- c("Bulk", "Diffuse")
+cfg <- list()
+for (sec in sectors) {
+  hit <- Filter(function(x) identical(x$model_type, paste0("Adoption: ", sec)), all_cfg)
+  cfg[[sec]] <- if (length(hit) > 0) norm_cfg(hit[[1]]) else NULL
+}
+if (all(vapply(cfg, is.null, logical(1)))) stop("No 'Adoption: <Sector>' entries in ", cfg_path)
+for (sec in sectors) if (is.null(cfg[[sec]])) cfg[[sec]] <- cfg[[setdiff(sectors, sec)]]
+
+# ── Data + fits (cached via model store) ───────────────────────────────────────
+hist_mag <- getPanelDataHistoricalCached(
+  aggregate = TRUE, y = 2000:2022, outputRegionMappingFile = "regionmapping_54.csv"
+)
+fits <- list()
+for (sec in sectors) {
+  c0 <- cfg[[sec]]
+  fits[[sec]] <- estimateAdoptionModel(
+    data = hist_mag, sector = sec,
+    actorPowerDrivers = c0$actorPowerDrivers, actorPowerIndex = c0$actorPowerIndex,
+    instQualityDrivers = c0$instQualityDrivers, controlDrivers = c0$controlDrivers,
+    includeLaggedAdoption = isTRUE(c0$includeLagged),
+    interactRegionFE = isTRUE(c0$interactRegionFE),
+    regionMappingFixedEffects = c0$regionMappingFixedEffects,
+    useMundlak = isTRUE(c0$useMundlak), gdpGovInteraction = isTRUE(c0$gdpGovInteraction),
+    logisticTimeTrend = isTRUE(c0$logisticTimeTrend),
+    panelTransform = c0$panelTransform,
+    modelDir = model_dir, verbose = FALSE,
+    compute = c(ame = TRUE, predictedProbs = TRUE)
+  )
+}
+
+# Fitted probabilities aligned to estimation rows
+fittedProbs <- function(fit) {
+  m <- fit$model
+  if (inherits(m, "logistf")) as.numeric(m$predict) else as.numeric(fitted(m))
+}
+
+# ── Scenario projections (selected spec; skipped for FD specs) ─────────────────
+gdx_path <- params$gdxPath
+if (nzchar(gdx_path) && !is_absolute_path(gdx_path)) gdx_path <- file.path(root, gdx_path)
+scen_mag <- NULL
+if (nzchar(gdx_path) && file.exists(gdx_path)) {
+  scen_mag <- tryCatch(
+    getPanelDataScenarioCached(gdxFile = gdx_path, aggregate = TRUE,
+                               outputRegionMappingFile = "regionmapping_54.csv"),
+    error = function(e) NULL
+  )
+}
+proj <- list()
+if (!is.null(scen_mag)) {
+  for (sec in sectors) {
+    proj[[sec]] <- tryCatch(
+      projectSpecScenario(cfg[[sec]], sec, histData = hist_mag, scenarioData = scen_mag,
+                          modelDir = model_dir),
+      error = function(e) NULL
+    )
+  }
+}
+has_proj <- any(!vapply(proj, is.null, logical(1)))
+```
+
+# Executive Summary
+
+```{r exec, results='asis'}
+for (sec in sectors) {
+  f <- fits[[sec]]
+  pd <- f$predictiveDiagnostics
+  cat(sprintf(paste0(
+    "- **%s** — `%s` | panelTransform: %s | N = %d | converged: %s | maxVIF: %.1f | ",
+    "Theory Frac.: %.2f | AUC: %s | Brier: %s | calibration slope: %s\n"
+  ), sec, cfg[[sec]]$name, cfg[[sec]]$panelTransform,
+     if (inherits(f$model, "logistf")) f$model$n else stats::nobs(f$model),
+     isTRUE(f$model$converged) || (inherits(f$model, "logistf") && !any(is.na(f$model$coefficients))),
+     f$maxVIF %||% NA, f$theoryFrac %||% NA,
+     if (!is.null(pd)) sprintf("%.3f", pd$auc) else "—",
+     if (!is.null(pd)) sprintf("%.3f", pd$brier) else "—",
+     if (!is.null(pd)) sprintf("%.2f", pd$calibrationSlope) else "—"))
+}
+cat(sprintf("\nScenario projections: %s\n",
+            if (has_proj) "available (SSP2)" else "not available (no gdx or FD spec)"))
+```
+
+# Model Equations & Coefficients {.tabset}
+
+```{r coefs, results='asis', fig.height=6}
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  f <- fits[[sec]]
+  ct <- as.data.frame(unclass(f$coeftest))
+  names(ct) <- c("estimate", "stdError", "zValue", "pValue")
+  ct$term <- rownames(f$coeftest)
+  ct$signif <- sigStars(ct$pValue)
+  main <- ct %>% filter(!grepl("^regionFE", term))
+  eq_terms <- sprintf("%+.3f·%s%s", main$estimate,
+                      ifelse(main$term == "(Intercept)", "1", main$term), main$signif)
+  cat(sprintf("```\nlogit P(adoption) = %s + [region FE]\n```\n\n",
+              paste(eq_terms, collapse = " ")))
+  cc <- ct %>% filter(!grepl("^regionFE|^\\(Intercept", term)) %>%
+    mutate(lo = estimate - 1.96 * stdError, hi = estimate + 1.96 * stdError,
+           sig = pValue < 0.05)
+  p <- ggplot(cc, aes(estimate, reorder(term, estimate), colour = sig)) +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+    geom_pointrange(aes(xmin = lo, xmax = hi)) +
+    scale_colour_manual(values = c(`TRUE` = "#d62728", `FALSE` = "grey60")) +
+    theme_report() + theme(legend.position = "none") +
+    labs(title = paste0(sec, " — coefficients (robust 95% CI)"),
+         x = "Log-odds per 1 SD of the driver", y = NULL)
+  print(p)
+  cat("\n\n")
+  print(interactiveTable(ct %>% select(term, estimate, stdError, zValue, pValue, signif),
+                         caption = paste0(sec, " — full coefficient table (per-SD drivers)")))
+  cat("\n\n")
+}
+howToRead("The equation is on the log-odds scale with significance stars from ",
+          "cluster-robust standard errors; the forest plot omits intercept and region ",
+          "FE. Drivers are **standardized**, so a coefficient is the log-odds change per ",
+          "**one-standard-deviation** increase in that driver — magnitudes are directly ",
+          "comparable across drivers. Divide by a driver's SD for its natural-unit effect.")
+```
+
+# Real-World Effects — Average Marginal Effects {.tabset}
+
+```{r ame, results='asis'}
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  am <- fits[[sec]]$ame
+  if (!is.null(am)) {
+    am2 <- am
+    num <- vapply(am2, is.numeric, logical(1))
+    am2[num] <- lapply(am2[num], function(x) round(x * 100, 2))
+    print(interactiveTable(am2, caption = paste0(sec, " — AME in percentage points of P(adoption), per 1 SD")))
+    cat("\n\n")
+  } else cat("*AMEs not available.*\n\n")
+}
+howToRead("Average Marginal Effects converted to percentage points: the average ",
+          "change in adoption probability when the driver increases by **one standard ",
+          "deviation** (drivers are standardized, so AMEs are comparable across drivers), ",
+          "holding observed covariates fixed. This is the closest single number to ",
+          "'real-world effect size' for the adoption stage.",
+          type = "table")
+```
+
+# Historical Fit & Outliers {.tabset}
+
+## Predicted probability by outcome
+
+```{r fit-density, fig.height=4.5}
+dd <- bind_rows(lapply(sectors, function(sec) {
+  f <- fits[[sec]]
+  data.frame(sector = sec, prob = fittedProbs(f),
+             outcome = factor(f$model$y, labels = c("Not adopted", "Adopted")))
+}))
+ggplot(dd, aes(prob, fill = outcome)) +
+  geom_density(alpha = 0.45, colour = NA) +
+  facet_wrap(~sector) +
+  scale_fill_manual(values = c("Not adopted" = "#1f77b4", "Adopted" = "#d62728")) +
+  theme_report() +
+  labs(title = "Fitted adoption probability by actual outcome",
+       x = "Fitted P(adoption)", y = "Density", fill = NULL)
+```
+
+```{r fit-density-cap, results='asis'}
+howToRead("Distributions of in-sample fitted probabilities, split by what actually ",
+          "happened. Good discrimination = red mass near 1, blue mass near 0; heavy ",
+          "overlap means the model cannot separate adopters from non-adopters.")
+```
+
+## Mispredicted region-years (|Pearson residual| > 3)
+
+```{r outliers, results='asis'}
+out_rows <- bind_rows(lapply(sectors, function(sec) {
+  f <- fits[[sec]]
+  p <- fittedProbs(f)
+  y <- as.numeric(f$model$y)
+  idx <- usedRows(f) # align fitted values to complete-case rows
+  df <- f$data[idx, , drop = FALSE]
+  n <- min(length(p), nrow(df))
+  pr <- (y - p) / sqrt(pmax(p * (1 - p), 1e-12))
+  data.frame(sector = sec, region = df$region[seq_len(n)], year = df$year[seq_len(n)],
+             outcome = y[seq_len(n)], fittedProb = round(p[seq_len(n)], 3),
+             pearsonResid = round(pr[seq_len(n)], 2))
+})) %>% filter(abs(pearsonResid) > 3) %>% arrange(desc(abs(pearsonResid)))
+if (nrow(out_rows) > 0) {
+  interactiveTable(out_rows, caption = "Region-years the model badly mispredicts")
+} else cat("*No region-years with |Pearson residual| > 3 — no adoption-side outliers.*\n")
+```
+
+```{r outliers-cap, results='asis'}
+howToRead("Adoption-side outlier rule: observations where the model was confidently ",
+          "wrong (adopted while fitted P was tiny, or vice versa). These region-years ",
+          "deserve a story — a policy adopted against the model's odds usually marks a ",
+          "driver the specification misses.", type = "table")
+```
+
+# Predicted Probability Profiles {.tabset}
+
+```{r margins, results='asis', fig.height=4}
+for (sec in sectors) {
+  pp <- fits[[sec]]$predictedProbs
+  if (is.null(pp) || length(pp) == 0) next
+  cat(sprintf("## %s\n\n", sec))
+  for (v in names(pp)) {
+    prof <- pp[[v]]
+    if (is.null(prof) || nrow(prof) == 0) next
+    xcol <- setdiff(colnames(prof), c("prob", "lower", "upper"))[1]
+    p <- ggplot(prof, aes(x = .data[[xcol]], y = prob)) +
+      geom_ribbon(aes(ymin = lower, ymax = upper), fill = "#1f77b4", alpha = 0.2) +
+      geom_line(colour = "#1f77b4", linewidth = 1) +
+      coord_cartesian(ylim = c(0, 1)) +
+      theme_report() +
+      labs(title = paste0(sec, " — P(adoption) vs ", v), x = v, y = "P(adoption)")
+    print(p)
+    cat("\n\n")
+  }
+}
+howToRead("Each curve sweeps one theory variable from its observed minimum to maximum ",
+          "while all other variables sit at sample means; the ribbon is the delta-method ",
+          "95% interval. A flat curve with a wide ribbon = the channel is not doing ",
+          "real work despite a significant coefficient.")
+```
+
+# Future Projections (SSP2) {.tabset}
+
+```{r proj, results='asis', fig.height=6}
+if (has_proj) {
+  pall <- bind_rows(proj)
+  cat("## Probability trajectories\n\n")
+  p <- ggplot(pall, aes(year, prob, group = region)) +
+    geom_line(alpha = 0.35, linewidth = 0.4, colour = "#1f77b4") +
+    stat_summary(aes(group = 1), fun = median, geom = "line",
+                 colour = "#d62728", linewidth = 1.2) +
+    facet_wrap(~sector) +
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_report() +
+    labs(title = "Projected adoption probabilities (SSP2)",
+         x = NULL, y = "P(adoption)")
+  print(p)
+  cat("\n\n")
+  howToRead("One line per region; red = cross-region median. Watch for: everyone ",
+            "saturating at 1 (the trend assumption doing all the work — see the ",
+            "logistic-trend chart in the panel-data report) and regions stuck at 0 ",
+            "(dead blocks, a severe Projection Sanity rule).")
+
+  cat("## Snapshot table\n\n")
+  snap <- pall %>%
+    filter(year %in% c(2030, 2050, 2070, 2100)) %>%
+    select(sector, region, year, prob) %>%
+    tidyr::pivot_wider(names_from = year, values_from = prob, names_prefix = "P")
+  print(interactiveTable(snap, caption = "P(adoption) at snapshot years", pageLength = 20))
+  cat("\n\n")
+  howToRead("Projected adoption probability per region at four snapshot years — sort a ",
+            "column to rank regions by projected feasibility at that horizon.",
+            type = "table")
+
+  cat("## Seam check\n\n")
+  seam <- bind_rows(lapply(sectors, function(sec) {
+    f <- fits[[sec]]
+    p <- fittedProbs(f)
+    idx <- usedRows(f)
+    df <- f$data[idx, , drop = FALSE]
+    n <- min(length(p), nrow(df))
+    df <- df[seq_len(n), , drop = FALSE]
+    p <- p[seq_len(n)]
+    lastY <- max(df$year)
+    hist_last <- data.frame(region = df$region[df$year == lastY],
+                            histProb = p[df$year == lastY])
+    firstY <- min(proj[[sec]]$year)
+    scen_first <- proj[[sec]] %>% filter(year == firstY) %>% select(region, prob)
+    merge(hist_last, scen_first, by = "region") %>%
+      mutate(sector = sec, jump = prob - histProb) %>%
+      arrange(desc(abs(jump)))
+  }))
+  print(interactiveTable(seam %>% mutate(across(where(is.numeric), ~round(.x, 3))),
+                         caption = "Fitted (last historical) vs projected (first scenario) probability"))
+  cat("\n\n")
+  howToRead("The model-level seam test: fitted probability at the last historical year ",
+            "vs the projection at the first scenario year, per region. |jump| > 0.3 is ",
+            "the Projection Sanity warning threshold — large jumps mean scenario drivers ",
+            "are discontinuous with history for that region.", type = "table")
+} else {
+  cat("> Projections unavailable: no scenario panel, or the selected spec is an FD ",
+      "transform (not projectable — ADR 0005).\n")
+}
+```
