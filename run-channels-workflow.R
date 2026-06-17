@@ -8,7 +8,11 @@
 
 args <- commandArgs(trailingOnly = TRUE)
 mode <- "guided"
-for (a in args) if (startsWith(a, "--mode=")) mode <- sub("^--mode=", "", a)
+selectFE <- NULL
+for (a in args) {
+  if (startsWith(a, "--mode=")) mode <- sub("^--mode=", "", a)
+  if (startsWith(a, "--selectFE=")) selectFE <- strsplit(sub("^--selectFE=", "", a), ",")[[1]]
+}
 stopifnot(mode %in% c("guided", "exhaustive"))
 
 library(rprojroot)
@@ -67,7 +71,8 @@ res <- pfm::runChannelsWorkflow(
   panelData = panel,
   scenarioData = scenario,
   reportsDir = root,
-  modelDir = model_dir
+  modelDir = model_dir,
+  selectFE = selectFE
 )
 
 dir.create(file.path(root, "output"), showWarnings = FALSE, recursive = TRUE)

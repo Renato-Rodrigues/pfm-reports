@@ -751,7 +751,7 @@ if (!is.null(p_bulk)) {
 }
 ```
 
-### Coefficient Table
+<h3>Coefficient Table</h3>
 
 ```{r coef-table-bulk, echo=FALSE}
 coef_display_bulk <- pfm::coeftestToDataFrame(fit_bulk$coeftest) %>%
@@ -774,7 +774,7 @@ kable(coef_display_bulk, digits = 4, format = "html",
     color = ifelse(!is.na(coef_display_bulk$`p-value`) & coef_display_bulk$`p-value` < 0.05, col_good, "grey50"))
 ```
 
-### Fit Diagnostics
+<h3>Fit Diagnostics</h3>
 
 ```{r diag-bulk, echo=FALSE}
 diag_bulk_df <- data.frame(
@@ -800,10 +800,6 @@ cat('</div>')
 cat('<div class="diffuse-only">')
 ```
 
-```{r empty-h2-diffuse-est, include=FALSE}
-# placeholder — diffuse content follows directly
-```
-
 ```{r forest-diffuse, echo=FALSE, fig.height=6, fig.width=10}
 coef_df_diffuse <- pfm::coeftestToDataFrame(fit_diffuse$coeftest) %>%
   filter(term != "(Intercept)")
@@ -824,7 +820,7 @@ if (!is.null(p_diffuse)) {
 }
 ```
 
-### Coefficient Table
+<h3>Coefficient Table</h3>
 
 ```{r coef-table-diffuse, echo=FALSE}
 coef_display_diffuse <- pfm::coeftestToDataFrame(fit_diffuse$coeftest) %>%
@@ -847,7 +843,7 @@ kable(coef_display_diffuse, digits = 4, format = "html",
     color = ifelse(!is.na(coef_display_diffuse$`p-value`) & coef_display_diffuse$`p-value` < 0.05, col_good, "grey50"))
 ```
 
-### Fit Diagnostics
+<h3>Fit Diagnostics</h3>
 
 ```{r diag-diffuse, echo=FALSE}
 diag_diffuse_df <- data.frame(

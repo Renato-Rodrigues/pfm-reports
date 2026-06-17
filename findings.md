@@ -225,38 +225,38 @@ _68 fits; see output/model_selection_channels-guided.html for the full sweep._
 <!-- BEGIN channels-workflow:exhaustive (auto-generated) -->
 ## Channels Workflow - exhaustive (auto-generated 2026-06-16)
 
-### Adoption - Maximin ranking (top 5 of 65)
+### Adoption - Maximin ranking (top 5 of 720)
 
 | rank | model | minTier | meanDeltaR2 | minDeltaR2 | tierBySector | gatePass |
 |---|---|---|---|---|---|---|
-| 1 | X-003 WGIge|RoL|VerAcc splitAP levels | Green | 0.347 | 0.276 | Bulk: Green; Diffuse: Green | TRUE |
-| 2 | LAG-04 WGIge noFE | Green | 0.340 | 0.335 | Bulk: Green; Diffuse: Green | TRUE |
-| 3 | X-025 WGIge|noRoL|DiagAcc compAP levels | Green | 0.202 | 0.154 | Bulk: Green; Diffuse: Green | TRUE |
-| 4 | LAG-03 WGIge FE+SPJ | Green | 0.188 | 0.147 | Bulk: Green; Diffuse: Green | TRUE |
-| 5 | X-029 WGIge|noRoL|noAcc compAP levels | Green | 0.188 | 0.147 | Bulk: Green; Diffuse: Green | TRUE |
+| 1 | X-0050 WGIge|RoL|VerAcc splitAP lev ctl:ctlNone fe:H12 | Green | 0.360 | 0.299 | Bulk: Green; Diffuse: Green | TRUE |
+| 2 | X-0056 WGIge|RoL|VerAcc splitAP lev ctl:GDPq fe:H12 | Green | 0.347 | 0.276 | Bulk: Green; Diffuse: Green | TRUE |
+| 3 | X-0062 WGIge|RoL|VerAcc splitAP lev ctl:GDPq.sq fe:H12 | Green | 0.340 | 0.265 | Bulk: Green; Diffuse: Green | TRUE |
+| 4 | X-0051 WGIge|RoL|VerAcc splitAP lev ctl:ctlNone fe:OECDp | Green | 0.322 | 0.259 | Bulk: Green; Diffuse: Green | TRUE |
+| 5 | X-0063 WGIge|RoL|VerAcc splitAP lev ctl:GDPq.sq fe:OECDp | Green | 0.310 | 0.218 | Bulk: Green; Diffuse: Green | TRUE |
 
-**Selected shared spec:** X-003 WGIge|RoL|VerAcc splitAP levels
+**Selected shared spec:** X-0050 WGIge|RoL|VerAcc splitAP lev ctl:ctlNone fe:H12
 
-### Stringency - Maximin ranking (top 5 of 65)
+### Stringency - Maximin ranking (top 5 of 720)
 
 | rank | model | minTier | meanDeltaR2 | minDeltaR2 | tierBySector | gatePass |
 |---|---|---|---|---|---|---|
-| 1 | X-011 WGIge|RoL|DiagAcc splitAP levels | Blue | 0.316 | 0.175 | Bulk: Blue; Diffuse: Green | TRUE |
-| 2 | X-015 WGIge|RoL|noAcc splitAP levels | Blue | 0.292 | 0.150 | Bulk: Blue; Diffuse: Blue | TRUE |
-| 3 | X-043 noGE|RoL|DiagAcc splitAP levels | Blue | 0.290 | 0.127 | Bulk: Blue; Diffuse: Green | TRUE |
-| 4 | X-019 WGIge|noRoL|VerAcc splitAP levels | Blue | 0.281 | 0.130 | Bulk: Blue; Diffuse: Blue | TRUE |
-| 5 | X-041 noGE|RoL|DiagAcc compAP levels | Blue | 0.262 | 0.092 | Bulk: Blue; Diffuse: Blue | TRUE |
+| 1 | X-0147 WGIge|RoL|HorAcc splitAP lev ctl:ctlNone fe:OECDp | Blue | 0.370 | 0.157 | Bulk: Blue; Diffuse: Blue | TRUE |
+| 2 | X-0435 WGIge|noRoL|VerAcc splitAP lev ctl:ctlNone fe:OECDp | Blue | 0.350 | 0.134 | Bulk: Blue; Diffuse: Blue | TRUE |
+| 3 | X-0242 WGIge|RoL|DiagAcc splitAP lev ctl:ctlNone fe:H12 | Blue | 0.346 | 0.185 | Bulk: Blue; Diffuse: Green | TRUE |
+| 4 | X-0291 WGIge|RoL|noAcc compAP lev ctl:ctlNone fe:OECDp | Blue | 0.336 | 0.117 | Bulk: Blue; Diffuse: Blue | TRUE |
+| 5 | X-0146 WGIge|RoL|HorAcc splitAP lev ctl:ctlNone fe:H12 | Blue | 0.335 | 0.161 | Bulk: Blue; Diffuse: Green | TRUE |
 
-**Selected shared spec:** X-011 WGIge|RoL|DiagAcc splitAP levels
+**Selected shared spec:** X-0147 WGIge|RoL|HorAcc splitAP lev ctl:ctlNone fe:OECDp
 
 ### Best per sector/stage (secondary view)
 
 | stage | sector | model | tier | deltaR2Theory | maxVIF | panelTransform |
 |---|---|---|---|---|---|---|
-| Adoption | Bulk | LAG-04 WGIge noFE | Green | 0.344 | 1.206 | levels |
-| Adoption | Diffuse | X-003 WGIge|RoL|VerAcc splitAP levels | Green | 0.418 | 8.952 | levels |
-| Stringency | Bulk | X-010 WGIge|RoL|DiagAcc compAP hybridFD | Green | 0.088 | 5.444 | hybridFD |
-| Stringency | Diffuse | X-011 WGIge|RoL|DiagAcc splitAP levels | Green | 0.458 | 6.628 | levels |
+| Adoption | Bulk | X-1192 noGE|noRoL|VerAcc compAP lev ctl:lnGDP.sq fe:FE54 | Green | 3.211 | 9.516 | levels |
+| Adoption | Diffuse | X-1384 noGE|noRoL|DiagAcc compAP lev ctl:lnGDP.sq fe:FE54 | Green | 3.705 | 9.726 | levels |
+| Stringency | Bulk | X-0529 WGIge|noRoL|HorAcc splitAP lev ctl:ctlNone fe:noFE | Green | 0.217 | 3.614 | levels |
+| Stringency | Diffuse | X-0145 WGIge|RoL|HorAcc splitAP lev ctl:ctlNone fe:noFE | Green | 0.861 | 6.328 | levels |
 
-_260 fits; see output/model_selection_channels-exhaustive.html for the full sweep._
+_5780 fits; see output/model_selection_channels-exhaustive.html for the full sweep._
 <!-- END channels-workflow:exhaustive -->

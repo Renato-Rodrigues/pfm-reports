@@ -632,7 +632,7 @@ kable(sel_tbl, format = "html", caption = "Table 3: Model Selection Criteria (ap
   kable_styling(bootstrap_options = c("striped","hover"), full_width = TRUE, font_size = 12)
 ```
 
-The comprehensive model selection exploration (`full.yml`) tests `r nrow(yaml::read_yaml(resolve_config_path("model-configs/full.yml")))` base model specifications generating up to 225 Phase 1 × Phase 2 × Phase 3 combinations. The specifications reported here are the theory-optimal selections; prediction-optimal alternatives are shown in the Robustness section.
+The comprehensive model-selection sweep (`channels-exhaustive`) tests ~1,445 specifications — crossing the three institutional-quality channels, the actor-power form, eight curated control sets and five region fixed-effect resolutions (pooled, H12, EU/OECD+, 54-unit, Mundlak) — and selects one shared specification per stage by the maximin theory-tier rule, gated by a projection-sanity check on SSP2 trajectories. The specifications reported here are those maximin-selected models; prediction-optimal alternatives are shown in the Robustness section.
 
 ---
 
