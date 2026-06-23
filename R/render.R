@@ -19,13 +19,23 @@
   if (!nzchar(tmpl) || !file.exists(tmpl)) {
     stop("pfmreports: template not found in package: rmd/", name, ".Rmd", call. = FALSE)
   }
+  # Force `params` NOW, while the working directory is still the caller's: the path-bearing
+  # params (e.g. runGroupArtifact(...)) call .absPath against getwd(), and rmarkdown::render
+  # otherwise forces this promise only after it has setwd() into the template's directory —
+  # which would resolve every relative path against the installed library (lazy-eval trap).
+  force(params)
+  # Knit in the caller's working directory (not the read-only template dir, and not outputDir):
+  # absolute artifact params then stay correct, and relative inputs (e.g. the "data"/"data/cache"
+  # panel-cache + madrat folders) resolve against the project root the user ran from. Intermediates
+  # and output go to writable locations so nothing is written into the installed library.
+  knitWd <- getwd()
   outputDir <- .absPath(outputDir)
   dir.create(outputDir, showWarnings = FALSE, recursive = TRUE)
   if (isTRUE(verbose)) message("[pfmreports] rendering ", name, " -> ",
                                file.path(outputDir, outputFile))
   rmarkdown::render(
     input = tmpl, output_file = outputFile, output_dir = outputDir,
-    intermediates_dir = tempfile("pfmreports-"), knit_root_dir = outputDir,
+    intermediates_dir = tempfile("pfmreports-"), knit_root_dir = knitWd,
     params = params, envir = new.env(parent = globalenv()), quiet = !verbose
   )
   invisible(file.path(outputDir, outputFile))
