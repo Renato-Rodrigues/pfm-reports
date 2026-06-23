@@ -1,0 +1,318 @@
+---
+title: "`r paste0('PFM Model Selection — sweep analysis (', params$reportName, ')')`"
+author: "PFM Modeling Output"
+date: "`r Sys.Date()`"
+params:
+  workflowRds: "results/exhaustive/sweep.rds"
+  reportName: "default"
+  topN: 40
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: false
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: hide
+---
+
+<style>
+  .main-container { max-width: 95% !important; }
+  .toc-content { padding-left: 0px !important; }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      dev = "svglite", fig.ext = ".svg",
+                      fig.width = 11, fig.height = 6, dpi = 100)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+
+root <- getwd()
+library(pfmreports)
+library(pfmreports)
+library(pfmreports)
+
+# ── Pure consumer of the Run-Group sweep (ADR 0018) — NO model fitting ────────
+# Everything below is derived from the precomputed sweep artifact written by
+# pfm::runSweep(): per-fit metrics (`results`), per-term estimates (`coefficients`),
+# the maximin rankings, the selected deliverable, and the Stage-0 screens. The report
+# never estimates a model (the old in-Rmd fitting + AME recomputation were removed when
+# compute moved into pfm; see ADR 0018). The cross-model AME comparison, which needed a
+# fit, now lives in the dedicated adoption results report.
+rds_path <- params$workflowRds
+if (!is_absolute_path(rds_path)) rds_path <- file.path(root, rds_path)
+if (!file.exists(rds_path)) {
+  stop("Sweep RDS not found: ", rds_path,
+       " — run pfm::runSweep()/runModelGroup() for this group first.")
+}
+wf <- readRDS(rds_path)
+results <- wf$results
+if (is.null(results$tier)) {
+  results$tier <- pfm::computeTheoryTier(results$sigActorPower, results$sigInstQual,
+                                         results$sigInteractions)
+}
+coefs <- wf$coefficients
+topN  <- as.integer(params$topN)
+
+tier_bg <- c(Green = "#c8e6c9", Blue = "#bbdefb", Yellow = "#fff9c4")
+
+# k (number of estimated terms) per model × sector × stage, from the coefficients table.
+kByFit <- if (!is.null(coefs)) {
+  coefs %>% group_by(model, sector, stage) %>% summarise(k = dplyr::n(), .groups = "drop")
+} else {
+  results %>% transmute(model, sector, stage, k = NA_integer_)
+}
+results <- results %>% left_join(kByFit, by = c("model", "sector", "stage")) %>%
+  mutate(kN = ifelse(is.finite(k / nObs), k / nObs, NA_real_))
+
+sectors <- intersect(c("Diffuse", "Bulk"), unique(results$sector))
+stages  <- intersect(c("Adoption", "Stringency"), unique(results$stage))
+```
+
+# Overview
+
+```{r overview, results='asis'}
+nSpec <- length(unique(results$model))
+cat(sprintf(paste0(
+  "Pure-consumer analysis of the **%s** sweep: %d specifications × %d sector/stages = ",
+  "**%d fits** (generated %s). This report visualises the *full sweep* — every fitted ",
+  "specification ranked and compared. The single selected deliverable per stage, the ",
+  "Projection-Sanity trace and the Stage-0 channel screen are detailed in the companion ",
+  "**Selection** report; here the focus is the multi-criterion ranking and the ",
+  "distribution of results across the whole specification space.\n\n"),
+  wf$mode %||% "?", nSpec, length(stages), nrow(results),
+  format(wf$generated %||% Sys.time(), "%Y-%m-%d %H:%M")))
+for (stg in stages) {
+  sel <- wf$selected[[stg]]
+  cat(sprintf("- **%s — selected deliverable:** `%s`\n", stg, sel %||% "(none)"))
+}
+```
+
+# Tier distribution across the sweep
+
+```{r tier-dist, results='asis'}
+td <- results %>%
+  mutate(tier = factor(tier, levels = c("Green", "Blue", "Yellow"))) %>%
+  count(stage, sector, tier, .drop = FALSE)
+p <- ggplot(td, aes(x = sector, y = n, fill = tier)) +
+  geom_col(position = "stack") +
+  facet_wrap(~stage) +
+  scale_fill_manual(values = tier_bg) +
+  theme_report() +
+  labs(title = "Theory-tier composition of the sweep", x = NULL, y = "specifications",
+       fill = "Tier")
+print(p)
+howToRead(
+  "How many fitted specifications fall in each theory tier, per sector and stage. ",
+  "Green = a significant term in all three theory groups (Actor Power, Inst. Quality, ",
+  "Interaction); Blue = at least one; Yellow = none. A sweep dominated by Yellow in one ",
+  "sector/stage means theory rarely survives there — a structural finding, not a single ",
+  "model's failure.")
+```
+
+# ΔR²(theory) distribution
+
+```{r dr2-dist, results='asis'}
+dd <- results %>% filter(converged %in% TRUE, is.finite(deltaR2Theory))
+if (nrow(dd) > 0) {
+  p <- ggplot(dd, aes(x = sector, y = deltaR2Theory, fill = sector)) +
+    geom_violin(alpha = 0.5, colour = NA) +
+    geom_boxplot(width = 0.15, outlier.size = 0.6) +
+    facet_wrap(~stage, scales = "free_y") +
+    theme_report() + theme(legend.position = "none") +
+    labs(title = "Distribution of theory's unique explanatory contribution",
+         x = NULL, y = "ΔR²(theory)")
+  print(p)
+}
+howToRead(
+  "ΔR²(theory) is the pseudo-R² lost when all theory terms are stripped from a fit — the ",
+  "unique signal carried by Actor Power + Institutional Quality + their interaction. Each ",
+  "violin is the spread over all converged specifications in that sector/stage; a mass ",
+  "near zero means most specifications carry little theory signal there.")
+```
+
+# Model Rankings {.tabset}
+
+```{r model-rankings, results='asis'}
+rank_asc  <- function(x) rank(x,  ties.method = "min", na.last = TRUE)
+rank_desc <- function(x) rank(-x, ties.method = "min", na.last = TRUE)
+tierRank  <- c(Green = 1L, Blue = 2L, Yellow = 3L)
+
+for (stg in stages) {
+  for (sec in sectors) {
+    sec_stg <- paste0(stg, ": ", sec)
+    cat(sprintf("\n## %s\n\n", sec_stg))
+    sub <- results %>% filter(stage == stg, sector == sec)
+    if (nrow(sub) == 0) { cat("> No fits for this sector/stage.\n\n"); next }
+
+    is_flagged <- !(sub$converged %in% TRUE) | (!is.na(sub$maxVIF) & sub$maxVIF >= 10) |
+                  (sub$usesLagged %in% TRUE)
+    ttier <- tierRank[sub$tier]
+    ord <- order(as.integer(is_flagged), ttier, -sub$deltaR2Theory, sub$aic,
+                 sub$maxVIF, na.last = TRUE)
+    sub <- sub[ord, ]; is_flagged <- is_flagged[ord]; ttier <- ttier[ord]
+    sub <- utils::head(sub, topN); is_flagged <- is_flagged[seq_len(nrow(sub))]
+    ttier <- ttier[seq_len(nrow(sub))]
+    n <- nrow(sub)
+
+    rk_flag <- rank(as.integer(is_flagged), ties.method = "min")
+    rk_tier <- rank(ttier, ties.method = "min")
+    rk_dr2  <- rank_desc(sub$deltaR2Theory)
+    rk_aic  <- rank_asc(sub$aic)
+    rk_bic  <- rank_asc(sub$bic)
+    rk_r2   <- rank_desc(sub$pseudoR2)
+    rk_tf   <- rank_desc(sub$theoryFrac)
+    rk_vif  <- rank_asc(sub$maxVIF)
+    rk_kn   <- rank_asc(sub$kN)
+
+    vr <- function(vals, ranks, digits = 2) mapply(function(v, r) {
+      vstr <- if (is.na(v) || !is.finite(v)) "—" else formatC(round(v, digits), digits = digits, format = "f")
+      paste0(r, " (", vstr, ")")
+    }, vals, ranks)
+    tier_names <- c("1" = "Green", "2" = "Blue", "3" = "Yellow")
+
+    out <- data.frame(
+      `#`   = seq_len(n),
+      Model = sub$model,
+      Transform = sub$panelTransform,
+      Flag  = paste0(rk_flag, " (", ifelse(is_flagged, "Yes", "No"), ")"),
+      Tier  = paste0(rk_tier, " (", tier_names[as.character(ttier)], ")"),
+      `ΔR²`  = vr(sub$deltaR2Theory, rk_dr2, 3),
+      AIC   = vr(sub$aic, rk_aic, 1),
+      BIC   = vr(sub$bic, rk_bic, 1),
+      `R²`   = vr(sub$pseudoR2, rk_r2, 3),
+      TFrac = vr(sub$theoryFrac, rk_tf, 3),
+      MaxVIF = vr(sub$maxVIF, rk_vif, 1),
+      `k/N` = vr(sub$kN, rk_kn, 3),
+      check.names = FALSE, stringsAsFactors = FALSE
+    )
+
+    ramp_green <- grDevices::colorRampPalette(c("#a5d6a7", "white"))(max(n, 1))
+    make_bg <- function(ranks) ifelse(is.na(ranks), "white",
+                                      ramp_green[pmin(pmax(as.integer(ranks), 1L), n)])
+    k <- kable(out, format = "html", escape = FALSE,
+               caption = paste0("Model Rankings — ", sec_stg,
+                                " (top ", n, " by tier → ΔR²(theory) → AIC)")) %>%
+      kable_styling(bootstrap_options = c("hover", "condensed", "responsive"),
+                    font_size = 12, full_width = TRUE) %>%
+      column_spec(1, bold = TRUE, width = "2em") %>%
+      column_spec(2, width = "24em") %>%
+      column_spec(4, background = ifelse(is_flagged, "#ffcdd2", make_bg(rk_flag)),
+                  color = ifelse(is_flagged, "#c62828", "black")) %>%
+      column_spec(5, background = tier_bg[sub("^\\d+\\s*\\((.+)\\)$", "\\1", out$Tier)]) %>%
+      column_spec(6, background = make_bg(rk_dr2)) %>%
+      column_spec(7, background = make_bg(rk_aic)) %>%
+      column_spec(8, background = make_bg(rk_bic)) %>%
+      column_spec(9, background = make_bg(rk_r2)) %>%
+      column_spec(10, background = make_bg(rk_tf)) %>%
+      column_spec(11, background = ifelse(!is.na(sub$maxVIF) & sub$maxVIF > 10, "#ffcdd2",
+                                   ifelse(!is.na(sub$maxVIF) & sub$maxVIF > 5, "#fff9c4",
+                                          make_bg(rk_vif))),
+                  color = ifelse(!is.na(sub$maxVIF) & sub$maxVIF > 10, "#c62828", "black"),
+                  bold = !is.na(sub$maxVIF) & sub$maxVIF > 10) %>%
+      column_spec(12, background = make_bg(rk_kn)) %>%
+      scroll_box(width = "100%")
+    print(k)
+    cat("\n<br>\n")
+  }
+}
+```
+
+```{r model-rankings-cap, results='asis'}
+howToRead(
+  "Each cell shows **rank (value)**: the rank is that model's standing on that single ",
+  "criterion (1 = best), the value in parentheses is the raw measure; greener = better ",
+  "rank. Rows are pre-sorted by the deliverable logic (flag → theory tier → ΔR²(theory) ",
+  "→ AIC). 'Flag' (red) marks a fit that failed a hard gate — non-convergence, maxVIF ≥ 10, ",
+  "or a lagged dependent variable — and is sorted last. Capped at the top ",
+  paste0("`", topN, "`"), " specifications per sector/stage (raise with the `topN` param).",
+  type = "table")
+```
+
+# Best models {.tabset}
+
+## By theory fraction
+
+```{r best-theory, results='asis'}
+bt <- results %>%
+  filter(converged %in% TRUE) %>%
+  arrange(as.integer(!is.na(maxVIF) & maxVIF >= 10), tierRank[tier], desc(theoryFrac)) %>%
+  transmute(`Sector/Stage` = paste0(stage, ": ", sector), Model = model,
+            Transform = panelTransform, Tier = tier, `Theory Frac.` = theoryFrac,
+            `ΔR²(theory)` = deltaR2Theory, AIC = aic, `Pseudo-R²` = pseudoR2,
+            `Max VIF` = maxVIF, `N obs` = nObs) %>%
+  head(30)
+kbl <- kable(bt, format = "html", digits = 3,
+             caption = "Top 30 fits by Theory Fraction (all sector/stages)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                font_size = 11, full_width = TRUE) %>%
+  column_spec(4, background = tier_bg[bt$Tier], bold = bt$Tier == "Green")
+print(kbl)
+howToRead(
+  "Theory Fraction = |theory contribution| / Σ|all non-intercept contributions| of the ",
+  "linear predictor — the share of the model's signal carried by theory vs controls, FE, ",
+  "and trend. High Theory Fraction with a Green tier is the theoretically richest corner ",
+  "of the sweep.", type = "table")
+```
+
+## By AIC (prediction)
+
+```{r best-pred, results='asis'}
+bp <- results %>%
+  filter(converged %in% TRUE, !(!is.na(maxVIF) & maxVIF >= 10)) %>%
+  arrange(stage, sector, aic) %>%
+  group_by(stage, sector) %>% slice_head(n = 10) %>% ungroup() %>%
+  transmute(`Sector/Stage` = paste0(stage, ": ", sector), Model = model,
+            Transform = panelTransform, Tier = tier, AIC = aic, BIC = bic,
+            `Pseudo-R²` = pseudoR2, `ΔR²(theory)` = deltaR2Theory, `Max VIF` = maxVIF)
+kbl <- kable(bp, format = "html", digits = 3,
+             caption = "Top 10 fits by AIC within each sector/stage") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                font_size = 11, full_width = TRUE) %>%
+  column_spec(4, background = tier_bg[bp$Tier], bold = bp$Tier == "Green")
+print(kbl)
+howToRead(
+  "Lower AIC = better fit-complexity trade-off, comparable only within a sector/stage and ",
+  "panelTransform. This is the prediction-leaning ranking; contrast the top AIC models' ",
+  "tiers with the theory ranking above to see where predictive and theoretical strength ",
+  "diverge.", type = "table")
+```
+
+## Maximin shortlist (deliverable rule)
+
+```{r maximin-short, results='asis'}
+for (stg in stages) {
+  mm <- wf$maximin[[stg]]
+  if (is.null(mm)) next
+  top <- mm %>% filter(gatePass) %>% head(10)
+  cat(sprintf("### %s\n\n", stg))
+  print(interactiveTable(top, caption = paste0(stg, " — top 10 gate-passing specs (maximin)")))
+  cat("\n\n")
+}
+howToRead(
+  "The deliverable shortlist per stage under the Maximin Selection Rule (worse-sector tier ",
+  "first, then mean ΔR²(theory); ADR 0012). These shared specifications apply to both ",
+  "sectors — the candidates worth a confirmation pass. The single chosen model and its ",
+  "Projection-Sanity verdict are in the Selection report.", type = "table")
+```
+
+# All fits
+
+```{r all-fits, results='asis'}
+interactiveTable(
+  results %>%
+    select(model, sector, stage, panelTransform, tier, deltaR2Theory, theoryFrac,
+           aic, bic, pseudoR2, nObs, maxVIF, converged, sigActorPower, sigInstQual,
+           sigInteractions),
+  caption = "Every fit in the sweep — selection measures", pageLength = 25, filter = "top")
+howToRead(
+  "One row per model × sector × stage. Use the column filters to slice the sweep — e.g. ",
+  "tier = Green + stage = Stringency for the Green stringency shortlist, or sort by ",
+  "deltaR2Theory for the theory-content ranking. Predictive diagnostics (AUC/Brier/RMSE) ",
+  "and the full measure glossary are in the Selection report.", type = "table")
+```

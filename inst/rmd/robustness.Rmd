@@ -1,0 +1,394 @@
+---
+title: "PFM — Robustness & Alternative Specifications"
+subtitle: "Overfitting audit, parsimony frontier, and control specification-curve for the selected models"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    df_print: kable
+params:
+  robustnessRds: "results/exhaustive/robustness.rds"
+  workflowRds: "results/exhaustive/sweep.rds"
+  difRds: "results/exhaustive/difference-first.rds"
+  temporalRds: "results/exhaustive/temporal-split.rds"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 5.5)
+library(ggplot2); library(dplyr); library(knitr); library(kableExtra); library(tidyr)
+rb  <- readRDS(params$robustnessRds)
+wf  <- tryCatch(readRDS(params$workflowRds), error = function(e) NULL)
+dif <- tryCatch(readRDS(params$difRds), error = function(e) NULL)
+temporal <- tryCatch(readRDS(params$temporalRds)$temporal, error = function(e) NULL)
+ladder <- rb$ladder; frontier <- rb$frontier; cc <- rb$ctrlCurve
+deliv <- rb$specs
+tierColor <- c(Green = "#1a9850", Blue = "#4575b4", Yellow = "#d6a000")
+fmt <- function(x, d = 3) ifelse(is.na(x), "—", formatC(round(x, d), format = "f", digits = d))
+specName <- function(stage) sub(" .*", "", deliv[[stage]]$name)  # X-id
+```
+
+# Executive summary
+
+This report audits the two **deliverable** specifications against alternative models, to bound the
+over-fitting / specification-search / small-N limitations identified in the paper draft. It does **not**
+change the deliverable; it characterises how much of the headline fit is structural and which simpler
+alternatives a stricter analyst might prefer.
+
+- **Adoption deliverable:** `r deliv$Adoption$name`
+- **Stringency deliverable:** `r deliv$Stringency$name`
+
+```{r headline, results='asis'}
+fd  <- ladder %>% filter(rung == "4. First-difference")
+lev <- ladder %>% filter(rung == "1. Deliverable")
+ds_lev <- lev$pseudoR2[lev$stage=="Stringency" & lev$sector=="Diffuse"]
+ds_fd  <- fd$pseudoR2 [fd$stage =="Stringency" & fd$sector =="Diffuse"]
+cat(sprintf(
+"> **Headline.** The Diffuse-stringency pseudo-R² falls from **%.2f** in the levels deliverable to **%.2f** under first-differences — most of the levels fit is cross-sectional persistence (long-standing OECD transport taxes), not year-on-year responsiveness of prices to changes in actor power or governance. The theory channels' *signs* survive, but the **level of fit should be read as a relative feasibility signal, not a forecast**.\n", ds_lev, ds_fd))
+```
+
+# 1. Robustness Ladder
+
+Anchored, one-knob-at-a-time: each rung changes exactly one modelling choice from the deliverable, so its
+effect is attributable. `ΔR²(theory)` = incremental McFadden pseudo-R² of the theory channels; `Tier` =
+Green (all 3 channels significant) / Blue (≥1) / Yellow (none).
+
+```{r ladder-tables, results='asis'}
+for (stg in c("Adoption","Stringency")) {
+  cat("\n## ", stg, "\n\n")
+  d <- ladder %>% filter(stage == stg) %>%
+    transmute(Rung = rung, Sector = sector, Params = nParams,
+              `ΔR²(theory)` = round(deltaR2Theory,3), `Pseudo-R²` = round(pseudoR2,3),
+              BIC = round(bic,1), `AP×IQ coef` = round(apIQcoef,3), Tier = tier)
+  k <- kable(d, format = "html", align = "llrrrrrl") %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 12)
+  for (i in seq_len(nrow(d))) k <- row_spec(k, i, color = tierColor[d$Tier[i]])
+  k <- row_spec(k, which(d$Rung == "1. Deliverable"), bold = TRUE)
+  cat(k); cat("\n\n")
+}
+```
+
+# 2. The first-difference test (where the R² goes)
+
+First-differencing strips time-invariant regional levels, isolating whether *changes* in the drivers
+track *changes* in policy. A large pseudo-R² drop from levels → FD is the signature of a fit driven by
+cross-sectional persistence rather than dynamic responsiveness.
+
+```{r fd-collapse}
+fdcmp <- ladder %>% filter(rung %in% c("1. Deliverable","4. First-difference")) %>%
+  mutate(spec = ifelse(rung=="1. Deliverable","Levels (deliverable)","First-difference"),
+         facet = paste(stage, sector, sep=" — "))
+ggplot(fdcmp, aes(spec, pseudoR2, fill = spec)) +
+  geom_col(width = 0.6) + facet_wrap(~facet, nrow = 1) +
+  geom_text(aes(label = sprintf("%.2f", pseudoR2)), vjust = -0.3, size = 3.2) +
+  scale_fill_manual(values = c("Levels (deliverable)"="#4575b4","First-difference"="#d73027")) +
+  labs(x = NULL, y = "Pseudo-R²", fill = NULL,
+       title = "Pseudo-R²: levels vs first-difference (by stage × sector)") +
+  theme_minimal(base_size = 12) + theme(axis.text.x = element_text(angle = 20, hjust = 1), legend.position = "none") +
+  expand_limits(y = max(fdcmp$pseudoR2)*1.15)
+```
+
+# 3. Parsimony frontier (ε-sensitivity)
+
+The deliverable uses the BIC parsimony tie-break at ε = 0.05 (ADR 0012). As the near-tie tolerance ε
+grows, more specifications count as theory-equivalent and the lowest-BIC (most parsimonious) one wins —
+tracing how much simpler the choice becomes as theory strength is traded for parsimony.
+
+```{r frontier}
+if (!is.null(frontier) && nrow(frontier)) {
+  ft <- frontier %>% transmute(Stage = stage, `ε` = eps, `Selected (X-id)` = sub(" .*","",model),
+                               `Worse-sector tier` = minTier, `mean ΔR²` = round(meanDeltaR2,3),
+                               `summed BIC` = round(sumBIC,1))
+  kable(ft, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=12) %>%
+    collapse_rows(columns = 1, valign = "top")
+} else cat("_Frontier unavailable (BIC not present in the sweep RDS)._")
+```
+
+# 4. Control specification-curve
+
+Each ladder rung is re-fit against the full enumerated set of control combinations — income-form ∈
+{none, GDP-Q, GDP-Q+², logGDP, logGDP+²} × {±log Population} × {±Hydro/Nuclear} (income forms mutually
+exclusive). A theory channel that survives *any* control choice is control-robust (cf. Extreme-Bounds /
+specification-curve analysis).
+
+```{r ctrl-curve, results='asis'}
+if (is.null(cc) || !nrow(cc)) {
+  cat("_Control specification-curve not present — run `pfm::runRobustness(group, quick = FALSE)` (or `start.R --steps=robustness`) to populate it._\n")
+} else {
+  delivTier <- sapply(c("Adoption","Stringency"), function(s)
+    ladder$tier[ladder$rung=="1. Deliverable" & ladder$stage==s & ladder$sector=="Diffuse"])
+  summ <- cc %>% group_by(stage, sector, rung) %>%
+    summarise(nCombos = n(),
+              dR2_min = min(deltaR2Theory, na.rm=TRUE), dR2_med = median(deltaR2Theory, na.rm=TRUE),
+              dR2_max = max(deltaR2Theory, na.rm=TRUE),
+              apIQ_min = min(apIQcoef, na.rm=TRUE), apIQ_max = max(apIQcoef, na.rm=TRUE),
+              pctGreenBlue = round(100*mean(tier %in% c("Green","Blue")),0), .groups="drop")
+  for (stg in c("Adoption","Stringency")) {
+    cat("\n## ", stg, "\n\n")
+    d <- summ %>% filter(stage==stg) %>%
+      transmute(Rung=rung, Sector=sector, `#combos`=nCombos,
+                `ΔR² min`=round(dR2_min,3), `ΔR² median`=round(dR2_med,3), `ΔR² max`=round(dR2_max,3),
+                `AP×IQ coef range`=sprintf("[%.2f, %.2f]", apIQ_min, apIQ_max),
+                `% Green/Blue`=pctGreenBlue)
+    print(kable(d, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=11))
+    cat("\n\n")
+  }
+  cat("\n### Specification-curve — deliverable core, Diffuse sector\n\n")
+  sc <- cc %>% filter(rung=="1. Deliverable", sector=="Diffuse") %>% arrange(stage, deltaR2Theory) %>%
+    group_by(stage) %>% mutate(idx = row_number()) %>% ungroup()
+  print(
+    ggplot(sc, aes(idx, deltaR2Theory, color = tier)) + geom_point(size=2) + facet_wrap(~stage, scales="free") +
+      scale_color_manual(values = tierColor) +
+      labs(x = "Control combination (sorted)", y = "ΔR²(theory)", color = "Tier",
+           title = "Theory ΔR² across all control specifications (deliverable core, Diffuse)") +
+      theme_minimal(base_size = 12)
+  )
+}
+```
+
+# 5. AP × IQ interaction stability
+
+The institutional-conditionality interaction (H1) is the theoretical lynchpin. Here is its coefficient
+across ladder rungs — a stable sign/magnitude is evidence the interaction is not a fragile artifact.
+
+```{r interaction-stability}
+ix <- ladder %>% filter(!is.na(apIQcoef)) %>% mutate(facet = paste(stage, sector, sep=" — "))
+if (nrow(ix)) {
+  ggplot(ix, aes(reorder(rung, apIQcoef), apIQcoef, fill = tier)) +
+    geom_col() + coord_flip() + facet_wrap(~facet, scales="free_x", nrow=1) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+    scale_fill_manual(values = tierColor) +
+    labs(x = NULL, y = "AP × IQ interaction coefficient", fill = "Tier",
+         title = "Interaction coefficient across robustness rungs") +
+    theme_minimal(base_size = 11)
+}
+```
+
+# 6. Leave-One-Region-Out (LORO)
+
+A *spatial* leave-one-out (ADR 0013): the model is re-estimated 54 times, each dropping one
+region and refitting on the remaining 53 (driver scaling re-frozen on the 53). It is **distinct
+from** the temporal split-panel jackknife used for Nickell-bias correction. Two things are reported:
+**(A)** how stable each theory coefficient is when any single region is removed — and whether the
+Theory Tier survives; and **(B)** genuine out-of-sample prediction for the held-out region, which is
+possible because the deliverable's *block* fixed effects keep the held-out region's block effect
+identified by its block-mates. A held-out region whose block becomes a singleton is dropped from the
+OOS metric (kept in A); OOS-stringency is defined only over held-out adopter region-years and is the
+thinner, more provisional number.
+
+```{r loro-body, results='asis'}
+loco <- rb$loco
+if (is.null(loco) || !length(loco)) {
+  cat("_LORO artifact not present — run `pfm::runRobustness(group)` (it runs unless `loro = FALSE`)._\n")
+} else {
+  fmtn <- function(x, d = 3) ifelse(is.na(x), "—", formatC(round(x, d), format = "f", digits = d))
+
+  cat("\n## 6.1 Coefficient stability across the 54 refits\n\n")
+  for (key in names(loco)) {
+    L <- loco[[key]]; if (is.null(L)) next
+    gb <- unname(L$tier$counts["Green"] + L$tier$counts["Blue"]); tot <- sum(L$tier$counts)
+    cat("\n### ", gsub("_", " — ", key), "\n\nFull-sample tier: **", L$tier$full,
+        "**. Tier stays Green/Blue in **", gb, "/", tot, "** folds.\n\n", sep = "")
+    d <- L$coef
+    tbl <- data.frame(Term = d$term, Group = d$group, `Full est.` = round(d$full, 3),
+                      `LOO mean` = round(d$looMean, 3), `LOO SD` = round(d$looSD, 3),
+                      `Sign-stable` = paste0(round(100 * d$signStable), "%"),
+                      `Most influential` = d$mostInfluential, `max |Δβ|` = round(d$maxAbsDelta, 3),
+                      check.names = FALSE)
+    print(kable(tbl, format = "html") %>%
+            kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 11))
+    cat("\n\n")
+  }
+
+  cat("\n## 6.2 Out-of-sample prediction on the held-out region\n\n")
+  adoptKeys <- Filter(function(k) loco[[k]]$meta$stage == "adoption", names(loco))
+  strKeys   <- Filter(function(k) loco[[k]]$meta$stage == "stringency", names(loco))
+  if (length(adoptKeys)) {
+    cat("\n**Adoption** — pooled held-out predictions, benchmarked against the in-sample fit and the naive base rate (lower Brier / higher AUC is better; calibration slope 1 = perfect, < 1 = overconfident out-of-sample).\n\n")
+    da <- do.call(rbind, lapply(adoptKeys, function(k){ o <- loco[[k]]$oos
+      data.frame(Spec = gsub("_"," — ",k), n = o$n, `Excl.` = o$nExcludedSingletonBlock,
+                 `OOS Brier` = fmtn(o$brier), `In-sample` = fmtn(o$inSample$brier), `Base-rate` = fmtn(o$brierBase),
+                 `OOS AUC` = fmtn(o$auc), `In-sample AUC` = fmtn(o$inSample$auc),
+                 `OOS calib.` = fmtn(o$calibrationSlope), check.names = FALSE) }))
+    print(kable(da, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=11))
+    cat("\n\n")
+  }
+  if (length(strKeys)) {
+    cat("\n**Stringency** — pooled held-out predictions on the `log(1+ECP)` scale (RMSE, observed–predicted correlation). Defined only over held-out adopter region-years — read as provisional.\n\n")
+    ds <- do.call(rbind, lapply(strKeys, function(k){ o <- loco[[k]]$oos
+      data.frame(Spec = gsub("_"," — ",k), n = o$n, `OOS regions` = o$nRegions, `Excl.` = o$nExcludedSingletonBlock,
+                 `OOS RMSE` = fmtn(o$rmse), `In-sample RMSE` = fmtn(o$inSample$rmse),
+                 `OOS cor` = fmtn(o$corObsPred), `In-sample cor` = fmtn(o$inSample$corObsPred), check.names = FALSE) }))
+    print(kable(ds, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=11))
+    cat("\n\n")
+  }
+
+  # adoption OOS vs in-sample vs base-rate Brier
+  if (length(adoptKeys)) {
+    bd <- do.call(rbind, lapply(adoptKeys, function(k){ o <- loco[[k]]$oos
+      data.frame(Spec = gsub("_"," — ",k),
+                 Brier = c(o$brier, o$inSample$brier, o$brierBase),
+                 Kind = c("Out-of-sample (LORO)","In-sample","Naive base-rate")) }))
+    bd$Kind <- factor(bd$Kind, levels = c("In-sample","Out-of-sample (LORO)","Naive base-rate"))
+    print(
+      ggplot(bd, aes(Spec, Brier, fill = Kind)) + geom_col(position = "dodge") +
+        scale_fill_manual(values = c("In-sample"="#4575b4","Out-of-sample (LORO)"="#d6a000","Naive base-rate"="grey70")) +
+        labs(x = NULL, y = "Brier score (lower = better)", fill = NULL,
+             title = "Adoption: out-of-sample vs in-sample vs base-rate (lower is better)") +
+        theme_minimal(base_size = 12) + theme(legend.position = "top")
+    )
+  }
+}
+```
+
+# 7. Why we prefer the deliverable
+
+```{r preference, results='asis'}
+cat(
+"The deliverable (levels, split Actor Power, three IQ channels) is retained as the coupling model for four reasons:\n\n",
+"1. **It is the theory-identifying specification.** Adoption reaches Green tier in both sectors and the AP×IQ interaction is identified at both stages — the parsimony and single-channel rungs lose one or more channels (dropping to Blue/Yellow), i.e. they buy simplicity by discarding the very interaction the module exists to estimate.\n",
+"2. **First-difference is a diagnostic, not the deliverable.** Its low pseudo-R² (§2) correctly shows the levels fit is mostly persistence, but FD also strips the cross-region governance variation that identifies the persistent institutional/actor channels — so it cannot answer *which* governance levels make pricing feasible, the question the IAM needs.\n",
+"3. **Lagged-DV absorbs the signal.** Adding the lagged price lifts pseudo-R² but drives ΔR²(theory) toward zero — the lag explains policy by its own inertia, leaving nothing for the theory channels; useful as a serial-correlation check, not as a feasibility model.\n",
+"4. **The choice is control-robust and BIC-disciplined.** The interaction's sign survives the control specification-curve (§4), and the BIC parsimony tie-break (ε=0.05) already pruned the deliverable toward the lowest-BIC near-tie; the parsimony frontier (§3) makes the simpler alternatives explicit for readers who weight parsimony more heavily.\n\n",
+"**Caveat retained:** the Diffuse-stringency level of fit is high on a small adopter panel (N=258) and is best read as a *relative* feasibility signal. The first-difference and parsimony rungs above bound that risk transparently.\n", sep="")
+```
+
+# 8. Alternative selection: Difference-First (Dynamic Identification First)
+
+An alternative to the default **levels-first** selection (ADR 0014): rank the `hybridFD`
+specs with the same Maximin rule, keep only those that pass a **Falsification Gate** —
+re-fit under `pureFD`, where Actor Power (Politics) must *persist* (significant, correct
+sign) while Institutional Quality (Polity) must *vanish* (the theoretically-expected
+dynamic-vs-structural split) — then re-estimate the winner **in levels**, with the region
+fixed effect chosen by the Projection Sanity gate. It never overwrites the levels-first
+deliverable; both configs ship.
+
+```{r dif-compare, results='asis'}
+if (is.null(dif)) {
+  cat("_Difference-First artifact not present — run `pfm::runDifferenceFirst(group)` (or `start.R --steps=difference-first`)._\n")
+} else {
+  fmtn   <- function(x, d = 3) ifelse(is.na(x), "—", formatC(round(x, d), format = "f", digits = d))
+  tierOf <- function(ap, iq, int) ifelse(ap > 0 & iq > 0 & int > 0, "Green",
+                                         ifelse(ap > 0 | iq > 0 | int > 0, "Blue", "Yellow"))
+  for (stg in c("Adoption", "Stringency")) {
+    d <- dif[[stg]]; if (is.null(d)) next
+    cat("\n## ", stg, "\n\n")
+    tab <- list()
+    lfName <- if (!is.null(wf)) wf$selected[[stg]] else NULL
+    rowsL <- if (!is.null(wf) && !is.null(lfName))
+      wf$results[wf$results$model == lfName & wf$results$stage == stg, , drop = FALSE] else NULL
+    if (!is.null(rowsL) && nrow(rowsL)) for (i in seq_len(nrow(rowsL))) { r <- rowsL[i, ]
+      tab[[length(tab) + 1L]] <- data.frame(Method = "Levels-first", Spec = sub(" .*", "", lfName),
+        Sector = r$sector, Tier = tierOf(r$sigActorPower, r$sigInstQual, r$sigInteractions),
+        `ΔR²(theory)` = fmtn(r$deltaR2Theory), `Pseudo-R²` = fmtn(r$pseudoR2),
+        maxVIF = fmtn(r$maxVIF, 2), check.names = FALSE) }
+    if (!is.na(d$chosen) && !is.null(d$levelsFit)) { lf <- d$levelsFit
+      for (i in seq_len(nrow(lf))) { r <- lf[i, ]
+        tab[[length(tab) + 1L]] <- data.frame(Method = paste0("Difference-first (FE ", d$chosenFE, ")"),
+          Spec = sub(" .*", "", d$chosenBase), Sector = r$sector,
+          Tier = tierOf(r$sigActorPower, r$sigInstQual, r$sigInteractions),
+          `ΔR²(theory)` = fmtn(r$deltaR2Theory), `Pseudo-R²` = fmtn(r$pseudoR2),
+          maxVIF = fmtn(r$maxVIF, 2), check.names = FALSE) } }
+    if (length(tab)) {
+      print(kable(do.call(rbind, tab), format = "html") %>%
+        kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 11))
+      cat("\n\n")
+    }
+    g1 <- d$levelsFirstGate
+    if (!is.null(g1)) {
+      dd <- g1$detail
+      apS <- paste(dd$sector, ifelse(dd$apPass, "yes", "no"), sep = ": ", collapse = "; ")
+      iqS <- paste(dd$sector, ifelse(dd$iqPass, "yes", "no"), sep = ": ", collapse = "; ")
+      cat("> **Falsification Gate on the levels-first deliverable** (`", sub(" .*", "", d$levelsFirstName),
+          "`): ", if (g1$pass) "**passes**" else "**fails**", " — ", g1$reason,
+          ". Under pureFD, *AP persists* (", apS, "); *IQ vanishes* (", iqS,
+          "). A fail means the deployed levels model's identification is cross-sectional, not dynamic.\n\n", sep = "")
+    }
+    if (is.na(d$chosen)) {
+      n <- if (!is.null(d$falsification)) nrow(d$falsification) else 0
+      cat("> **Difference-First found no spec that survives the Falsification Gate for ", stg,
+          ".** Across the top ", n, " hybridFD candidates, none kept Actor Power significant ",
+          "(correct sign) while Institutional Quality vanished under pureFD — an informative null: ",
+          "the ", tolower(stg), " theory signal does not survive pure differencing.\n\n", sep = "")
+    } else {
+      fr <- d$falsification
+      reason <- if (!is.null(fr)) fr$reason[fr$model == d$chosenBase][1] else ""
+      rnk <- if (!is.null(fr)) fr$rank[fr$model == d$chosenBase][1] else NA
+      cat("> **Difference-First winner:** `", d$chosenBase, "` — hybridFD maximin rank ", rnk,
+          ", passed the Falsification Gate (", reason, "), re-estimated in levels with the FE ",
+          "chosen by Projection Sanity (**", d$chosenFE, "**).\n\n", sep = "")
+    }
+  }
+  cat("\n**Reading the contrast.** Levels-first maximises *cross-sectional* theory identification ",
+      "(highest tier in levels); Difference-First keeps only specs whose Actor-Power signal survives ",
+      "*pure differencing* while Institutional Quality washes out, then deploys that spec in levels. ",
+      "The two deliverables can therefore differ in channel set and tier — difference-first typically ",
+      "trades some levels-tier for a stronger dynamic-identification guarantee. Neither overwrites the ",
+      "other (ADR 0014); both YAMLs ship.\n", sep = "")
+}
+```
+
+# 9. Temporal split: out-of-time (hindcast) validation
+
+The spatial leave-one-region-out test (§6) asks whether the model generalises across
+*regions*; this asks whether it generalises across *time* — would a model trained on
+the past have predicted the recent adoption wave? (ADR 0015.) We train on 2000–2017,
+test on 2018–2023 (single chronological split), and also run a rolling-origin
+expanding window (train ≤ t, predict t+1). **Persistence trap:** adoption status is
+sticky, so most "adopted" labels in the test years belong to regions that adopted
+*before* the cutoff; scoring those is trivial. The **headline adoption metrics are on
+the at-risk set** — regions not yet adopted at the cutoff (the genuine "next-wave"
+test) — with the persistence-inflated full-set number shown alongside.
+
+```{r temporal-body, results='asis'}
+if (is.null(temporal) || !length(temporal)) {
+  cat("_Temporal-split artifact not present — run `pfm::runTemporalSplit(group)` (or `start.R --steps=temporal`)._\n")
+} else {
+  fmtn <- function(x, d = 3) ifelse(is.null(x) || is.na(x), "—", formatC(round(x, d), format = "f", digits = d))
+  ak <- Filter(function(k) temporal[[k]]$meta$stage == "adoption", names(temporal))
+  sk <- Filter(function(k) temporal[[k]]$meta$stage == "stringency", names(temporal))
+
+  if (length(ak)) {
+    cat("\n## 9.1 Adoption — out-of-time discrimination (at-risk set)\n\n")
+    da <- do.call(rbind, lapply(ak, function(k){ t <- temporal[[k]]; ar <- t$single$atRisk; fl <- t$single$full; ins <- t$single$inSample
+      data.frame(`Spec/Sector` = gsub("_"," — ",k), `at-risk n` = ar$n,
+                 `OOS AUC (at-risk)` = fmtn(ar$auc), `OOS AUC (full, persist.)` = fmtn(fl$auc),
+                 `In-sample AUC` = fmtn(ins$auc), `OOS Brier` = fmtn(ar$brier), `Base-rate Brier` = fmtn(ar$brierBase),
+                 `Rolling AUC (1-yr pooled)` = fmtn(t$rolling$pooled$auc), check.names = FALSE) }))
+    print(kable(da, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=11))
+    cat("\nDiscrimination (AUC) on the genuinely uncertain *at-risk* cases is well below the in-sample and the spatial leave-one-region-out values, and the at-risk Brier exceeds the base rate — i.e. out of time the model **ranks** the next adopters above non-adopters only moderately and is **over-confident**, so its output is a feasibility *ordering*, not a calibrated forecast. The gap between the at-risk AUC and the persistence-inflated full-set AUC shows how much of an apparent out-of-time fit is mere stickiness.\n\n")
+    # forecast-horizon curve
+    hz <- do.call(rbind, lapply(ak, function(k){ h <- temporal[[k]]$horizon; if (is.null(h)) return(NULL); h$spec <- gsub("_"," — ",k); h }))
+    if (!is.null(hz) && nrow(hz)) {
+      print(ggplot(hz, aes(horizon, auc, color = spec)) + geom_line() + geom_point() +
+        geom_hline(yintercept = 0.5, linetype = "dashed", color = "grey50") +
+        scale_x_continuous(breaks = sort(unique(hz$horizon))) + ylim(0.4, 1) +
+        labs(x = "Forecast horizon (years ahead of 2017)", y = "Out-of-time AUC (at-risk)", color = NULL,
+             title = "Adoption: out-of-time discrimination by forecast horizon") +
+        theme_minimal(base_size = 12) + theme(legend.position = "top"))
+    }
+  }
+  if (length(sk)) {
+    cat("\n## 9.2 Stringency — out-of-time price prediction\n\n")
+    ds <- do.call(rbind, lapply(sk, function(k){ t <- temporal[[k]]; s <- t$single$atRisk; ins <- t$single$inSample
+      data.frame(`Spec/Sector` = gsub("_"," — ",k), n = s$n,
+                 `OOS RMSE` = fmtn(s$rmse), `In-sample RMSE` = fmtn(ins$rmse),
+                 `OOS cor` = fmtn(s$corObsPred), `In-sample cor` = fmtn(ins$corObsPred),
+                 `Rolling cor (1-yr pooled)` = fmtn(t$rolling$pooled$corObsPred), check.names = FALSE) }))
+    print(kable(ds, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=11))
+    cat("\nOut-of-time price error roughly doubles vs in-sample, though rank correlation is partly retained (more so for Diffuse) — consistent with the stringency stage being a provisional, within-pioneer signal (§6.6, §6.7).\n\n")
+  }
+  # coefficient stability (train vs full): share of theory coefficients keeping their sign
+  cat("\n## 9.3 Coefficient stability (train 2000–2017 vs full sample)\n\n")
+  cs <- do.call(rbind, lapply(names(temporal), function(k){ c <- temporal[[k]]$coef; if (is.null(c)) return(NULL)
+    data.frame(`Spec/Sector` = gsub("_"," — ",k), `theory coefs` = nrow(c),
+               `sign-stable` = paste0(sum(c$signSame), "/", nrow(c)), check.names = FALSE) }))
+  if (!is.null(cs)) print(kable(cs, format="html") %>% kable_styling(bootstrap_options=c("striped","hover","condensed"), full_width=TRUE, font_size=11))
+  cat("\nSigns are largely stable when the last six years are withheld, but magnitudes shift materially on the shorter training panel — the expected small-sample sensitivity, and another reason to read the level of fit, not just the sign, with caution.\n")
+}
+```
+
+---
+
+*Generated from the Run-Group artifacts `robustness.rds` (`pfm::runRobustness`), `sweep.rds` (`pfm::runSweep`), `difference-first.rds` (`pfm::runDifferenceFirst`), and `temporal-split.rds` (`pfm::runTemporalSplit`) under `results/<group>/` (ADR 0018). Robustness Ladder & Parsimony Frontier per ADR 0012; Difference-First per ADR 0014; Temporal split per ADR 0015.*

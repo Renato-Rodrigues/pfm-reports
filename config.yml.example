@@ -2,16 +2,26 @@
 # Copy this file to "config.yml" and customize it to match your system's local paths.
 # "config.yml" is gitignored and will be used by the run scripts and reports if no explicit arguments are passed.
 
-# Path to the madrat local cache directory
-cacheDir: ""
+# madrat data-cache folder — the madrat::setConfig(cachefolder=) the compute layer reads
+# inputs from (CarbonPrice, EDGAR, PE/FE, Ember, V-Dem, SSP2). Relative paths resolve against
+# the working directory. (Legacy key name: `cacheDir` — still accepted by start.R.)
+cachefolder: "data/cache"
 
-# Path to the REMIND fulldata.gdx file for scenario projections
+# Path to the REMIND fulldata.gdx file for scenario projections.
 gdxPath: "data/fulldata.gdx"
 
-# Cache root (ADR 0009). Holds models/, panels/, projections/ and index.json
-# (relative to report root or absolute). Fitted models, the shared training panel,
-# and persisted scenario projections live in separate subfolders here.
-modelDir: "cache"
+# Fit Cache / model store (ADR 0009) — holds models/, panels/ and index.json. This is the
+# `modelDir` argument of the pfm run* functions (distinct from the madrat `cachefolder` above).
+modelDir: "output"
+
+# Results Root (ADR 0018): the compute layer (pfm) writes curated artifacts here —
+# sweep.rds, selected-models.yml, robustness.rds, temporal-split.rds, subnational.rds,
+# manifest.json — organised into named Run-Groups <resultsDir>/<group>/. The reports read here.
+resultsDir: "output"
+
+# Active Run-Group the reports render against (e.g. "exhaustive", "guided", or a custom
+# experiment name). Override per-invocation with --group=<name>.
+group: "exhaustive"
 
 # Output folder for generated HTML reports (relative to report root or absolute)
 outputDir: "output"
@@ -23,4 +33,4 @@ includeLagged: false
 adoptionThreshold: 0.5
 
 # Dashboard configuration (cache root; reads index.json + models/ from here)
-dashboardModelsDir: "cache"
+dashboardModelsDir: "output"

@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it using the metadata from this file.
+type: software
+title: 'pfmreports: Reports and Visualisations for the Political Feasibility Module
+  (PFM)'
+version: 0.1.0
+date-released: '2026-06-23'
+abstract: 'Report-rendering layer for the Political Feasibility Module. A pure consumer
+  of the curated Run-Group artifacts produced by the pfm compute layer: it reads them
+  and renders the HTML reports and paper figures, performing no estimation or selection
+  of its own. Ships the report templates and exposes one render function per report
+  plus a renderGroup orchestrator.'
+authors:
+- family-names: Rodrigues
+  given-names: Renato
+  email: renato.rodrigues@pik-potsdam.de
+  orcid: https://orcid.org/0000-0002-5863-5514
+- family-names: Kriegler
+  given-names: Elmar
+  email: kriegler@pik-potsdam.de
+  orcid: https://orcid.org/0000-0002-3307-2647
+license: MIT
+repository-code: https://github.com/pik-piam/pfm-reports
+

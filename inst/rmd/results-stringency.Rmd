@@ -1,0 +1,370 @@
+---
+title: "PFM Results — Price Stringency Model (`r params$reportName`)"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_depth: 1
+    toc_float:
+      collapsed: true
+    number_sections: true
+    code_folding: hide
+params:
+  modelConfig: "results/exhaustive/selected-models.yml"
+  reportName: "default"
+  gdxPath: "data/fulldata.gdx"
+  cachefolder: ""
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 10, fig.height = 5.5)
+library(ggplot2)
+library(dplyr)
+library(magclass)
+library(pfm)
+
+root <- getwd()
+library(pfmreports)
+library(pfmreports)
+library(pfmreports)
+
+if (nzchar(params$cachefolder)) madrat::setConfig(cachefolder = params$cachefolder)
+madrat::setConfig(forcecache = TRUE)
+model_dir <- getPfmConfig("modelDir", "../output")
+if (!is_absolute_path(model_dir)) model_dir <- file.path(root, model_dir)
+options(pfm.modelDir = model_dir)
+
+cfg_path <- params$modelConfig
+if (!is_absolute_path(cfg_path)) cfg_path <- file.path(root, cfg_path)
+all_cfg <- yaml::read_yaml(cfg_path)
+norm_cfg <- function(cfg) {
+  for (f in c("actorPowerDrivers", "actorPowerIndex", "instQualityDrivers", "controlDrivers"))
+    if (!is.null(cfg[[f]])) cfg[[f]] <- unlist(cfg[[f]])
+  cfg$panelTransform <- cfg$panelTransform %||% "levels"
+  cfg
+}
+sectors <- c("Bulk", "Diffuse")
+get_cfg <- function(stage) {
+  out <- list()
+  for (sec in sectors) {
+    hit <- Filter(function(x) identical(x$model_type, paste0(stage, ": ", sec)), all_cfg)
+    out[[sec]] <- if (length(hit) > 0) norm_cfg(hit[[1]]) else NULL
+  }
+  for (sec in sectors) if (is.null(out[[sec]])) out[[sec]] <- out[[setdiff(sectors, sec)]]
+  out
+}
+cfgS <- get_cfg("Stringency")
+cfgA <- get_cfg("Adoption") # used only for the hurdle expectation
+if (all(vapply(cfgS, is.null, logical(1)))) stop("No 'Stringency: <Sector>' entries in ", cfg_path)
+
+hist_mag <- getPanelDataHistoricalCached(
+  aggregate = TRUE, y = 2000:2022, outputRegionMappingFile = "regionmapping_54.csv"
+)
+fits <- list()
+for (sec in sectors) {
+  c0 <- cfgS[[sec]]
+  fits[[sec]] <- estimatePriceStringencyModel(
+    data = hist_mag, sector = sec, family = "gaussian",
+    actorPowerDrivers = c0$actorPowerDrivers, actorPowerIndex = c0$actorPowerIndex,
+    instQualityDrivers = c0$instQualityDrivers, controlDrivers = c0$controlDrivers,
+    includeLaggedECP = isTRUE(c0$includeLaggedECP) || isTRUE(c0$includeLagged),
+    interactRegionFE = isTRUE(c0$interactRegionFE),
+    regionMappingFixedEffects = c0$regionMappingFixedEffects,
+    useMundlak = isTRUE(c0$useMundlak), gdpGovInteraction = isTRUE(c0$gdpGovInteraction),
+    logisticTimeTrend = isTRUE(c0$logisticTimeTrend),
+    panelTransform = c0$panelTransform,
+    nickellCorrection = isTRUE(c0$nickellCorrection),
+    modelDir = model_dir, verbose = FALSE
+  )
+}
+
+# ── Scenario projections: stringency price x adoption probability ─────────────
+gdx_path <- params$gdxPath
+if (nzchar(gdx_path) && !is_absolute_path(gdx_path)) gdx_path <- file.path(root, gdx_path)
+scen_mag <- NULL
+if (nzchar(gdx_path) && file.exists(gdx_path)) {
+  scen_mag <- tryCatch(
+    getPanelDataScenarioCached(gdxFile = gdx_path, aggregate = TRUE,
+                               outputRegionMappingFile = "regionmapping_54.csv"),
+    error = function(e) NULL
+  )
+}
+proj <- list()
+if (!is.null(scen_mag)) {
+  for (sec in sectors) {
+    pS <- tryCatch(projectSpecScenario(cfgS[[sec]], sec, hist_mag, scen_mag,
+                                       modelDir = model_dir), error = function(e) NULL)
+    pA <- if (!is.null(cfgA[[sec]])) {
+      tryCatch(projectSpecScenario(cfgA[[sec]], sec, hist_mag, scen_mag,
+                                   modelDir = model_dir), error = function(e) NULL)
+    } else NULL
+    if (!is.null(pS)) {
+      out <- pS %>% select(region, year, sector, price)
+      if (!is.null(pA)) {
+        out <- merge(out, pA %>% select(region, year, prob), by = c("region", "year"))
+        out$expectedPrice <- out$prob * out$price
+      } else {
+        out$prob <- NA_real_
+        out$expectedPrice <- out$price
+      }
+      proj[[sec]] <- out
+    }
+  }
+}
+has_proj <- length(proj) > 0
+```
+
+# Executive Summary
+
+```{r exec, results='asis'}
+for (sec in sectors) {
+  f <- fits[[sec]]
+  pd <- f$predictiveDiagnostics
+  cat(sprintf(paste0(
+    "- **%s** — `%s` | panelTransform: %s | family: %s | N = %d | maxVIF: %.1f | ",
+    "in-sample RMSE (estimation scale): %s | obs-fit correlation: %s\n"
+  ), sec, cfgS[[sec]]$name, cfgS[[sec]]$panelTransform, f$family,
+     length(f$model$y), f$maxVIF %||% NA,
+     if (!is.null(pd)) sprintf("%.3f", pd$rmse) else "—",
+     if (!is.null(pd)) sprintf("%.3f", pd$corObsPred) else "—"))
+}
+cat(sprintf("\nHurdle projections (adoption-gated expected price): %s\n",
+            if (has_proj) "available (SSP2)" else "not available"))
+```
+
+# Model Equations & Coefficients {.tabset}
+
+```{r coefs, results='asis', fig.height=6}
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  f <- fits[[sec]]
+  ct <- as.data.frame(unclass(f$coeftest))
+  names(ct) <- c("estimate", "stdError", "zValue", "pValue")
+  ct$term <- rownames(f$coeftest)
+  ct$signif <- sigStars(ct$pValue)
+  main <- ct %>% filter(!grepl("^regionFE", term))
+  eq_terms <- sprintf("%+.3f·%s%s", main$estimate,
+                      ifelse(main$term == "(Intercept)", "1", main$term), main$signif)
+  cat(sprintf("```\nE[log(1+ECP)] = %s + [region FE]   (gaussian identity; price = expm1(.))\n```\n\n",
+              paste(eq_terms, collapse = " ")))
+  cc <- ct %>% filter(!grepl("^regionFE|^\\(Intercept", term)) %>%
+    mutate(lo = estimate - 1.96 * stdError, hi = estimate + 1.96 * stdError,
+           sig = pValue < 0.05)
+  p <- ggplot(cc, aes(estimate, reorder(term, estimate), colour = sig)) +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+    geom_pointrange(aes(xmin = lo, xmax = hi)) +
+    scale_colour_manual(values = c(`TRUE` = "#d62728", `FALSE` = "grey60")) +
+    theme_report() + theme(legend.position = "none") +
+    labs(title = paste0(sec, " — coefficients (robust 95% CI)"),
+         x = "Estimate (per 1 SD of the driver)", y = NULL)
+  print(p)
+  cat("\n\n")
+  print(interactiveTable(ct %>% select(term, estimate, stdError, zValue, pValue, signif),
+                         caption = paste0(sec, " — full coefficient table (per-SD drivers)")))
+  cat("\n\n")
+}
+howToRead("Stringency coefficients are on the log(1+ECP) scale (a log-linear model: ",
+          "gaussian identity link on the log-transformed price, so E[log(1+ECP)] = Xβ ",
+          "and price = expm1(Xβ)). Drivers are **standardized**, so each coefficient is ",
+          "the effect of a **one-standard-deviation** increase in that driver — magnitudes ",
+          "are directly comparable across drivers (the largest is the most influential). ",
+          "To express a coefficient in natural units, divide it by that driver's SD. Read ",
+          "direction and significance here; the next section gives real-world magnitudes.")
+```
+
+# Real-World Effects — Semi-Elasticities & USD Effects {.tabset}
+
+```{r semi, results='asis'}
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  f <- fits[[sec]]
+  ct <- as.data.frame(unclass(f$coeftest))
+  names(ct) <- c("estimate", "stdError", "zValue", "pValue")
+  ct$term <- rownames(f$coeftest)
+  meanFitted <- mean(expm1(as.numeric(fitted(f$model))), na.rm = TRUE)
+  eff <- ct %>%
+    filter(!grepl("^regionFE|^\\(Intercept", term)) %>%
+    mutate(
+      semiElasticityPct = round((exp(estimate) - 1) * 100, 1),
+      effectUSDtCO2 = round((exp(estimate) - 1) * meanFitted, 2),
+      signif = sigStars(pValue)
+    ) %>%
+    select(term, estimate, semiElasticityPct, effectUSDtCO2, pValue, signif)
+  print(interactiveTable(eff, caption = sprintf(
+    "%s — effect per 1 SD of driver (mean fitted price %.1f USD/tCO2)", sec, meanFitted)))
+  cat("\n\n")
+}
+howToRead("semiElasticityPct = (e^β − 1)·100: the % change in the (log1p) price index ",
+          "per **one standard deviation** increase in the driver (drivers are standardized, ",
+          "so effects are comparable across drivers). effectUSDtCO2 translates that to ",
+          "dollars at the mean fitted price — a rough but intuitive 'so what' number. ",
+          "For a natural-unit effect, rescale by the driver's SD.",
+          type = "table")
+```
+
+# Historical Fit & Outliers {.tabset}
+
+## Calibration (45°)
+
+```{r calib, fig.height=5}
+cal <- bind_rows(lapply(sectors, function(sec) {
+  f <- fits[[sec]]
+  data.frame(sector = sec,
+             observed = as.numeric(f$model$y),
+             fitted = as.numeric(fitted(f$model)))
+}))
+ggplot(cal, aes(fitted, observed)) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey50", linetype = "dashed") +
+  geom_point(alpha = 0.4, colour = "#1f77b4", size = 1.2) +
+  geom_smooth(method = "lm", se = FALSE, colour = "#d62728", linewidth = 0.8) +
+  facet_wrap(~sector) +
+  theme_report() +
+  labs(title = "Observed vs fitted (estimation scale: log(1+ECP))",
+       x = "Fitted", y = "Observed")
+```
+
+```{r calib-cap, results='asis'}
+howToRead("Each dot is an adopting region-year on the estimation scale (log(1+ECP) for ",
+          "levels specs, Δlog(1+ECP) for FD). Perfect calibration = dots on the dashed ",
+          "45° line; the red regression line bending away from it shows where the model ",
+          "systematically over/under-predicts price levels.")
+```
+
+## Price trajectories (USD/tCO2)
+
+```{r traj, fig.height=5}
+tr <- bind_rows(lapply(sectors, function(sec) {
+  f <- fits[[sec]]
+  idx <- usedRows(f) # fitted values align to complete-case rows only
+  df <- f$data[idx, , drop = FALSE]
+  data.frame(sector = sec, region = df$region, year = df$year,
+             observed = expm1(as.numeric(f$model$y)),
+             fitted = expm1(as.numeric(fitted(f$model))))
+}))
+ci <- capAtP99(c(tr$observed, tr$fitted))
+trL <- tr %>%
+  tidyr::pivot_longer(c(observed, fitted), names_to = "kind", values_to = "price") %>%
+  mutate(price = pmin(price, ci$cap))
+ggplot(trL, aes(year, price, colour = kind, group = interaction(region, kind))) +
+  geom_line(alpha = 0.35, linewidth = 0.35) +
+  facet_wrap(~sector) +
+  scale_colour_manual(values = c(observed = "#1f77b4", fitted = "#d62728")) +
+  theme_report() +
+  labs(title = "Observed vs fitted carbon prices (adopting region-years)",
+       x = NULL, y = "USD/tCO2", colour = NULL, subtitle = capAnnotation(ci))
+```
+
+```{r traj-cap, results='asis'}
+howToRead("Back-transformed to USD/tCO2 (display-capped at p99 — Price Outlier rule). ",
+          "Blue = observed, red = model fit, one line per adopting region. Persistent ",
+          "red-above-blue (or below) for a region indicates a level bias the region FE ",
+          "did not absorb.")
+```
+
+## Price outliers
+
+```{r outliers, results='asis'}
+obs_pos <- tr$observed[is.finite(tr$observed) & tr$observed > 0]
+p99 <- as.numeric(quantile(obs_pos, 0.99, na.rm = TRUE))
+out_rows <- tr %>%
+  filter(observed > p99 | fitted > p99) %>%
+  mutate(across(c(observed, fitted), ~round(.x, 1))) %>%
+  arrange(desc(pmax(observed, fitted)))
+cat(sprintf("**Price Outlier threshold (p99 of positive historical ECP): %.1f USD/tCO2.**\n\n", p99))
+if (nrow(out_rows) > 0) {
+  interactiveTable(out_rows, caption = "Region-years above the p99 price threshold (observed or fitted)")
+} else cat("*No outliers above p99.*\n")
+```
+
+```{r outliers-cap, results='asis'}
+howToRead("Every region-year whose observed or fitted price exceeds the p99 threshold. ",
+          "These are kept in estimation (never dropped) but capped in charts; a fitted ",
+          "value here without a matching observed one means the model invents extreme ",
+          "prices for that region — check its drivers.", type = "table")
+```
+
+## Residual diagnostics
+
+```{r resid, fig.height=4.5}
+rd <- bind_rows(lapply(sectors, function(sec) {
+  f <- fits[[sec]]
+  data.frame(sector = sec,
+             fitted = as.numeric(fitted(f$model)),
+             residual = as.numeric(f$model$y) - as.numeric(fitted(f$model)))
+}))
+ggplot(rd, aes(fitted, residual)) +
+  geom_hline(yintercept = 0, colour = "grey50", linetype = "dashed") +
+  geom_point(alpha = 0.4, colour = "#1f77b4", size = 1.1) +
+  geom_smooth(se = FALSE, colour = "#d62728", linewidth = 0.8) +
+  facet_wrap(~sector) +
+  theme_report() +
+  labs(title = "Residuals vs fitted (estimation scale)", x = "Fitted", y = "Residual")
+```
+
+```{r resid-cap, results='asis'}
+howToRead("Raw residuals against fitted values. A flat red smoother around zero is ",
+          "healthy; funnels (heteroskedasticity) or curvature (missed nonlinearity) ",
+          "show where the log-linear functional form struggles.")
+```
+
+# Future Projections (SSP2) {.tabset}
+
+```{r proj, results='asis', fig.height=6}
+if (has_proj) {
+  pall <- bind_rows(proj)
+  ci <- capAtP99(pall$expectedPrice)
+
+  cat("## Hurdle-expected price trajectories\n\n")
+  pp <- pall %>% mutate(expCapped = pmin(expectedPrice, ci$cap))
+  p <- ggplot(pp, aes(year, expCapped, group = region)) +
+    geom_line(alpha = 0.35, linewidth = 0.4, colour = "#1f77b4") +
+    stat_summary(aes(group = 1), fun = median, geom = "line",
+                 colour = "#d62728", linewidth = 1.2) +
+    facet_wrap(~sector) +
+    theme_report() +
+    labs(title = "Projected expected carbon price: P(adoption) × price | adoption",
+         x = NULL, y = "USD/tCO2", subtitle = capAnnotation(ci))
+  print(p)
+  cat("\n\n")
+  howToRead("The hurdle expectation per region: adoption probability times the ",
+            "conditional price, back-transformed to USD/tCO2 and display-capped at p99. ",
+            "Red = median region. This is the quantity a REMIND rigidity factor would ",
+            "be built from — shapes matter more than absolute levels.")
+
+  cat("## Price ranking at snapshots\n\n")
+  snap <- pall %>%
+    filter(year %in% c(2030, 2050, 2070, 2100)) %>%
+    mutate(expectedPrice = round(expectedPrice, 1)) %>%
+    select(sector, region, year, expectedPrice) %>%
+    tidyr::pivot_wider(names_from = year, values_from = expectedPrice, names_prefix = "y")
+  print(interactiveTable(snap, caption = "Hurdle-expected price (USD/tCO2) at snapshot years",
+                         pageLength = 20))
+  cat("\n\n")
+  howToRead("Sortable per-region expected prices at four horizons — the ranking view ",
+            "for 'which regions can sustain high carbon prices, when'. Values above the ",
+            "2000 USD/tCO2 sanity threshold would be severe Projection Sanity flags.",
+            type = "table")
+
+  cat("## Projected price distribution\n\n")
+  pv <- pall %>% filter(year %in% c(2030, 2050, 2070, 2100))
+  civ <- capAtP99(pv$expectedPrice)
+  pv$expectedPrice <- civ$values
+  p2 <- ggplot(pv, aes(factor(year), expectedPrice)) +
+    geom_violin(fill = "#1f77b4", alpha = 0.4, colour = NA) +
+    geom_boxplot(width = 0.12, outlier.size = 0.7) +
+    facet_wrap(~sector) +
+    theme_report() +
+    labs(title = "Distribution of expected prices across regions",
+         x = NULL, y = "USD/tCO2", subtitle = capAnnotation(civ))
+  print(p2)
+  cat("\n\n")
+  howToRead("Cross-region distribution of the hurdle-expected price at each snapshot. ",
+            "A widening violin = growing regional divergence in feasible carbon pricing; ",
+            "the median line of the box is the 'typical region'.")
+} else {
+  cat("> Projections unavailable: no scenario panel, or the selected spec is an FD ",
+      "transform (not projectable — ADR 0005).\n")
+}
+```

@@ -1,0 +1,2213 @@
+---
+title: "`r params$modelName` — PFM Adoption Model Report"
+subtitle: "Input Data, Estimation, and Future Projections for Bulk & Diffuse Adoption"
+author: "Political Feasibility Module"
+date: "`r Sys.Date()`"
+params:
+  cachefolder: "C:/Users/renatoro/Desktop/Input Data/remind_inputdata/cache/default"
+  gdxPath: "c:/Users/renatoro/Desktop/Projects/Elevate/code/fulldata.gdx"
+  assetDir: "output/adoption_model"
+  modelName: "Baseline + Rule of Law"
+  instQualityDrivers: !r c("Government Effectiveness (WGI)", "Rule of Law (VDem)")
+  controlDrivers: !r c("GDP per Capita", "Hydro Nuclear Share")
+  regionMappingFE: "regionmappingH12.csv"
+  includeLagged: false
+  logisticTimeTrend: false
+  adoptionThreshold: 0.5
+  # 90%-sensitivity thresholds derived from historical calibration (see Threshold Guide section).
+  # Bulk: 30% correctly classifies 90% of historical Bulk adopters.
+  # Diffuse: 17% correctly classifies 90% of historical Diffuse adopters.
+  # Default falls back to adoptionThreshold when not set.
+  adoptionThresholdBulk: 0.30
+  adoptionThresholdDiffuse: 0.17
+  snapshotYears: !r c(2030, 2040, 2050, 2070, 2100)
+  reportName: "default"
+  timelineClassification: "five_groups"
+  actorPowerDrivers: ~
+  actorPowerIndex: "Actor Power Index"
+  # Per-sector overrides (Diffuse falls back to Bulk when NULL; Bulk falls back to single params above)
+  instQualityDriversBulk: ~
+  controlDriversBulk: ~
+  regionMappingFEBulk: ~
+  includeLaggedBulk: ~
+  logisticTimeTrendBulk: ~
+  actorPowerDriversBulk: ~
+  actorPowerIndexBulk: ~
+  instQualityDriversDiffuse: ~
+  controlDriversDiffuse: ~
+  regionMappingFEDiffuse: ~
+  includeLaggedDiffuse: ~
+  logisticTimeTrendDiffuse: ~
+  actorPowerDriversDiffuse: ~
+  actorPowerIndexDiffuse: ~
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 1
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: hide
+    fig_width: 10
+    fig_height: 6
+---
+
+<style>
+  body { background-color: #f5f7fa; color: #333; }
+  .main-container { max-width: 95% !important; }
+  .toc-content { padding-left: 0px !important; }
+  h1, h2, h3 { color: #2C3E50; font-weight: 700; }
+  .nav-tabs {
+    font-weight: bold;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #2C3E50;
+  }
+  .nav-tabs > li.active > a,
+  .nav-tabs > li.active > a:focus,
+  .nav-tabs > li.active > a:hover {
+    background-color: #2C3E50; color: #fff;
+    border: 1px solid #2C3E50; border-bottom-color: transparent;
+  }
+  .tab-content {
+    padding: 25px; border: 1px solid #ddd; border-top: none;
+    border-radius: 0 0 6px 6px; background-color: #fff;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+  }
+  .card {
+    background-color: #fff; border-radius: 8px;
+    border: 1px solid #eef2f5; box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+    margin-bottom: 25px;
+  }
+  .card-header {
+    background-color: #f8fafc; border-bottom: 1px solid #eef2f5;
+    padding: 12px 20px; font-weight: bold; font-size: 1.1em; color: #2C3E50;
+  }
+  .card-body { padding: 20px; }
+  /* Sector selector bar */
+  #sectorBar {
+    position: sticky; top: 0; z-index: 9999;
+    background: #2C3E50; color: white;
+    padding: 8px 24px; display: flex; align-items: center; gap: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    margin-bottom: 10px;
+  }
+  .sector-btn {
+    padding: 5px 22px; border-radius: 4px; font-weight: 700;
+    cursor: pointer; font-size: 0.9em; transition: all 0.15s;
+  }
+  .sector-btn.active  { background: white !important; color: #2C3E50 !important; border: none !important; }
+  .sector-btn.inactive { background: rgba(255,255,255,0.15) !important; color: white !important;
+                         border: 1px solid rgba(255,255,255,0.5) !important; }
+  .chart-description {
+    background: #f8fafc; border-left: 4px solid #2C3E50;
+    padding: 10px 16px; margin: 10px 0 18px 0;
+    font-size: 0.93em; color: #444; line-height: 1.55;
+  }
+</style>
+
+<div id="sectorBar">
+  <span style="font-weight:700;font-size:0.95em;margin-right:4px;">Sector:</span>
+  <button id="btn-bulk" class="sector-btn active" onclick="setSector('Bulk')">Bulk</button>
+  <button id="btn-diffuse" class="sector-btn inactive" onclick="setSector('Diffuse')">Diffuse</button>
+  <span style="font-size:0.8em;opacity:0.65;margin-left:8px;">Click to show only Bulk or Diffuse results throughout the report</span>
+</div>
+
+<script>
+(function() {
+  window.setSector = function(sector) {
+    document.getElementById('btn-bulk').className    = 'sector-btn ' + (sector === 'Bulk'    ? 'active' : 'inactive');
+    document.getElementById('btn-diffuse').className = 'sector-btn ' + (sector === 'Diffuse' ? 'active' : 'inactive');
+    document.querySelectorAll('.bulk-only').forEach(function(el) {
+      el.style.display = sector === 'Bulk' ? '' : 'none';
+    });
+    document.querySelectorAll('.diffuse-only').forEach(function(el) {
+      el.style.display = sector === 'Diffuse' ? '' : 'none';
+    });
+  };
+  window.addEventListener('load', function() { setSector('Bulk'); });
+})();
+</script>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.align = "center", dev = "svg"
+)
+
+library(pfm)
+library(magclass)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+library(scales)
+
+library(pfmreports)
+library(pfmreports)
+library(pfmreports)
+library(pfmreports)
+
+if (!is.null(params$cachefolder) && nchar(params$cachefolder) > 0) {
+  madrat::setConfig(
+    forcecache    = TRUE,
+    cachefolder   = params$cachefolder,
+    mappingfolder = gsub("cache/default", "mappings", params$cachefolder)
+  )
+}
+
+# Load fits from the shared PFM model store (populated by model-selection).
+# Same formula + same data → same cache key → same Ridge λ → matching forest plots.
+.model_store <- file.path(getwd(),
+                           getPfmConfig("modelDir", "../output"))
+dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
+options(pfm.modelDir = .model_store)
+
+plotOutputDir <- file.path(params$assetDir, "plots")
+if (!dir.exists(plotOutputDir)) dir.create(plotOutputDir, recursive = TRUE)
+
+resolve_sector_adp <- function(sector_val, bulk_val) {
+  if (is.null(sector_val) || (is.character(sector_val) && length(sector_val) == 0))
+    bulk_val else sector_val
+}
+resolve_fe_adp <- function(val) {
+  if (is.null(val) || nchar(as.character(val)) == 0) NULL else val
+}
+resolve_ai_adp <- function(val, default = "Actor Power Index") {
+  if (is.null(val) || !nzchar(as.character(val))) default else val
+}
+
+# Bulk defaults: sector-specific param → old single param
+bulk_iq  <- resolve_sector_adp(params$instQualityDriversBulk, params$instQualityDrivers)
+bulk_ctl <- resolve_sector_adp(params$controlDriversBulk,     params$controlDrivers)
+bulk_fe  <- resolve_fe_adp(resolve_sector_adp(params$regionMappingFEBulk,  params$regionMappingFE))
+bulk_lag <- isTRUE(resolve_sector_adp(params$includeLaggedBulk,  params$includeLagged))
+bulk_lt  <- isTRUE(resolve_sector_adp(params$logisticTimeTrendBulk, params$logisticTimeTrend))
+bulk_ap  <- resolve_sector_adp(params$actorPowerDriversBulk,  params$actorPowerDrivers)
+bulk_ai  <- resolve_ai_adp(resolve_sector_adp(params$actorPowerIndexBulk, params$actorPowerIndex))
+
+cfg <- list(
+  Bulk = list(
+    instQuality        = bulk_iq,
+    controls           = bulk_ctl,
+    regionFE           = bulk_fe,
+    lagged             = bulk_lag,
+    logisticTimeTrend  = bulk_lt,
+    actorPower         = bulk_ap,
+    actorIndex         = bulk_ai
+  ),
+  Diffuse = list(
+    instQuality        = resolve_sector_adp(params$instQualityDriversDiffuse, bulk_iq),
+    controls           = resolve_sector_adp(params$controlDriversDiffuse,     bulk_ctl),
+    regionFE           = resolve_fe_adp(resolve_sector_adp(params$regionMappingFEDiffuse,  params$regionMappingFEBulk  %||% params$regionMappingFE)),
+    lagged             = isTRUE(resolve_sector_adp(params$includeLaggedDiffuse,  bulk_lag)),
+    logisticTimeTrend  = isTRUE(resolve_sector_adp(params$logisticTimeTrendDiffuse, bulk_lt)),
+    actorPower         = resolve_sector_adp(params$actorPowerDriversDiffuse,  bulk_ap),
+    actorIndex         = resolve_ai_adp(resolve_sector_adp(params$actorPowerIndexDiffuse, bulk_ai))
+  )
+)
+
+# Legacy single-model vars (Bulk values; used by non-sector-specific sections)
+model_instQualityDrivers <- bulk_iq
+model_controlDrivers     <- bulk_ctl
+model_regionMappingFE    <- bulk_fe
+model_includeLagged      <- bulk_lag
+model_actorPowerDrivers  <- bulk_ap
+model_actorPowerIndex    <- bulk_ai
+adoption_threshold         <- as.numeric(params$adoptionThreshold)
+adoption_threshold_bulk    <- as.numeric(params$adoptionThresholdBulk    %||% params$adoptionThreshold)
+adoption_threshold_diffuse <- as.numeric(params$adoptionThresholdDiffuse %||% params$adoptionThreshold)
+snapshot_years           <- as.integer(params$snapshotYears)
+
+# Variables shown in the input data section — union across both sectors
+model_vars_input <- c(
+  "Actor Power Index|Bulk",
+  "Actor Power Index|Diffuse",
+  unique(c(cfg$Bulk$instQuality, cfg$Diffuse$instQuality)),
+  unique(c(cfg$Bulk$controls,    cfg$Diffuse$controls))
+)
+
+# Resolve gdxPath as an absolute path relative to the project root if it is relative
+gdx_path <- params$gdxPath
+if (!is.null(gdx_path) && nchar(gdx_path) > 0 && !is_absolute_path(gdx_path)) {
+  gdx_path <- file.path(getwd(), gdx_path)
+}
+has_scenario <- !is.null(gdx_path) && nchar(gdx_path) > 0 && file.exists(gdx_path)
+
+tidy_magpie <- function(mag_obj, period_label = "Historical") {
+  if (is.null(mag_obj)) return(NULL)
+  df      <- as.data.frame(mag_obj)
+  reg_col <- if ("Region" %in% colnames(df)) "Region" else colnames(df)[1]
+  yr_col  <- if ("Year"   %in% colnames(df)) "Year"   else colnames(df)[2]
+  var_col <- if ("Data1"  %in% colnames(df)) "Data1"  else colnames(df)[3]
+  val_col <- if ("Value"  %in% colnames(df)) "Value"  else colnames(df)[4]
+  data.frame(
+    region   = trimws(as.character(df[[reg_col]])),
+    year     = as.integer(gsub("y", "", as.character(df[[yr_col]]))),
+    variable = trimws(as.character(df[[var_col]])),
+    value    = as.numeric(df[[val_col]]),
+    period   = period_label,
+    stringsAsFactors = FALSE
+  )
+}
+
+key_regions <- c("USA", "CHA", "DEU", "IND", "JPN", "BRA", "RUS", "ZAF")
+```
+
+```{r load_data, cache=FALSE, include=FALSE}
+panelData <- getPanelDataHistoricalCached(
+  aggregate = TRUE, y = 2000:2022,
+  outputRegionMappingFile = "regionmapping_54.csv"
+)
+
+df_hist <- tidy_magpie(panelData, "Historical")
+
+future_mag <- NULL
+df_scen    <- NULL
+if (has_scenario) {
+  future_mag <- getPanelDataScenarioCached(
+    gdxFile = gdx_path,
+    aggregate = TRUE,
+    outputRegionMappingFile = "regionmapping_54.csv"
+  )
+  df_scen <- tidy_magpie(future_mag, "Scenario")
+}
+
+df_all <- do.call(rbind, Filter(Negate(is.null), list(df_hist, df_scen)))
+```
+
+```{r fit_models, cache=FALSE, include=FALSE}
+fit_bulk <- estimateAdoptionModel(
+  data                      = panelData,
+  sector                    = "Bulk",
+  actorPowerDrivers         = cfg$Bulk$actorPower,
+  actorPowerIndex           = cfg$Bulk$actorIndex,
+  instQualityDrivers        = cfg$Bulk$instQuality,
+  controlDrivers            = cfg$Bulk$controls,
+  includeLaggedAdoption     = cfg$Bulk$lagged,
+  interactRegionFE          = FALSE,
+  regionMappingFixedEffects = cfg$Bulk$regionFE,
+  logisticTimeTrend         = isTRUE(cfg$Bulk$logisticTimeTrend)
+)
+
+fit_diffuse <- estimateAdoptionModel(
+  data                      = panelData,
+  sector                    = "Diffuse",
+  actorPowerDrivers         = cfg$Diffuse$actorPower,
+  actorPowerIndex           = cfg$Diffuse$actorIndex,
+  instQualityDrivers        = cfg$Diffuse$instQuality,
+  controlDrivers            = cfg$Diffuse$controls,
+  includeLaggedAdoption     = cfg$Diffuse$lagged,
+  interactRegionFE          = FALSE,
+  regionMappingFixedEffects = cfg$Diffuse$regionFE,
+  logisticTimeTrend         = isTRUE(cfg$Diffuse$logisticTimeTrend)
+)
+
+future_df_bulk    <- NULL
+future_df_diffuse <- NULL
+
+if (!is.null(future_mag)) {
+  # Reuse the driver-standardization mean/sd FROZEN on the historical fit (ADR
+  # 0007): the fit's coefficients are on the historical-frozen scale, so the
+  # scenario design must be standardized with the same reference (attr on the
+  # fitted df), not re-standardized on the scenario's own distribution.
+  future_df_bulk <- preparePanelData(
+    data                      = future_mag,
+    sector                    = "Bulk",
+    actorPowerDrivers         = cfg$Bulk$actorPower,
+    actorPowerIndex           = cfg$Bulk$actorIndex,
+    instQualityDrivers        = cfg$Bulk$instQuality,
+    controlDrivers            = cfg$Bulk$controls,
+    regionMappingFixedEffects = cfg$Bulk$regionFE,
+    lag                       = 1,
+    driverScaling             = attr(fit_bulk$data, "driverScaling"),
+    trendFreezeYear           = max(magclass::getYears(panelData, as.integer = TRUE))
+  )
+  future_df_diffuse <- preparePanelData(
+    data                      = future_mag,
+    sector                    = "Diffuse",
+    actorPowerDrivers         = cfg$Diffuse$actorPower,
+    actorPowerIndex           = cfg$Diffuse$actorIndex,
+    instQualityDrivers        = cfg$Diffuse$instQuality,
+    controlDrivers            = cfg$Diffuse$controls,
+    regionMappingFixedEffects = cfg$Diffuse$regionFE,
+    lag                       = 1,
+    driverScaling             = attr(fit_diffuse$data, "driverScaling"),
+    trendFreezeYear           = max(magclass::getYears(panelData, as.integer = TRUE))
+  )
+}
+
+compute_fit_stats <- function(fit) {
+  if (is.null(fit) || is.null(fit$model))
+    return(list(k=NA, nObs=NA, loglik=NA, aic=NA, bic=NA, pseudoR2=NA, nSig=NA, converged=NA))
+  m          <- fit$model
+  is_logistf <- inherits(m, "logistf")
+  k          <- length(coef(m))
+  nObs       <- if (is_logistf) m$n else nobs(m)
+  loglik     <- if (is_logistf) as.numeric(m$loglik["full"]) else as.numeric(logLik(m))
+  aic        <- if (is_logistf) -2 * loglik + 2 * k else AIC(m)
+  bic        <- if (is_logistf) -2 * loglik + k * log(nObs) else BIC(m)
+  pseudoR2   <- if (is_logistf) {
+    round(1 - (m$loglik["full"] / m$loglik["null"]), 3)
+  } else if (!is.null(m$deviance) && !is.null(m$null.deviance)) {
+    round(1 - (m$deviance / m$null.deviance), 3)
+  } else NA
+  pvals <- if (!is.null(fit$coeftest)) fit$coeftest[, 4] else NULL
+  nSig  <- if (!is.null(pvals)) sum(pvals < 0.05, na.rm = TRUE) else NA
+  list(
+    k = k, nObs = nObs,
+    loglik   = round(loglik, 2),
+    aic      = round(aic, 2),
+    bic      = round(bic, 2),
+    pseudoR2 = pseudoR2,
+    nSig     = nSig,
+    converged = if (is_logistf) !any(is.na(m$coefficients)) else isTRUE(m$converged)
+  )
+}
+
+stats_bulk    <- compute_fit_stats(fit_bulk)
+stats_diffuse <- compute_fit_stats(fit_diffuse)
+
+get_probs <- function(fit, future_df) {
+  if (is.null(fit) || is.null(future_df)) return(NULL)
+  m           <- fit$model
+  needed_vars <- intersect(all.vars(m$formula), colnames(future_df))
+  df_clean    <- future_df[complete.cases(future_df[, needed_vars, drop = FALSE]), ]
+  if (nrow(df_clean) == 0) return(NULL)
+  pred_link   <- tryCatch(predict(m, newdata = df_clean), error = function(e) NULL)
+  if (is.null(pred_link)) return(NULL)
+  df_clean$prob <- 1 / (1 + exp(-pred_link))
+  df_clean
+}
+
+proj_bulk    <- get_probs(fit_bulk,    future_df_bulk)
+proj_diffuse <- get_probs(fit_diffuse, future_df_diffuse)
+```
+
+---
+
+# Executive Summary
+
+This report documents a single-model deep dive into the **`r params$modelName`** specification of the PFM adoption hurdle model. It covers both the **Bulk** (industrial) and **Diffuse** (transport/buildings) sectors and includes three sections: input data inspection (historical & scenario), model estimation diagnostics, and future adoption projections.
+
+<div class="row">
+<div class="col-md-4 bulk-only">
+<div class="card">
+<div class="card-header" style="border-left:4px solid #2980b9;">Bulk Sector Model</div>
+<div class="card-body">
+<ul>
+  <li><strong>Model name:</strong> `r params$modelName`</li>
+  <li><strong>Response:</strong> Binary adoption (ECP_Bulk > 0) — Firth penalised logit</li>
+  <li><strong>Actor Power:</strong> `r paste(cfg$Bulk$actorIndex, collapse = ", ")`</li>
+  <li><strong>IQ drivers:</strong> `r paste(cfg$Bulk$instQuality, collapse = ", ")`</li>
+  <li><strong>Controls:</strong> `r paste(cfg$Bulk$controls, collapse = ", ")`</li>
+  <li><strong>Region FE:</strong> `r if (is.null(cfg$Bulk$regionFE)) "None" else cfg$Bulk$regionFE`</li>
+  <li><strong>Lagged adoption:</strong> `r cfg$Bulk$lagged`</li>
+</ul>
+</div></div></div>
+<div class="col-md-4 diffuse-only">
+<div class="card">
+<div class="card-header" style="border-left:4px solid #27ae60;">Diffuse Sector Model</div>
+<div class="card-body">
+<ul>
+  <li><strong>Model name:</strong> `r params$modelName`</li>
+  <li><strong>Response:</strong> Binary adoption (ECP_Diffuse > 0) — Firth penalised logit</li>
+  <li><strong>Actor Power:</strong> `r paste(cfg$Diffuse$actorIndex, collapse = ", ")`</li>
+  <li><strong>IQ drivers:</strong> `r paste(cfg$Diffuse$instQuality, collapse = ", ")`</li>
+  <li><strong>Controls:</strong> `r paste(cfg$Diffuse$controls, collapse = ", ")`</li>
+  <li><strong>Region FE:</strong> `r if (is.null(cfg$Diffuse$regionFE)) "None" else cfg$Diffuse$regionFE`</li>
+  <li><strong>Lagged adoption:</strong> `r cfg$Diffuse$lagged`</li>
+</ul>
+</div></div></div>
+<div class="col-md-4">
+<div class="card">
+<div class="card-header">Projection Settings</div>
+<div class="card-body">
+<ul>
+  <li><strong>Adoption threshold:</strong> Bulk `r adoption_threshold_bulk` · Diffuse `r adoption_threshold_diffuse` — 90%-sensitivity calibrated (Pr(Adoption) &ge; threshold &rarr; adopted)</li>
+  <li><strong>Snapshot years:</strong> `r paste(snapshot_years, collapse = ", ")`</li>
+  <li><strong>Scenario data:</strong> `r if (has_scenario) paste0("Loaded from ", basename(params$gdxPath)) else "Not provided — projection sections disabled"`</li>
+  <li><strong>Historical range:</strong> 2000–2022</li>
+</ul>
+</div></div></div>
+</div>
+
+```{r summary-fit-table, echo=FALSE}
+summary_df <- data.frame(
+  Sector     = c("Bulk", "Diffuse"),
+  `Pseudo-R²`= c(stats_bulk$pseudoR2, stats_diffuse$pseudoR2),
+  AIC        = c(stats_bulk$aic,      stats_diffuse$aic),
+  BIC        = c(stats_bulk$bic,      stats_diffuse$bic),
+  `Log-lik`  = c(stats_bulk$loglik,   stats_diffuse$loglik),
+  `N obs`    = c(stats_bulk$nObs,     stats_diffuse$nObs),
+  `N pred`   = c(stats_bulk$k,        stats_diffuse$k),
+  `N sig`    = c(stats_bulk$nSig,     stats_diffuse$nSig),
+  Converged  = c(stats_bulk$converged, stats_diffuse$converged),
+  check.names = FALSE
+)
+
+kable(summary_df, format = "html", caption = "Adoption Model Fit Summary") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  column_spec(2, bold = TRUE,
+    color = ifelse(summary_df$`Pseudo-R²` >= 0.4, col_good,
+      ifelse(summary_df$`Pseudo-R²` >= 0.2, col_warn, col_bad)))
+```
+
+---
+
+# Data Quality Check
+
+```{r data-qa, echo=FALSE, results='asis', cache=FALSE}
+check_panel_nas <- function(mag_obj, label) {
+  if (is.null(mag_obj)) {
+    cat(sprintf(
+      '<div style="background:#fef9e7;border-left:4px solid %s;padding:10px 16px;margin-bottom:12px;">',
+      col_warn
+    ))
+    cat(sprintf('<strong style="color:%s;">⊘ %s</strong>: not loaded.</div>\n', col_warn, label))
+    return(invisible(NULL))
+  }
+
+  # Use as.array() — magclass's as.data.frame() uses sparse representation and
+  # silently drops NaN/NA cells, giving false-clean results. The full array
+  # includes every region × year × variable cell, including NaN.
+  arr      <- as.array(mag_obj)
+  n_total  <- length(arr)
+  bad_mask <- !is.finite(arr)
+  n_bad    <- sum(bad_mask)
+
+  if (n_bad == 0) {
+    cat(sprintf(
+      '<div style="background:#eafaf1;border-left:4px solid %s;padding:10px 16px;margin-bottom:12px;">',
+      col_good
+    ))
+    cat(sprintf(
+      '<strong style="color:%s;">&#10003; %s</strong>: no missing or non-finite values across %s variable–region–year combinations.</div>\n',
+      col_good, label, format(n_total, big.mark = ",")
+    ))
+    return(invisible(NULL))
+  }
+
+  pct     <- round(100 * n_bad / n_total, 2)
+  cat(sprintf(
+    '<div style="background:#fef9e7;border-left:4px solid %s;padding:10px 16px;margin-bottom:4px;">',
+    col_warn
+  ))
+  cat(sprintf(
+    '<strong style="color:%s;">&#9888; %s</strong>: %s non-finite values (NA / NaN / Inf) — %.2f%% of %s total.</div>\n',
+    col_warn, label, format(n_bad, big.mark = ","), pct, format(n_total, big.mark = ",")
+  ))
+
+  dn       <- dimnames(arr)
+  bad_idx  <- which(bad_mask, arr.ind = TRUE)
+  bad_vals <- arr[bad_mask]
+  bad_df   <- data.frame(
+    region   = dn[[1]][bad_idx[, 1]],
+    year     = as.integer(gsub("y", "", dn[[2]][bad_idx[, 2]])),
+    variable = dn[[3]][bad_idx[, 3]],
+    kind     = ifelse(is.nan(bad_vals), "NaN",
+                 ifelse(is.na(bad_vals), "NA",
+                   ifelse(bad_vals == Inf, "Inf", "-Inf"))),
+    stringsAsFactors = FALSE
+  )
+
+  by_var <- bad_df %>%
+    dplyr::group_by(variable, kind) %>%
+    dplyr::summarise(
+      `Count`            = dplyr::n(),
+      `Affected regions` = paste(sort(unique(region)), collapse = ", "),
+      `Years`            = if (min(year) == max(year)) as.character(min(year))
+                           else paste0(min(year), "–", max(year)),
+      .groups = "drop"
+    ) %>%
+    dplyr::arrange(dplyr::desc(`Count`))
+
+  print(
+    knitr::kable(by_var, format = "html",
+                 caption = paste0(label, " — non-finite values by variable")) %>%
+      kableExtra::kable_styling(
+        bootstrap_options = c("striped", "hover", "condensed"),
+        full_width = TRUE
+      )
+  )
+  invisible(NULL)
+}
+
+check_panel_nas(panelData,  "Historical panel")
+check_panel_nas(future_mag, "Scenario panel")
+
+# --- Region coverage: which regions appear in each stage of the pipeline ---
+banner <- function(ok, msg) {
+  bg  <- if (ok) "#eafaf1" else "#fef9e7"
+  col <- if (ok) col_good  else col_warn
+  ico <- if (ok) "&#10003;" else "&#9888;"
+  cat(sprintf(
+    '<div style="background:%s;border-left:4px solid %s;padding:10px 16px;margin-bottom:8px;"><strong style="color:%s;">%s %s</strong></div>\n',
+    bg, col, col, ico, msg
+  ))
+}
+
+hist_regions <- sort(magclass::getItems(panelData, dim = 1))
+
+if (!is.null(future_mag)) {
+  scen_regions <- sort(magclass::getItems(future_mag, dim = 1))
+  missing_in_scen <- setdiff(hist_regions, scen_regions)
+  extra_in_scen   <- setdiff(scen_regions, hist_regions)
+
+  cat("\n\n**Region coverage — Historical vs Scenario panel:**\n\n")
+  if (length(missing_in_scen) == 0) {
+    banner(TRUE, sprintf("Scenario panel covers all %d historical regions.", length(hist_regions)))
+  } else {
+    banner(FALSE, sprintf(
+      "%d region(s) present in historical panel but ABSENT from scenario panel: %s",
+      length(missing_in_scen), paste(missing_in_scen, collapse = ", ")
+    ))
+  }
+  if (length(extra_in_scen) > 0) {
+    banner(FALSE, sprintf(
+      "%d region(s) in scenario panel but NOT in historical panel: %s",
+      length(extra_in_scen), paste(extra_in_scen, collapse = ", ")
+    ))
+  }
+}
+
+# Coverage and year-count after complete.cases() inside get_probs()
+check_proj_coverage <- function(proj_df, hist_regs, label) {
+  if (is.null(proj_df)) return(invisible(NULL))
+
+  expected_years <- length(unique(proj_df$year))
+  yr_counts <- proj_df %>%
+    dplyr::count(region, name = "n_years")
+
+  proj_regs <- sort(yr_counts$region)
+  missing   <- setdiff(hist_regs, proj_regs)
+  sparse    <- yr_counts %>%
+    dplyr::filter(n_years < expected_years) %>%
+    dplyr::arrange(n_years)
+
+  cat(sprintf("\n\n**Region coverage after model prediction — %s:**\n\n", label))
+
+  if (length(missing) == 0) {
+    banner(TRUE, sprintf("All %d historical regions are present in %s projections.", length(hist_regs), label))
+  } else {
+    banner(FALSE, sprintf(
+      "%d region(s) dropped before/after prediction in %s: %s",
+      length(missing), label, paste(missing, collapse = ", ")
+    ))
+  }
+
+  if (nrow(sparse) == 0) {
+    banner(TRUE, sprintf("All regions have the full %d projected years.", expected_years))
+  } else {
+    banner(FALSE, sprintf(
+      "%d region(s) have fewer than the expected %d projected years (sparse rows may cause near-zero-only trajectories):",
+      nrow(sparse), expected_years
+    ))
+    print(
+      knitr::kable(sparse, col.names = c("Region", "Years with predictions"),
+                   format = "html",
+                   caption = paste0(label, " — regions with incomplete year coverage")) %>%
+        kableExtra::kable_styling(
+          bootstrap_options = c("striped", "hover", "condensed"),
+          full_width = FALSE
+        )
+    )
+  }
+}
+
+check_proj_coverage(proj_bulk,    hist_regions, "Bulk")
+check_proj_coverage(proj_diffuse, hist_regions, "Diffuse")
+```
+
+---
+
+# Input Data {.tabset}
+
+Variables used across both sector models: **`r paste(unique(c(cfg$Bulk$actorIndex, cfg$Diffuse$actorIndex)), collapse = "**, **")`** (Actor Power), **`r paste(unique(c(cfg$Bulk$instQuality, cfg$Diffuse$instQuality)), collapse = "**, **")`** (IQ), **`r paste(unique(c(cfg$Bulk$controls, cfg$Diffuse$controls)), collapse = "**, **")`** (Controls).
+
+## Historical Distributions
+
+```{r hist-distributions, echo=FALSE, fig.width=12, fig.height=7}
+df_model_hist <- df_hist %>%
+  filter(variable %in% model_vars_input)
+
+df_model_hist$var_short <- df_model_hist$variable %>%
+  gsub("\\|Bulk",   " (Bulk)",   .) %>%
+  gsub("\\|Diffuse", " (Diffuse)", .) %>%
+  gsub(" \\(WGI\\)", " [WGI]", .) %>%
+  gsub(" \\(VDem\\)", " [VDem]", .)
+
+ggplot(df_model_hist, aes(x = value)) +
+  geom_density(fill = "#2C7BB6", alpha = 0.6, color = "white") +
+  geom_rug(alpha = 0.2, color = "#2C3E50") +
+  facet_wrap(~var_short, scales = "free", ncol = 3) +
+  labs(
+    title    = paste0(params$modelName, " — Historical Variable Distributions (2000–2022)"),
+    subtitle = "Aggregated 54-region panel; density estimated over region-year observations",
+    x = "Variable value", y = "Density"
+  ) +
+  theme_report()
+```
+
+### Summary Statistics
+
+```{r hist-stats, echo=FALSE}
+hist_stats <- df_model_hist %>%
+  group_by(variable) %>%
+  summarize(
+    N      = sum(!is.na(value)),
+    Mean   = mean(value,   na.rm = TRUE),
+    Median = median(value, na.rm = TRUE),
+    SD     = sd(value,     na.rm = TRUE),
+    Min    = min(value,    na.rm = TRUE),
+    Max    = max(value,    na.rm = TRUE),
+    .groups = "drop"
+  )
+
+kable(hist_stats, digits = 3, caption = "Historical Variable Statistics (Aggregated, 2000–2022)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE)
+```
+
+## Historical Trends
+
+```{r hist-trends, echo=FALSE, fig.width=12, fig.height=8}
+df_trends <- df_model_hist %>%
+  filter(region %in% key_regions)
+
+df_trends$var_short <- df_trends$variable %>%
+  gsub("\\|Bulk",   " (Bulk)",   .) %>%
+  gsub("\\|Diffuse", " (Diffuse)", .) %>%
+  gsub(" \\(WGI\\)", " [WGI]", .) %>%
+  gsub(" \\(VDem\\)", " [VDem]", .)
+
+ggplot(df_trends, aes(x = year, y = value, color = region)) +
+  geom_line(linewidth = 1.1) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  facet_wrap(~var_short, scales = "free_y", ncol = 3) +
+  labs(
+    title    = paste0(params$modelName, " — Historical Trends by Region (2000–2022)"),
+    subtitle = "Selected major economies; aggregated 54-region mapping",
+    x = "Year", y = "Variable value", color = "Region"
+  ) +
+  theme_report() +
+  theme(legend.position = "bottom")
+```
+
+## Scenario Projections
+
+```{r scenario-projections, echo=FALSE, fig.width=12, fig.height=8}
+if (has_scenario) {
+  df_model_all <- df_all %>%
+    filter(variable %in% model_vars_input, region %in% key_regions)
+
+  df_model_all$var_short <- df_model_all$variable %>%
+    gsub("\\|Bulk",    " (Bulk)",    .) %>%
+    gsub("\\|Diffuse", " (Diffuse)", .) %>%
+    gsub(" \\(WGI\\)", " [WGI]", .) %>%
+    gsub(" \\(VDem\\)", " [VDem]", .)
+
+  ggplot(df_model_all, aes(x = year, y = value, color = region, linetype = period)) +
+    geom_line(linewidth = 1.1) +
+    geom_vline(xintercept = 2022, linetype = "dotted", color = "grey40") +
+    facet_wrap(~var_short, scales = "free_y", ncol = 3) +
+    labs(
+      title    = paste0(params$modelName, " — Historical & Scenario Variable Trajectories"),
+      subtitle = "Vertical dotted line = 2022 (historical / scenario boundary)",
+      x = "Year", y = "Variable value", color = "Region", linetype = "Period"
+    ) +
+    theme_report() +
+    theme(legend.position = "bottom")
+} else {
+  cat("> [!NOTE] Scenario GDX file not provided — long-term projections are disabled.")
+}
+```
+
+---
+
+# Model Estimation
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+
+```{r forest-bulk, echo=FALSE, fig.height=6, fig.width=10}
+coef_df_bulk <- pfm::coeftestToDataFrame(fit_bulk$coeftest) %>%
+  filter(term != "(Intercept)")
+
+p_bulk <- render_forest_plot(
+  coef_df_bulk,
+  title    = "Bulk Adoption — Coefficient Forest Plot",
+  subtitle = sprintf(
+    "Log-odds coefficients | Pseudo-R² = %.3f | AIC = %.1f | %d/%d significant",
+    stats_bulk$pseudoR2, stats_bulk$aic, stats_bulk$nSig, stats_bulk$k
+  )
+)
+
+if (!is.null(p_bulk)) {
+  print(p_bulk)
+  ggsave(file.path(plotOutputDir, "forest_bulk_adoption.png"), p_bulk, width = 10, height = 6, dpi = 300)
+  ggsave(file.path(plotOutputDir, "forest_bulk_adoption.svg"), p_bulk, width = 10, height = 6)
+}
+```
+
+<h3>Coefficient Table</h3>
+
+```{r coef-table-bulk, echo=FALSE}
+coef_display_bulk <- pfm::coeftestToDataFrame(fit_bulk$coeftest) %>%
+  mutate(
+    term = vapply(term, clean_term_plain, character(1)),
+    Significance = case_when(
+      pValue < 0.001 ~ "***", pValue < 0.01 ~ "**",
+      pValue < 0.05  ~ "*",   pValue < 0.1  ~ ".", TRUE ~ ""
+    )
+  ) %>%
+  rename(
+    Term = term, Estimate = estimate,
+    `Std. Error` = stdError, `z / t` = statistic, `p-value` = pValue
+  )
+
+kable(coef_display_bulk, digits = 4, format = "html",
+  caption = "Bulk Adoption — Coefficient Estimates") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  column_spec(5, bold = TRUE,
+    color = ifelse(!is.na(coef_display_bulk$`p-value`) & coef_display_bulk$`p-value` < 0.05, col_good, "grey50"))
+```
+
+<h3>Fit Diagnostics</h3>
+
+```{r diag-bulk, echo=FALSE}
+diag_bulk_df <- data.frame(
+  Metric = c("Pseudo-R²", "AIC", "BIC", "Log-likelihood",
+             "N observations", "N predictors", "N significant (p<0.05)", "Converged"),
+  Value = c(
+    stats_bulk$pseudoR2, stats_bulk$aic, stats_bulk$bic, stats_bulk$loglik,
+    stats_bulk$nObs, stats_bulk$k, stats_bulk$nSig,
+    as.character(stats_bulk$converged)
+  )
+)
+
+kable(diag_bulk_df, format = "html", caption = "Bulk Adoption — Model Diagnostics") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+
+```{r forest-diffuse, echo=FALSE, fig.height=6, fig.width=10}
+coef_df_diffuse <- pfm::coeftestToDataFrame(fit_diffuse$coeftest) %>%
+  filter(term != "(Intercept)")
+
+p_diffuse <- render_forest_plot(
+  coef_df_diffuse,
+  title    = "Diffuse Adoption — Coefficient Forest Plot",
+  subtitle = sprintf(
+    "Log-odds coefficients | Pseudo-R² = %.3f | AIC = %.1f | %d/%d significant",
+    stats_diffuse$pseudoR2, stats_diffuse$aic, stats_diffuse$nSig, stats_diffuse$k
+  )
+)
+
+if (!is.null(p_diffuse)) {
+  print(p_diffuse)
+  ggsave(file.path(plotOutputDir, "forest_diffuse_adoption.png"), p_diffuse, width = 10, height = 6, dpi = 300)
+  ggsave(file.path(plotOutputDir, "forest_diffuse_adoption.svg"), p_diffuse, width = 10, height = 6)
+}
+```
+
+<h3>Coefficient Table</h3>
+
+```{r coef-table-diffuse, echo=FALSE}
+coef_display_diffuse <- pfm::coeftestToDataFrame(fit_diffuse$coeftest) %>%
+  mutate(
+    term = vapply(term, clean_term_plain, character(1)),
+    Significance = case_when(
+      pValue < 0.001 ~ "***", pValue < 0.01 ~ "**",
+      pValue < 0.05  ~ "*",   pValue < 0.1  ~ ".", TRUE ~ ""
+    )
+  ) %>%
+  rename(
+    Term = term, Estimate = estimate,
+    `Std. Error` = stdError, `z / t` = statistic, `p-value` = pValue
+  )
+
+kable(coef_display_diffuse, digits = 4, format = "html",
+  caption = "Diffuse Adoption — Coefficient Estimates") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  column_spec(5, bold = TRUE,
+    color = ifelse(!is.na(coef_display_diffuse$`p-value`) & coef_display_diffuse$`p-value` < 0.05, col_good, "grey50"))
+```
+
+<h3>Fit Diagnostics</h3>
+
+```{r diag-diffuse, echo=FALSE}
+diag_diffuse_df <- data.frame(
+  Metric = c("Pseudo-R²", "AIC", "BIC", "Log-likelihood",
+             "N observations", "N predictors", "N significant (p<0.05)", "Converged"),
+  Value = c(
+    stats_diffuse$pseudoR2, stats_diffuse$aic, stats_diffuse$bic, stats_diffuse$loglik,
+    stats_diffuse$nObs, stats_diffuse$k, stats_diffuse$nSig,
+    as.character(stats_diffuse$converged)
+  )
+)
+
+kable(diag_diffuse_df, format = "html", caption = "Diffuse Adoption — Model Diagnostics") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  column_spec(1, bold = TRUE)
+```
+
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+---
+
+# Historical Model Fit {.tabset}
+
+```{r hist-fit-helper, include=FALSE}
+build_hist_fit <- function(fit, sector, data) {
+  sec_cfg <- cfg[[sector]]
+  df <- pfm::preparePanelData(
+    data                      = data,
+    sector                    = sector,
+    actorPowerDrivers         = sec_cfg$actorPower,
+    actorPowerIndex           = sec_cfg$actorIndex,
+    instQualityDrivers        = sec_cfg$instQuality,
+    controlDrivers            = sec_cfg$controls,
+    regionMappingFixedEffects = sec_cfg$regionFE,
+    lag                       = 1
+  )
+  df$adoption_raw <- as.integer(df$ecp > 0)
+
+  needed_vars <- intersect(all.vars(fit$model$formula), colnames(df))
+  ok          <- complete.cases(df[, needed_vars, drop = FALSE])
+  df$fitted_prob <- NA_real_
+  pred <- tryCatch(
+    predict(fit$model, newdata = df[ok, ], type = "link"),
+    error = function(e) NULL
+  )
+  if (!is.null(pred)) df$fitted_prob[ok] <- 1 / (1 + exp(-as.numeric(pred)))
+  df
+}
+
+hist_fit_bulk    <- build_hist_fit(fit_bulk,    "Bulk",    panelData)
+hist_fit_diffuse <- build_hist_fit(fit_diffuse, "Diffuse", panelData)
+
+# --- Trajectory plot (adopted or non-adopted regions) ---
+make_traj_plot <- function(df, sector_name, adopted_group = TRUE) {
+  col_sector  <- if (sector_name == "Bulk") col_bulk else col_diffuse
+  group_label <- if (adopted_group) "Adopted" else "Non-Adopted"
+
+  ever_adopted <- df %>%
+    group_by(region) %>%
+    summarise(adopted = any(adoption_raw == 1, na.rm = TRUE), .groups = "drop")
+
+  regs <- ever_adopted %>% filter(adopted == adopted_group) %>% pull(region)
+  df_f <- df %>% filter(region %in% regs)
+  if (nrow(df_f) == 0) return(NULL)
+
+  n_regs <- length(unique(df_f$region))
+  ncols  <- min(6L, n_regs)
+
+  ggplot(df_f, aes(x = year)) +
+    geom_step(aes(y = adoption_raw, color = "Actual adoption (0/1)"),
+              linewidth = 0.7, alpha = 0.6) +
+    geom_line(aes(y = fitted_prob, color = "Model fitted probability"),
+              linewidth = 1.0, na.rm = TRUE) +
+    facet_wrap(~region, ncol = ncols) +
+    scale_color_manual(
+      values = c("Actual adoption (0/1)" = "grey55",
+                 "Model fitted probability" = col_sector),
+      name = NULL
+    ) +
+    scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0(sector_name, " — ", group_label, " Regions: In-Sample Fit"),
+      subtitle = "Grey step = actual adoption (0/1); solid = model fitted probability",
+      x = "Year", y = "Probability / Adoption"
+    ) +
+    theme_report() +
+    theme(legend.position = "bottom")
+}
+
+# --- Density plot of predicted probabilities by actual outcome ---
+make_density_plot <- function(df, sector_name) {
+  df_clean <- df %>%
+    filter(!is.na(fitted_prob)) %>%
+    mutate(outcome = factor(
+      ifelse(adoption_raw == 1, "Adopted", "Not Adopted"),
+      levels = c("Adopted", "Not Adopted")
+    ))
+
+  ggplot(df_clean, aes(x = fitted_prob, fill = outcome, color = outcome)) +
+    geom_density(alpha = 0.4, linewidth = 0.8) +
+    scale_fill_manual(values  = c("Adopted" = "#E74C3C", "Not Adopted" = "#3498DB"),
+                      name = "Actual Outcome") +
+    scale_color_manual(values = c("Adopted" = "#E74C3C", "Not Adopted" = "#3498DB"),
+                       name = "Actual Outcome") +
+    scale_x_continuous(labels = scales::percent, limits = c(0, 1)) +
+    labs(
+      title    = paste0("Model Fit: Adoption Probability (", sector_name, ")"),
+      subtitle = "Distribution of predicted probabilities for actual outcomes",
+      x        = "Predicted Probability of Adopting a Carbon Price",
+      y        = "Density",
+      caption  = paste0(
+        "Figure: Fit of the Logit (adoption) model component.\n",
+        "Shows predicted probability distributions for actual adoption outcomes.\n",
+        "Colors indicate the observed outcome (adopted vs not adopted)."
+      )
+    ) +
+    theme_report() +
+    theme(legend.position = "right",
+          plot.caption = element_text(hjust = 0, size = 8, color = "grey40"))
+}
+
+# --- Adoption timeline (Gantt chart) ---
+make_timeline_plot <- function(df, sector_name, threshold) {
+  col_sector <- if (sector_name == "Bulk") col_bulk else col_diffuse
+
+  adopted_regs <- df %>%
+    group_by(region) %>%
+    filter(any(adoption_raw == 1, na.rm = TRUE)) %>%
+    ungroup()
+
+  actual <- adopted_regs %>%
+    filter(adoption_raw == 1) %>%
+    group_by(region) %>%
+    summarise(start_year = min(year), end_year = max(year), .groups = "drop")
+
+  predicted <- adopted_regs %>%
+    filter(!is.na(fitted_prob), fitted_prob >= threshold) %>%
+    group_by(region) %>%
+    summarise(pred_year = min(year), .groups = "drop")
+
+  timeline <- actual %>%
+    left_join(predicted, by = "region") %>%
+    arrange(start_year, region)
+
+  timeline$region <- factor(timeline$region, levels = rev(timeline$region))
+
+  ggplot(timeline, aes(y = region)) +
+    geom_segment(aes(x = start_year, xend = end_year, yend = region,
+                     color = "Real Adoption"),
+                 linewidth = 5, alpha = 0.45, lineend = "round") +
+    geom_point(aes(x = pred_year, color = "Predicted Adoption"),
+               size = 3, na.rm = TRUE) +
+    scale_color_manual(
+      values = c("Real Adoption" = "grey55", "Predicted Adoption" = col_sector),
+      name = NULL
+    ) +
+    labs(
+      title    = paste0("Carbon Price Adoption: Real vs Predicted (",
+                        sector_name, ", threshold = ", threshold, ")"),
+      subtitle = "Grey bar = actual adoption period; dot = first year model predicts adoption",
+      x = "Year", y = NULL,
+      caption  = paste0(
+        "Note: Predicted adoption based on probability > ", threshold, ".\n",
+        "Logit model only predicts adoption probability, not price levels."
+      )
+    ) +
+    theme_report() +
+    theme(legend.position = "bottom",
+          plot.caption = element_text(hjust = 0, size = 8, color = "grey40"))
+}
+```
+
+## Adopted Regions
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r hist-traj-bulk-adopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_bulk, "Bulk", adopted_group = TRUE)
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_fit_bulk_adopted.png"), p, width=14, height=10, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Each panel is one region historically observed to adopt a carbon price. The grey step function is the actual 0/1 adoption indicator; the solid coloured line is the model's fitted adoption probability. Good fit means the probability rises and stays high during the observed adoption period. Where the line is high before the step, the model anticipated adoption early; where the line stays low despite observed adoption, the model under-predicts for that region.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r hist-traj-diffuse-adopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_diffuse, "Diffuse", adopted_group = TRUE)
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_fit_diffuse_adopted.png"), p, width=14, height=10, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Same interpretation as Bulk — adopted regions for the Diffuse (transport/buildings) sector. Diffuse-sector adoption is typically rarer and more politically contested, so the model's discrimination may differ from the Bulk sector.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+## Non-Adopted Regions
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r hist-traj-bulk-nonadopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_bulk, "Bulk", adopted_group = FALSE)
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_fit_bulk_nonadopted.png"), p, width=14, height=10, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Regions that have never adopted a Bulk carbon price. The model's fitted probability should remain low throughout. Regions where the probability drifts high despite no observed adoption are "near misses" — the model thinks conditions are favourable even though adoption has not yet occurred. These are policy-relevant signals of regions that may be close to the adoption threshold.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r hist-traj-diffuse-nonadopted, echo=FALSE, fig.width=14, fig.height=10}
+p <- make_traj_plot(hist_fit_diffuse, "Diffuse", adopted_group = FALSE)
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_fit_diffuse_nonadopted.png"), p, width=14, height=10, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Non-adopted regions for the Diffuse sector. The probability should stay low. High-probability non-adopters are regions where diffuse-sector carbon pricing conditions are structurally favourable but political barriers have so far prevented adoption.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+## Probability Distribution
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r hist-density-bulk, echo=FALSE, fig.width=10, fig.height=6}
+p <- make_density_plot(hist_fit_bulk, "Bulk")
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_density_bulk.png"), p, width=10, height=6, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Density distributions of the model's fitted adoption probabilities, separated by whether the region actually adopted (red) or not (blue). Good model discrimination means the two distributions are well-separated: the "Adopted" distribution is skewed toward high probabilities and "Not Adopted" toward low. Overlap between the two curves indicates regions the model finds ambiguous.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r hist-density-diffuse, echo=FALSE, fig.width=10, fig.height=6}
+p <- make_density_plot(hist_fit_diffuse, "Diffuse")
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_density_diffuse.png"), p, width=10, height=6, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Same interpretation as Bulk — separation between adopted (red) and non-adopted (blue) probability distributions indicates model discriminatory power for the Diffuse sector.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+## Adoption Timeline
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r hist-timeline-bulk, echo=FALSE, fig.width=11, fig.height=9}
+p <- make_timeline_plot(hist_fit_bulk, "Bulk", adoption_threshold_bulk)
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_timeline_bulk.png"), p, width=11, height=9, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** The grey bar spans each region's historical adoption period (first to last year with positive ECP_Bulk). The coloured dot is the first year the model's fitted probability exceeded the adoption threshold. A dot to the LEFT of the bar start means the model predicted adoption before it actually happened (early warning). A dot to the RIGHT means the model was late — the region adopted before the model's conditions were met. Regions without a dot never exceeded the threshold in sample.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r hist-timeline-diffuse, echo=FALSE, fig.width=11, fig.height=9}
+p <- make_timeline_plot(hist_fit_diffuse, "Diffuse", adoption_threshold_diffuse)
+if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "hist_timeline_diffuse.png"), p, width=11, height=9, dpi=300) }
+```
+<div class="chart-description">
+**How to read this chart:** Same timeline interpretation for the Diffuse sector. The dot–bar alignment reveals whether the model correctly anticipates the timing of Diffuse sector adoption for each region.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+---
+
+# Model Interpretation {.tabset}
+
+## Average Marginal Effects
+
+Average Marginal Effects (AMEs) translate log-odds coefficients into the probability scale.
+The AME for predictor k is the average, across all observations, of the instantaneous slope
+of Pr(Adoption) with respect to x_k:
+**AME_k = mean_i[ π_i(1−π_i) ] × β_k**.
+Standard errors are derived via the delta method using the same robust clustered variance-covariance
+matrix as the main coefficient table. An AME of 0.05 means that a one-unit increase in the
+predictor raises adoption probability by ~5 percentage points on average across the sample.
+
+```{r ame-table, echo=FALSE, results='asis'}
+format_ame_table <- function(fit_obj, sector_label) {
+  ame_df <- fit_obj$ame
+  if (is.null(ame_df) || nrow(ame_df) == 0) {
+    cat(paste0("> AME not available for ", sector_label, " sector.\n"))
+    return(invisible(NULL))
+  }
+  ame_df <- ame_df[ame_df$term != "(Intercept)", ]
+  ame_df$signif <- ifelse(!is.na(ame_df$p) & ame_df$p < 0.001, "***",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.01,  "**",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.05,  "*",
+                   ifelse(!is.na(ame_df$p) & ame_df$p < 0.1,   ".", ""))))
+  ame_df$ci95 <- sprintf("[%.4f, %.4f]", ame_df$lower, ame_df$upper)
+  out <- ame_df[, c("term_group", "term", "ame", "se", "z", "p", "signif", "ci95")]
+  out$term <- vapply(out$term, clean_term_plain, character(1))
+  colnames(out) <- c("Group", "Term", "AME", "SE", "z", "p-value", "", "95% CI")
+  out <- out[order(out$Group, out$Term), ]
+
+  kable(out, format = "html", digits = 4,
+        caption = paste(sector_label, "Sector — Average Marginal Effects on Pr(Adoption)")) %>%
+    kable_styling(
+      bootstrap_options = c("striped", "hover", "condensed", "bordered"),
+      full_width = TRUE, font_size = 12
+    ) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(3, color = ifelse(!is.na(out$AME) & out$AME > 0, col_good,
+                              ifelse(!is.na(out$AME) & out$AME < 0, col_bad, "black")))
+}
+
+cat('<div class="bulk-only">')
+format_ame_table(fit_bulk,    "Bulk")
+cat('</div>')
+cat('<div class="diffuse-only">')
+format_ame_table(fit_diffuse, "Diffuse")
+cat('</div>')
+```
+
+<div class="chart-description">
+**How to read this table:** The Average Marginal Effect (AME) for each predictor is the average slope of Pr(Adoption) with respect to that variable across all observations. An AME of 0.05 means that a 1-unit increase in the predictor is associated with a +5 percentage-point increase in adoption probability, on average across all observed region-years. Green = positive effect, red = negative effect. Significance uses the same robust clustered standard errors as the coefficient table.
+</div>
+
+## Predicted Probability Plots
+
+Each panel shows how Pr(Adoption) changes as a single theory-group predictor sweeps from
+its observed minimum to its maximum **holding all other predictors at their sample means**.
+This answers: *"How does the model's predicted adoption probability respond to the full
+range of [variable], keeping everything else average?"* The shaded ribbon is a delta-method
+95% confidence interval. The dashed horizontal line marks the adoption threshold.
+
+```{r margins-plots, echo=FALSE, fig.height=4, fig.width=12, results='asis'}
+make_margins_panel <- function(fit_obj, sector_label, sector_col) {
+  pp <- fit_obj$predictedProbs
+  if (is.null(pp) || length(pp) == 0) {
+    cat(paste0("> Predicted probability profiles not available for ", sector_label, ".\n"))
+    return(invisible(NULL))
+  }
+
+  col_grp <- c(
+    "Actor Power"  = "#e74c3c",
+    "Inst. Quality" = "#2ecc71",
+    "Interaction"  = "#f1c40f"
+  )
+
+  plots <- lapply(names(pp), function(var) {
+    df  <- pp[[var]]
+    grp <- pfm::classifyTermGroups(var,
+             actorPowerDrivers = model_actorPowerDrivers, actorPowerIndex = model_actorPowerIndex,
+             instQualityDrivers = model_instQualityDrivers,
+             controlDrivers = model_controlDrivers)
+    col_line <- if (!is.na(col_grp[grp])) col_grp[[grp]] else sector_col
+    lbl <- clean_term_plain(var)
+
+    ggplot(df, aes(x = x, y = prob)) +
+      geom_ribbon(aes(ymin = lower, ymax = upper), fill = col_line, alpha = 0.15) +
+      geom_line(color = col_line, linewidth = 1.3) +
+      geom_hline(yintercept = adoption_threshold, linetype = "dashed",
+                 color = "grey50", linewidth = 0.7) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      labs(title = lbl, subtitle = sector_label, x = lbl, y = "Pr(Adoption)") +
+      theme_minimal(base_size = 13) +
+      theme(plot.title = element_text(face = "bold", size = 12),
+            plot.subtitle = element_text(color = sector_col, size = 10))
+  })
+
+  n     <- length(plots)
+  ncols <- min(n, 4)
+  print(
+    patchwork::wrap_plots(plots, ncol = ncols) +
+      patchwork::plot_annotation(
+        title    = paste0(sector_label, " Sector — Predicted Probability Profiles"),
+        subtitle = "Sweep from observed min to max; ribbon = delta-method 95% CI; dashed = adoption threshold"
+      )
+  )
+}
+
+library(patchwork)
+cat('<div class="bulk-only">')
+make_margins_panel(fit_bulk,    "Bulk",    col_bulk)
+cat('</div>')
+cat('<div class="diffuse-only">')
+make_margins_panel(fit_diffuse, "Diffuse", col_diffuse)
+cat('</div>')
+```
+
+<div class="chart-description">
+**How to read these charts:** Each panel sweeps one theory predictor from its observed minimum to maximum while holding all others at their sample means. The solid line is the predicted Pr(Adoption); the shaded ribbon is the delta-method 95% CI. The dashed horizontal line marks the adoption threshold. A steep, monotonic curve with a narrow ribbon indicates the predictor strongly and precisely drives adoption. A flat curve indicates the predictor has little effect (or the effect is highly uncertain). Where the curve crosses the dashed threshold line shows the level of the predictor needed for the model to predict adoption on average.
+</div>
+
+## Partial Regression Plots
+
+Each panel shows the component-plus-residual plot for a single theory-group predictor. In logistic regression, this represents the predictor's marginal contribution to the estimated log-odds of adoption ($\eta = \log(p / (1-p))$), after removing the linear contributions of all other variables. The slope of the red line is equal to the estimated model coefficient.
+
+```{r partial-plots-adoption, echo=FALSE, fig.height=4, fig.width=12, results='asis'}
+make_partial_regression_plots_adoption <- function(fit, sector_name, instQualityDrivers, actorPowerDrivers, actorPowerIndex) {
+  if (is.null(fit)) return(NULL)
+  m     <- fit$model
+  train <- m$model
+  ct    <- fit$coeftest
+  if (is.null(ct) || is.null(train)) return(NULL)
+  beta  <- coef(m)
+  
+  # logistf stores fitted probabilities in m$predict; GLM uses m$fitted.values
+  y     <- m$y
+  p     <- if (inherits(m, "logistf")) m$predict else m$fitted.values
+  if (is.null(y) || is.null(p) || length(y) == 0 || length(p) == 0) return(NULL)
+  
+  # Compute working residuals: (y - p) / (p * (1 - p))
+  # Capping the denominator to avoid division by zero or extreme outliers
+  denom <- p * (1 - p)
+  denom[denom < 0.01] <- 0.01
+  resid <- (y - p) / denom
+  
+  col_sec <- if (sector_name == "Bulk") col_bulk else col_diffuse
+
+  # Theory predictors: Actor Power Index + IQ (continuous, non-interaction, non-FE)
+  theory_vars <- make.names(c(actorPowerIndex, instQualityDrivers))
+  avail <- intersect(theory_vars, colnames(train))
+  if (length(avail) == 0) return(NULL)
+
+  plots <- lapply(avail, function(v) {
+    if (!v %in% names(beta)) return(NULL)
+    x_vals  <- train[[v]]
+    y_vals  <- beta[v] * x_vals + resid    # component + residual
+    df_cr   <- data.frame(x = x_vals, y = y_vals, stringsAsFactors = FALSE)
+    
+    # Fitted line: just the component (beta * x)
+    x_range <- seq(min(x_vals, na.rm = TRUE), max(x_vals, na.rm = TRUE), length.out = 100)
+    df_line  <- data.frame(x = x_range, y = beta[v] * x_range)
+    
+    # Clean term name for label
+    lbl <- clean_term_plain(v)
+    
+    # Crop the y axis to keep 95% of data to hide extreme outliers
+    y_quantiles <- quantile(y_vals, probs = c(0.025, 0.975), na.rm = TRUE)
+    y_min <- min(y_quantiles[1], min(df_line$y)) - 1
+    y_max <- max(y_quantiles[2], max(df_line$y)) + 1
+    
+    ggplot(df_cr, aes(x = x, y = y)) +
+      geom_point(color = col_sec, alpha = 0.4, size = 1.5) +
+      geom_line(data = df_line, aes(x = x, y = y), color = col_bad, linewidth = 1) +
+      coord_cartesian(ylim = c(y_min, y_max)) +
+      labs(x = lbl, y = "Component + Residual (Log-Odds)") +
+      theme_report() +
+      theme(axis.title = element_text(size = 9))
+  })
+  
+  plots <- Filter(Negate(is.null), plots)
+  if (length(plots) == 0) return(NULL)
+  
+  wrap_plots(plots, ncol = min(3, length(plots))) +
+    patchwork::plot_annotation(
+      title    = sprintf("%s Sector — Partial Regression Plots", sector_name),
+      subtitle = "Component + working residual on log-odds scale for theory predictors. Slope = model coefficient."
+    )
+}
+
+cat('<div class="bulk-only">')
+p_bulk <- make_partial_regression_plots_adoption(
+  fit_bulk, "Bulk",
+  cfg$Bulk$instQuality, cfg$Bulk$actorPower, cfg$Bulk$actorIndex
+)
+if (!is.null(p_bulk)) {
+  print(p_bulk)
+  ggsave(file.path(plotOutputDir, "partial_bulk_adoption.png"), p_bulk, width=12, height=4, dpi=300)
+}
+cat('</div>')
+
+cat('<div class="diffuse-only">')
+p_diffuse <- make_partial_regression_plots_adoption(
+  fit_diffuse, "Diffuse",
+  cfg$Diffuse$instQuality, cfg$Diffuse$actorPower, cfg$Diffuse$actorIndex
+)
+if (!is.null(p_diffuse)) {
+  print(p_diffuse)
+  ggsave(file.path(plotOutputDir, "partial_diffuse_adoption.png"), p_diffuse, width=12, height=4, dpi=300)
+}
+cat('</div>')
+```
+
+<div class="chart-description">
+**How to read these charts:** The partial regression plot displays the relationship between the log-odds of adoption and a single predictor, after adjusting for the linear effects of all other variables. The red line represents the estimated model slope ($\beta_j$); its slope equals the coefficient. The points are the observed responses adjusted for other covariates (component plus capped working residuals). A clear upward or downward alignment of points along the line shows that the predictor has a strong linear effect on the log-odds of adoption. Capping is applied to the residuals to prevent extreme misclassifications from distorting the plot scale.
+</div>
+
+---
+
+# Future Projections {.tabset}
+
+```{r proj-check, echo=FALSE, results='asis'}
+if (!has_scenario) {
+  cat("> [!WARNING]\n> **Scenario GDX file not provided.** All projection sections below are disabled.\n> Re-render with `gdxPath` pointing to a valid `fulldata.gdx` to enable projections.\n\n")
+}
+```
+
+## Probability Trajectories
+
+```{r prob-trajectory-helper, include=FALSE}
+make_trajectory_plot <- function(proj_df, sector_name, key_regs, threshold, full_facet = FALSE) {
+  if (is.null(proj_df) || nrow(proj_df) == 0) return(NULL)
+
+  col_sector <- if (sector_name == "Bulk") col_bulk else col_diffuse
+  all_regs   <- unique(proj_df$region)
+  highlight  <- intersect(key_regs, all_regs)
+
+  proj_df$grp <- ifelse(proj_df$region %in% highlight,
+                        as.character(proj_df$region), "Other")
+  proj_df$grp <- factor(proj_df$grp, levels = c(highlight, "Other"))
+
+  my_colors <- setNames(
+    c(scales::hue_pal()(length(highlight)), "grey80"),
+    c(highlight, "Other")
+  )
+
+  if (full_facet) {
+    ggplot(proj_df, aes(x = year, y = prob, group = region)) +
+      geom_hline(yintercept = threshold, linetype = "dashed", color = "grey50", linewidth = 0.5) +
+      geom_line(color = col_sector, linewidth = 0.7, alpha = 0.8) +
+      facet_wrap(~region, ncol = 9) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      labs(
+        title    = sprintf("%s Adoption — All Regions Probability Trajectories", sector_name),
+        subtitle = sprintf("Dashed line = threshold %.2f", threshold),
+        x = "Year", y = "Pr(Adoption)"
+      ) +
+      theme_report() +
+      theme(axis.text = element_text(size = 8), strip.text = element_text(size = 8))
+  } else {
+    ggplot(proj_df, aes(x = year, y = prob, group = region, color = grp,
+        alpha = I(ifelse(grp == "Other", 0.35, 1)),
+        linewidth = I(ifelse(grp == "Other", 0.5, 1.2)))) +
+      geom_hline(yintercept = threshold, linetype = "dashed", color = "grey50") +
+      geom_line() +
+      scale_color_manual(values = my_colors) +
+      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+      labs(
+        title    = sprintf("%s Adoption — Projected Probability (Key Regions)", sector_name),
+        subtitle = sprintf("Dashed line = adoption threshold %.2f | Grey = all other regions", threshold),
+        x = "Year", y = "Pr(Adoption)", color = "Region"
+      ) +
+      theme_report() +
+      theme(legend.position = "right")
+  }
+}
+```
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r traj-bulk-key, echo=FALSE, fig.width=12, fig.height=6}
+if (has_scenario && !is.null(proj_bulk)) {
+  p <- make_trajectory_plot(proj_bulk, "Bulk", key_regions, adoption_threshold_bulk, full_facet = FALSE)
+  if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "prob_trajectory_bulk.png"), p, width=12, height=6, dpi=300) }
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this chart:** Each line is one region's projected Pr(Adoption) trajectory under the scenario. Key regions are highlighted in distinct colours; all others are grey. The dashed horizontal line marks the 90%-sensitivity adoption threshold (`r adoption_threshold_bulk` for Bulk) — regions whose probability crosses this line are projected to adopt. A steep upward trajectory means fast-approaching adoption; a flat line near zero means adoption is not projected in the scenario window.
+</div>
+```{r traj-bulk-full, echo=FALSE, fig.width=16, fig.height=20, class.output="fold-hide"}
+if (has_scenario && !is.null(proj_bulk)) {
+  p_full <- make_trajectory_plot(proj_bulk, "Bulk", key_regions, adoption_threshold_bulk, full_facet = TRUE)
+  if (!is.null(p_full)) print(p_full)
+}
+```
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r traj-diffuse-key, echo=FALSE, fig.width=12, fig.height=6}
+if (has_scenario && !is.null(proj_diffuse)) {
+  p <- make_trajectory_plot(proj_diffuse, "Diffuse", key_regions, adoption_threshold_diffuse, full_facet = FALSE)
+  if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "prob_trajectory_diffuse.png"), p, width=12, height=6, dpi=300) }
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this chart:** Same interpretation as Bulk — projected Pr(Diffuse Adoption) for all regions. The dashed horizontal line marks the 90%-sensitivity threshold (`r adoption_threshold_diffuse` for Diffuse). Diffuse-sector adoption is typically slower and more heterogeneous across regions due to different political economy dynamics for transport and building sectors.
+</div>
+```{r traj-diffuse-full, echo=FALSE, fig.width=16, fig.height=20, class.output="fold-hide"}
+if (has_scenario && !is.null(proj_diffuse)) {
+  p_full <- make_trajectory_plot(proj_diffuse, "Diffuse", key_regions, adoption_threshold_diffuse, full_facet = TRUE)
+  if (!is.null(p_full)) print(p_full)
+}
+```
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+## Adoption Timeline
+
+```{r timeline-helper, include=FALSE}
+# Rogers (2003) Diffusion of Innovations or custom 5-group timeline
+# Breakpoints are recomputed from the actual distribution of adoption years
+# for each scenario run — no hardcoded calendar dates.
+
+.class_type <- if (!is.null(params$timelineClassification)) params$timelineClassification else "five_groups"
+
+.current_levels <- c("Innovators", "Early Adopters", "Early Majority",
+                    "Late Majority", "Laggards", "Non-Adopters")
+.current_colors <- c(
+  "Innovators"     = "#1a9641",
+  "Early Adopters" = "#74c476",
+  "Early Majority" = "#fed976",
+  "Late Majority"  = "#fd8d3c",
+  "Laggards"       = "#d73027",
+  "Non-Adopters"   = "#969696"
+)
+
+compute_five_groups <- function(finite_years) {
+  tbl <- table(finite_years)
+  u_years <- as.numeric(names(tbl))
+  u_counts <- as.numeric(tbl)
+  m <- length(u_years)
+  N <- sum(u_counts)
+  
+  if (m < 5) {
+    boundaries <- u_years[-m]
+    labels <- character(m)
+    for (i in 1:m) {
+      if (i == 1) {
+        if (m == 1) {
+          labels[i] <- paste0("Year ", u_years[i])
+        } else {
+          labels[i] <- paste0("≤ ", u_years[1])
+        }
+      } else if (i == m) {
+        labels[i] <- paste0("> ", u_years[m-1])
+      } else {
+        labels[i] <- paste0(u_years[i-1] + 1, "–", u_years[i])
+      }
+    }
+    return(list(
+      boundaries = boundaries,
+      labels = labels,
+      levels = c("Innovators", "Early Adopters", "Early Majority", "Late Majority", "Laggards")[1:m],
+      num_groups = m
+    ))
+  }
+  
+  cum_counts <- cumsum(u_counts)
+  best_cost <- Inf
+  best_indices <- NULL
+  
+  for (i1 in 1:(m-4)) {
+    s1 <- cum_counts[i1]
+    for (i2 in (i1+1):(m-3)) {
+      s2 <- cum_counts[i2] - cum_counts[i1]
+      for (i3 in (i2+1):(m-2)) {
+        s3 <- cum_counts[i3] - cum_counts[i2]
+        for (i4 in (i3+1):(m-1)) {
+          s4 <- cum_counts[i4] - cum_counts[i3]
+          s5 <- N - cum_counts[i4]
+          
+          cost <- (s1 - N/5)^2 + (s2 - N/5)^2 + (s3 - N/5)^2 + (s4 - N/5)^2 + (s5 - N/5)^2
+          if (cost < best_cost) {
+            best_cost <- cost
+            best_indices <- c(i1, i2, i3, i4)
+          }
+        }
+      }
+    }
+  }
+  
+  boundaries <- u_years[best_indices]
+  b_int <- as.integer(round(boundaries))
+  
+  labels <- character(5)
+  labels[1] <- paste0("≤ ", b_int[1])
+  for (r in 2:4) {
+    start_y <- b_int[r-1] + 1
+    end_y <- b_int[r]
+    if (start_y == end_y) {
+      labels[r] <- as.character(end_y)
+    } else {
+      labels[r] <- paste0(start_y, "–", end_y)
+    }
+  }
+  labels[5] <- paste0("≥ ", b_int[4] + 1)
+  
+  return(list(
+    boundaries = boundaries,
+    labels = labels,
+    levels = c("Innovators", "Early Adopters", "Early Majority", "Late Majority", "Laggards"),
+    num_groups = 5
+  ))
+}
+
+compute_timeline <- function(proj_df, threshold) {
+  if (is.null(proj_df) || nrow(proj_df) == 0) return(NULL)
+
+  tl <- proj_df %>%
+    group_by(region) %>%
+    summarise(
+      AdoptionYear = ifelse(any(prob >= threshold, na.rm = TRUE),
+                            min(year[prob >= threshold], na.rm = TRUE), Inf),
+      .groups = "drop"
+    )
+
+  finite_years <- tl$AdoptionYear[is.finite(tl$AdoptionYear)]
+  fmt_yr       <- function(y) as.integer(round(y))
+
+  # Require at least 2 adopters to compute meaningful breakpoints
+  if (length(finite_years) < 2) {
+    return(tl %>% mutate(
+      Category  = ifelse(is.finite(AdoptionYear), .current_levels[1], "Non-Adopters"),
+      YearRange = ifelse(is.finite(AdoptionYear),
+                         as.character(fmt_yr(AdoptionYear)), "Never"),
+      RegYear   = ifelse(is.finite(AdoptionYear),
+                         paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+    ))
+  }
+
+  if (.class_type == "five_groups") {
+    res_five <- compute_five_groups(finite_years)
+    boundaries <- res_five$boundaries
+    labels <- res_five$labels
+    levels_five <- res_five$levels
+    
+    idx_vals <- findInterval(tl$AdoptionYear, boundaries, left.open = TRUE) + 1
+    
+    tl <- tl %>% mutate(
+      Category  = ifelse(!is.finite(AdoptionYear), "Non-Adopters", levels_five[idx_vals]),
+      YearRange = ifelse(!is.finite(AdoptionYear), "Never", labels[idx_vals]),
+      RegYear   = ifelse(is.finite(AdoptionYear),
+                         paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+    )
+    return(tl)
+  }
+
+  if (.class_type == "rogers_quantile") {
+    n_adopters    <- length(finite_years)
+    p1 <- 0.025; p2 <- 0.16; p3 <- 0.50; p4 <- 0.84
+
+    adopter_rows    <- which(is.finite(tl$AdoptionYear))
+    sorted_idx      <- order(finite_years)
+    sorted_years    <- finite_years[sorted_idx]
+    rank_pcts       <- (seq_len(n_adopters) - 1) / n_adopters
+
+    tl$rank_pct <- NA_real_
+    tl$rank_pct[adopter_rows[sorted_idx]] <- rank_pcts
+
+    b1 <- approx(rank_pcts, sorted_years, xout = p1, rule = 2)$y
+    b2 <- approx(rank_pcts, sorted_years, xout = p2, rule = 2)$y
+    b3 <- approx(rank_pcts, sorted_years, xout = p3, rule = 2)$y
+    b4 <- approx(rank_pcts, sorted_years, xout = p4, rule = 2)$y
+
+    result <- tl %>% mutate(
+      Category = case_when(
+        !is.finite(AdoptionYear) ~ "Non-Adopters",
+        rank_pct < p1            ~ "Innovators",
+        rank_pct < p2            ~ "Early Adopters",
+        rank_pct < p3            ~ "Early Majority",
+        rank_pct < p4            ~ "Late Majority",
+        is.finite(AdoptionYear)  ~ "Laggards",
+        TRUE                     ~ "Non-Adopters"
+      ),
+      YearRange = case_when(
+        Category == "Innovators"     ~ paste0("< ",      fmt_yr(b1)),
+        Category == "Early Adopters" ~ paste0(fmt_yr(b1), "–", fmt_yr(b2)),
+        Category == "Early Majority" ~ paste0(fmt_yr(b2), "–", fmt_yr(b3)),
+        Category == "Late Majority"  ~ paste0(fmt_yr(b3), "–", fmt_yr(b4)),
+        Category == "Laggards"       ~ paste0("≥ ",  fmt_yr(b4)),
+        TRUE                         ~ "Never"
+      ),
+      RegYear = ifelse(is.finite(AdoptionYear),
+                       paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+    )
+    return(result %>% select(-rank_pct))
+  }
+
+  # rogers_sigma
+  mu    <- mean(finite_years)
+  sigma <- sd(finite_years)
+  if (sigma < 1) sigma <- 1
+
+  b1 <- mu - 2 * sigma
+  b2 <- mu -     sigma
+  b3 <- mu
+  b4 <- mu +     sigma
+
+  tl %>% mutate(
+    Category = case_when(
+      !is.finite(AdoptionYear) ~ "Non-Adopters",
+      AdoptionYear  < b1       ~ "Innovators",
+      AdoptionYear  < b2       ~ "Early Adopters",
+      AdoptionYear  < b3       ~ "Early Majority",
+      AdoptionYear  < b4       ~ "Late Majority",
+      TRUE                     ~ "Laggards"
+    ),
+    YearRange = case_when(
+      Category == "Innovators"     ~ paste0("< ",      fmt_yr(b1)),
+      Category == "Early Adopters" ~ paste0(fmt_yr(b1), "–", fmt_yr(b2)),
+      Category == "Early Majority" ~ paste0(fmt_yr(b2), "–", fmt_yr(b3)),
+      Category == "Late Majority"  ~ paste0(fmt_yr(b3), "–", fmt_yr(b4)),
+      Category == "Laggards"       ~ paste0("≥ ",  fmt_yr(b4)),
+      TRUE                         ~ "Never"
+    ),
+    RegYear = ifelse(is.finite(AdoptionYear),
+                     paste0(region, " (", fmt_yr(AdoptionYear), ")"), region)
+  )
+}
+
+render_timeline_table <- function(tl_df, sector_name) {
+  if (is.null(tl_df)) {
+    cat("> Scenario data not available.")
+    return(invisible(NULL))
+  }
+
+  final_table <- tl_df %>%
+    mutate(Category = factor(Category, levels = .current_levels)) %>%
+    group_by(Category, YearRange) %>%
+    summarise(Regions = paste(RegYear, collapse = ", "), .groups = "drop") %>%
+    arrange(Category) %>%
+    filter(!is.na(Category))
+
+  row_colors <- unname(.current_colors[as.character(final_table$Category)])
+
+  cat(as.character(
+    kable(final_table, format = "html",
+          col.names = c("Category", "Year Range", "Regions")) %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                    full_width = TRUE) %>%
+      column_spec(1, bold = TRUE, color = row_colors)
+  ))
+  cat("\n\n")
+}
+
+make_full_gantt_plot <- function(hist_df, proj_df, sector_name, threshold) {
+  col_sector <- if (sector_name == "Bulk") col_bulk else col_diffuse
+
+  hist_actual <- hist_df %>%
+    filter(adoption_raw == 1) %>%
+    group_by(region) %>%
+    summarise(hist_start = min(year), hist_end = max(year), .groups = "drop")
+
+  proj_adoption <- if (!is.null(proj_df) && nrow(proj_df) > 0) {
+    proj_df %>%
+      group_by(region) %>%
+      summarise(
+        proj_year = ifelse(any(prob >= threshold, na.rm = TRUE),
+                           min(year[prob >= threshold], na.rm = TRUE), NA_real_),
+        .groups = "drop"
+      )
+  } else {
+    data.frame(region = character(0), proj_year = numeric(0))
+  }
+
+  all_regions <- unique(c(as.character(hist_df$region),
+                           if (!is.null(proj_df)) as.character(proj_df$region)))
+  gantt <- data.frame(region = all_regions, stringsAsFactors = FALSE) %>%
+    left_join(hist_actual,    by = "region") %>%
+    left_join(proj_adoption,  by = "region") %>%
+    filter(!is.na(hist_start) | !is.na(proj_year)) %>%
+    mutate(
+      sort_key = case_when(
+        !is.na(hist_start) ~ as.numeric(hist_start),
+        !is.na(proj_year)  ~ as.numeric(proj_year) + 1000,
+        TRUE               ~ Inf
+      )
+    ) %>%
+    arrange(sort_key) %>%
+    mutate(region = factor(region, levels = rev(region)))
+
+  max_hist_year <- max(hist_df$year, na.rm = TRUE)
+
+  p <- ggplot(gantt, aes(y = region)) +
+    geom_segment(
+      data = gantt %>% filter(!is.na(hist_start)),
+      aes(x = hist_start, xend = pmax(hist_end, max_hist_year), yend = region,
+          color = "Historical Adoption"),
+      linewidth = 4, alpha = 0.55, lineend = "round"
+    ) +
+    geom_segment(
+      data = gantt %>% filter(!is.na(proj_year)),
+      aes(x = proj_year, xend = 2150, yend = region,
+          color = "Projected Adoption"),
+      linewidth = 3, alpha = 0.35, lineend = "round"
+    ) +
+    scale_color_manual(
+      values = c("Historical Adoption" = "grey55", "Projected Adoption" = col_sector),
+      name = NULL
+    ) +
+    labs(
+      title    = paste0(sector_name, " Carbon Price Adoption: Historical + Projected"),
+      subtitle = paste0("Grey = observed adoption period; Colour = projected onset (prob ≥ ", threshold, ")"),
+      x = "Year", y = NULL
+    ) +
+    theme_report() +
+    theme(
+      legend.position  = "bottom",
+      axis.text.y      = element_text(size = 7)
+    )
+
+  class_type <- if (!is.null(params$timelineClassification)) params$timelineClassification else "five_groups"
+  if (class_type == "five_groups" && !is.null(proj_df) && nrow(proj_df) > 0) {
+    tl <- compute_timeline(proj_df, threshold)
+    finite_years <- tl$AdoptionYear[is.finite(tl$AdoptionYear)]
+    if (length(finite_years) >= 2) {
+      res_five <- compute_five_groups(finite_years)
+      if (res_five$num_groups == 5) {
+        boundaries <- res_five$boundaries
+        labels <- res_five$labels
+        
+        midpoints <- numeric(5)
+        midpoints[1] <- (min(finite_years) + boundaries[1]) / 2
+        midpoints[2] <- (boundaries[1] + boundaries[2] + 1) / 2
+        midpoints[3] <- (boundaries[2] + boundaries[3] + 1) / 2
+        midpoints[4] <- (boundaries[3] + boundaries[4] + 1) / 2
+        midpoints[5] <- (boundaries[4] + max(finite_years) + 1) / 2
+        
+        p <- p + geom_vline(xintercept = boundaries + 0.5, linetype = "dashed", color = "grey40", linewidth = 0.6)
+        
+        label_df <- data.frame(
+          x = midpoints,
+          y = nrow(gantt) * 0.9,
+          label = c("Innovators", "Early Adopters", "Early Majority", "Late Majority", "Laggards"),
+          stringsAsFactors = FALSE
+        )
+        p <- p + geom_text(data = label_df, aes(x = x, y = y, label = label),
+                           angle = 90, vjust = 0.5, hjust = 0.5, color = "grey35", fontface = "bold", size = 3.2)
+      }
+    }
+  }
+
+  p
+}
+```
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r timeline-bulk, echo=FALSE, results='asis'}
+if (has_scenario && !is.null(proj_bulk)) {
+  tl_bulk <- compute_timeline(proj_bulk, adoption_threshold)
+  render_timeline_table(tl_bulk, "Bulk")
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this table:** Regions are categorised into Rogers' (2003) Diffusion of Innovations framework based on their projected adoption year relative to the distribution of all adopting regions. **Innovators** adopt first; **Laggards** adopt last; **Non-Adopters** never cross the threshold in the scenario window. The year range shows when each category is projected to adopt.
+</div>
+```{r timeline-gantt-bulk, echo=FALSE, fig.width=12, fig.height=16}
+if (has_scenario && !is.null(proj_bulk)) {
+  p <- make_full_gantt_plot(hist_fit_bulk, proj_bulk, "Bulk", adoption_threshold)
+  if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "gantt_full_bulk.png"), p, width=12, height=16, dpi=300) }
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this chart:** Each row is one region. Grey bars show the historical adoption period (years with observed ECP_Bulk &gt; 0). Coloured bars show the projected adoption period from scenario onset. This combined view reveals continuity between historical and projected adoption and highlights regions that are historically new adopters vs long-established pricing systems.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r timeline-diffuse, echo=FALSE, results='asis'}
+if (has_scenario && !is.null(proj_diffuse)) {
+  tl_diffuse <- compute_timeline(proj_diffuse, adoption_threshold)
+  render_timeline_table(tl_diffuse, "Diffuse")
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this table:** Rogers' diffusion categories for Diffuse sector adoption. Compare with the Bulk timeline to see whether the same regions are innovators or laggards in both sectors, or whether sector-specific political economy creates different adoption orderings.
+</div>
+```{r timeline-gantt-diffuse, echo=FALSE, fig.width=12, fig.height=16}
+if (has_scenario && !is.null(proj_diffuse)) {
+  p <- make_full_gantt_plot(hist_fit_diffuse, proj_diffuse, "Diffuse", adoption_threshold)
+  if (!is.null(p)) { print(p); ggsave(file.path(plotOutputDir, "gantt_full_diffuse.png"), p, width=12, height=16, dpi=300) }
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this chart:** Historical + projected Diffuse sector adoption timeline. The chart structure mirrors the Bulk Gantt but reflects the typically narrower set of Diffuse sector adopters.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+## Adoption Year Maps
+
+```{r adoption-map-setup, include=FALSE}
+mapping_54 <- NULL
+world      <- NULL
+
+if (has_scenario) {
+  mapping_54 <- tryCatch(
+    madrat::toolGetMapping("regionmapping_54.csv", type = "regional", where = "mappingfolder"),
+    error = function(e) NULL
+  )
+  if (!is.null(mapping_54)) {
+    suppressPackageStartupMessages(library(sf))
+    world           <- rnaturalearth::ne_countries(scale = "small", returnclass = "sf")
+    world$iso_key   <- as.character(world$adm0_a3)
+  }
+}
+
+render_adoption_year_map <- function(tl_df, sector_name, threshold) {
+  if (is.null(tl_df) || is.null(mapping_54) || is.null(world)) {
+    cat("> Map rendering requires scenario data and the regionmapping_54.csv file.\n")
+    return(invisible(NULL))
+  }
+
+  # Use the canonical Rogers levels/colours defined in the timeline-helper chunk
+  adopt_data <- tl_df %>%
+    mutate(Category = factor(Category, levels = .current_levels))
+
+  map_data_df <- mapping_54 %>%
+    mutate(
+      RegionCode  = as.character(RegionCode),
+      CountryCode = as.character(CountryCode),
+      CountryCode = ifelse(CountryCode == "SSD", "SDS", CountryCode)
+    ) %>%
+    left_join(adopt_data, by = c("RegionCode" = "region"))
+
+  world_data <- world %>% left_join(map_data_df, by = c("iso_key" = "CountryCode"))
+
+  # Only include levels that are actually present — prevents empty legend entries
+  present_levels <- intersect(.current_levels,
+                               as.character(unique(world_data$Category[!is.na(world_data$Category)])))
+
+  p <- ggplot() +
+    geom_sf(data = world_data[world_data$iso_key == "ATA", ],
+            fill = "grey90", color = "white", linewidth = 0.05) +
+    geom_sf(data = world_data[world_data$iso_key != "ATA", ],
+            aes(fill = Category), color = "white", linewidth = 0.05) +
+    scale_fill_manual(
+      values    = .current_colors[present_levels],
+      limits    = present_levels,
+      na.value  = "grey90", na.translate = FALSE
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      panel.grid = element_blank(),
+      axis.text  = element_blank()
+    ) +
+    labs(
+      title    = sprintf("Projected Adoption Timeline — %s (%s)", sector_name, params$modelName),
+      subtitle = sprintf("Threshold: Pr(Adoption) ≥ %.2f", threshold),
+      fill     = "Projected Adoption Timeline"
+    )
+
+  print(p)
+  fname <- sprintf("map_adoption_year_%s", tolower(sector_name))
+  ggsave(file.path(plotOutputDir, paste0(fname, ".png")), p, width = 12, height = 6, dpi = 300)
+  ggsave(file.path(plotOutputDir, paste0(fname, ".svg")), p, width = 12, height = 6)
+}
+```
+
+```{r echo=FALSE, results='asis'}
+cat('<div class="bulk-only">')
+```
+```{r map-adoption-bulk, echo=FALSE, fig.width=12, fig.height=6}
+if (has_scenario && !is.null(proj_bulk)) {
+  tl_bulk <- compute_timeline(proj_bulk, adoption_threshold)
+  render_adoption_year_map(tl_bulk, "Bulk", adoption_threshold)
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this map:** Countries are coloured by their Rogers' adoption category — green shades are early adopters; orange/red are late adopters; grey means no adoption projected in the scenario window. The category boundaries are computed from the actual distribution of projected adoption years, so they adapt to the scenario's adoption pace.
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+```{r echo=FALSE, results='asis'}
+cat('<div class="diffuse-only">')
+```
+```{r map-adoption-diffuse, echo=FALSE, fig.width=12, fig.height=6}
+if (has_scenario && !is.null(proj_diffuse)) {
+  tl_diffuse <- compute_timeline(proj_diffuse, adoption_threshold)
+  render_adoption_year_map(tl_diffuse, "Diffuse", adoption_threshold)
+} else cat("> Scenario data not available.")
+```
+<div class="chart-description">
+**How to read this map:** Adoption year map for the Diffuse sector. Compare with the Bulk map to identify regional patterns — does the same geography lead or lag in both sectors, or do different regions lead Diffuse vs Bulk adoption?
+</div>
+```{r echo=FALSE, results='asis'}
+cat('</div>')
+```
+
+## Probability Snapshot Maps {.tabset}
+
+Maps show the predicted adoption probability per region at each snapshot year, using a continuous colour scale (red = low, green = high). The adoption threshold is overlaid as a reference.
+
+```{r snapshot-map-helper, include=FALSE}
+render_snapshot_map <- function(proj_df, snap_year, sector_name, threshold) {
+  if (is.null(proj_df) || is.null(mapping_54) || is.null(world)) return(NULL)
+
+  available_years <- sort(unique(proj_df$year))
+  used_year <- snap_year
+  if (!snap_year %in% available_years) {
+    used_year <- available_years[which.min(abs(available_years - snap_year))]
+  }
+
+  df_year <- proj_df %>% filter(year == used_year) %>% select(region, prob)
+  if (nrow(df_year) == 0) return(NULL)
+
+  map_data_df <- mapping_54 %>%
+    mutate(
+      RegionCode  = as.character(RegionCode),
+      CountryCode = as.character(CountryCode),
+      CountryCode = ifelse(CountryCode == "SSD", "SDS", CountryCode)
+    ) %>%
+    left_join(df_year, by = c("RegionCode" = "region"))
+
+  world_data <- world %>% left_join(map_data_df, by = c("iso_key" = "CountryCode"))
+
+  title_suffix <- if (used_year != snap_year)
+    sprintf(" (closest year: %d)", used_year) else ""
+
+  p <- ggplot() +
+    geom_sf(data = world_data[world_data$iso_key == "ATA", ],
+            fill = "grey90", color = "white", linewidth = 0.05) +
+    geom_sf(data = world_data[world_data$iso_key != "ATA", ],
+            aes(fill = prob), color = "white", linewidth = 0.05) +
+    scale_fill_gradientn(
+      colors   = c("#e74c3c", "#f39c12", "#f7dc6f", "#2ecc71"),
+      limits   = c(0, 1),
+      labels   = scales::percent,
+      na.value = "grey90",
+      name     = "Pr(Adoption)"
+    ) +
+    geom_sf(
+      data = world_data[!is.na(world_data$prob) & world_data$prob >= threshold &
+                          world_data$iso_key != "ATA", ],
+      fill = NA, color = "#2C3E50", linewidth = 0.4
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      panel.grid = element_blank(),
+      axis.text  = element_blank()
+    ) +
+    labs(
+      title    = sprintf("%s Adoption Probability — %d%s", sector_name, snap_year, title_suffix),
+      subtitle = sprintf("Dark outline = regions at or above threshold %.2f | Model: %s",
+                         threshold, params$modelName)
+    )
+
+  print(p)
+  fname <- sprintf("map_prob_%s_%d", tolower(sector_name), snap_year)
+  ggsave(file.path(plotOutputDir, paste0(fname, ".png")), p, width = 12, height = 6, dpi = 300)
+  ggsave(file.path(plotOutputDir, paste0(fname, ".svg")), p, width = 12, height = 6)
+}
+```
+
+```{r snapshot-maps-bulk, echo=FALSE, results='asis', fig.width=12, fig.height=6}
+cat('<div class="bulk-only">')
+if (has_scenario && !is.null(proj_bulk) && !is.null(mapping_54)) {
+  for (yr in snapshot_years) {
+    cat(sprintf("\n### Bulk %d\n\n", yr))
+    render_snapshot_map(proj_bulk, yr, "Bulk", adoption_threshold)
+    cat("\n\n")
+  }
+} else cat("> Scenario data or region mapping not available.")
+cat('</div>')
+
+cat('<div class="diffuse-only">')
+if (has_scenario && !is.null(proj_diffuse) && !is.null(mapping_54)) {
+  for (yr in snapshot_years) {
+    cat(sprintf("\n### Diffuse %d\n\n", yr))
+    render_snapshot_map(proj_diffuse, yr, "Diffuse", adoption_threshold)
+    cat("\n\n")
+  }
+} else cat("> Scenario data or region mapping not available.")
+cat('</div>')
+```
+
+---
+
+# Comparison {.tabset}
+
+This section compares Bulk and Diffuse adoption model results side-by-side. Use it to assess whether the two sectors respond to the same predictors with similar magnitudes.
+
+## Model Fit Comparison
+
+```{r adp-fit-comparison, echo=FALSE, fig.width=10, fig.height=4}
+comp_df <- data.frame(
+  Sector   = c("Bulk", "Diffuse"),
+  PseudoR2 = c(stats_bulk$pseudoR2, stats_diffuse$pseudoR2),
+  AIC      = c(stats_bulk$aic, stats_diffuse$aic),
+  Quality  = c(
+    ifelse(stats_bulk$pseudoR2   >= 0.4, "Good", ifelse(stats_bulk$pseudoR2   >= 0.2, "Moderate", "Poor")),
+    ifelse(stats_diffuse$pseudoR2 >= 0.4, "Good", ifelse(stats_diffuse$pseudoR2 >= 0.2, "Moderate", "Poor"))
+  )
+)
+p_r2 <- ggplot(comp_df, aes(x = Sector, y = PseudoR2,
+    fill = factor(Quality, levels = c("Poor", "Moderate", "Good")))) +
+  geom_col(width = 0.5) +
+  geom_text(aes(label = sprintf("%.3f", PseudoR2)), vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("Poor" = col_bad, "Moderate" = col_warn, "Good" = col_good), name = "Fit quality") +
+  labs(title = "McFadden Pseudo-R² by Sector", y = "Pseudo-R²", x = NULL) + ylim(0, 1) + theme_report()
+p_aic <- ggplot(comp_df, aes(x = Sector, y = AIC, fill = Sector)) +
+  geom_col(width = 0.5) +
+  geom_text(aes(label = sprintf("%.1f", AIC)), vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c("Bulk" = col_bulk, "Diffuse" = col_diffuse)) +
+  labs(title = "AIC by Sector (lower = better)", y = "AIC", x = NULL) +
+  theme_report() + theme(legend.position = "none")
+library(patchwork)
+p_r2 + p_aic + plot_layout(guides = "collect") & theme(legend.position = "bottom")
+```
+
+<div class="chart-description">
+**How to read:** Pseudo-R² (McFadden) above 0.4 indicates good fit (green); 0.2–0.4 moderate (orange); below 0.2 poor (red). AIC is only comparable within the same sector across different model specifications — lower is better. Both sectors are estimated on different samples (different regions/years have positive prices), so AIC is not directly comparable between Bulk and Diffuse.
+</div>
+
+## AME Comparison
+
+```{r adp-ame-comparison, echo=FALSE, results='asis'}
+make_ame_comparison <- function(fit_b, fit_d) {
+  ame_b <- fit_b$ame; ame_d <- fit_d$ame
+  if (is.null(ame_b) || is.null(ame_d)) return(invisible(NULL))
+  shared <- intersect(ame_b$term, ame_d$term)
+  shared <- shared[shared != "(Intercept)"]
+  if (length(shared) == 0) return(invisible(NULL))
+  df <- data.frame(
+    Term             = vapply(shared, clean_term_plain, character(1)),
+    `Bulk AME`       = round(ame_b$ame[match(shared, ame_b$term)], 4),
+    `Bulk p`         = round(ame_b$p[match(shared, ame_b$term)], 3),
+    `Diffuse AME`    = round(ame_d$ame[match(shared, ame_d$term)], 4),
+    `Diffuse p`      = round(ame_d$p[match(shared, ame_d$term)], 3),
+    check.names = FALSE
+  )
+  kable(df, format = "html", caption = "AME Comparison — Shared Predictors (probability scale)") %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = FALSE)
+}
+make_ame_comparison(fit_bulk, fit_diffuse)
+```
+
+<div class="chart-description">
+**How to read this table:** Each row is a predictor appearing in both models. Bulk and Diffuse AMEs are on the same probability scale (percentage-point change in Pr(Adoption) per 1-unit increase). Large differences between sectors indicate the predictor drives Bulk and Diffuse adoption differently — this may reflect sector-specific political economy dynamics. Divergent significance (significant in one sector but not the other) also warrants attention.
+</div>
+
+---
+
+# Appendix {.tabset}
+
+## Model Formula
+
+```{r model-formula-bulk, echo=FALSE, results='asis'}
+if (!is.null(fit_bulk)) {
+  cat('<div class="bulk-only">\n\n**Bulk Adoption Model Equation:**\n\n')
+  cat(formatModelEquationLatex(
+    coefficients = pfm::coeftestToDataFrame(fit_bulk$coeftest),
+    actorPowerIndex = cfg$Bulk$actorIndex,
+    actorPowerDrivers = cfg$Bulk$actorPower,
+    instQualityDrivers = cfg$Bulk$instQuality,
+    controlDrivers = cfg$Bulk$controls,
+    depVar = "\\text{logit}\\left(\\text{Pr}(\\text{Bulk Adoption})\\right)"
+  ), "\n\n")
+  cat("Significance codes: $^{***}\\ p < 0.01$, $^{**}\\ p < 0.05$, $^{*}\\ p < 0.1$.\n")
+  cat('</div>\n')
+}
+```
+
+```{r model-formula-diffuse, echo=FALSE, results='asis'}
+if (!is.null(fit_diffuse)) {
+  cat('<div class="diffuse-only">\n\n**Diffuse Adoption Model Equation:**\n\n')
+  cat(formatModelEquationLatex(
+    coefficients = pfm::coeftestToDataFrame(fit_diffuse$coeftest),
+    actorPowerIndex = cfg$Diffuse$actorIndex,
+    actorPowerDrivers = cfg$Diffuse$actorPower,
+    instQualityDrivers = cfg$Diffuse$instQuality,
+    controlDrivers = cfg$Diffuse$controls,
+    depVar = "\\text{logit}\\left(\\text{Pr}(\\text{Diffuse Adoption})\\right)"
+  ), "\n\n")
+  cat("Significance codes: $^{***}\\ p < 0.01$, $^{**}\\ p < 0.05$, $^{*}\\ p < 0.1$.\n")
+  cat('</div>\n')
+}
+```
+
+## Adoption Threshold Guide
+
+```{r calc-alternative-thresholds, echo=FALSE}
+calc_thresholds_local <- function(fit_obj) {
+  if (is.null(fit_obj) || is.null(fit_obj$model)) return(list(Sens = 0.5, SD = 0.5, FP = 0.5))
+  m <- fit_obj$model
+  hist_probs <- if (inherits(m, "logistf")) m$predict else m$fitted.values
+  actual_outcomes <- m$y
+  adopters_prob <- hist_probs[actual_outcomes == 1]
+  non_adopters_prob <- hist_probs[actual_outcomes == 0]
+  
+  t_sens <- if (length(adopters_prob) > 0) quantile(adopters_prob, 0.10, na.rm = TRUE) else 0.5
+  t_sd   <- if (length(adopters_prob) > 0) mean(adopters_prob, na.rm = TRUE) - sd(adopters_prob, na.rm = TRUE) else 0.5
+  t_fp   <- if (length(non_adopters_prob) > 0) quantile(non_adopters_prob, 0.75, na.rm = TRUE) else 0.5
+  
+  list(
+    Sens = round(max(0.01, min(0.99, t_sens)), 3),
+    SD   = round(max(0.01, min(0.99, t_sd)), 3),
+    FP   = round(max(0.01, min(0.99, t_fp)), 3)
+  )
+}
+
+thresh_bulk_local <- calc_thresholds_local(fit_bulk)
+thresh_diffuse_local <- calc_thresholds_local(fit_diffuse)
+```
+
+The default adoption threshold (`r adoption_threshold`) classifies a region as having adopted carbon pricing when the model's predicted probability first exceeds that value.
+
+### Standard Guidance
+
+| Threshold | Interpretation |
+|-----------|----------------|
+| **0.5** | Standard decision boundary (logit model default) — balanced false positive / false negative rate |
+| **< 0.5** | More sensitive — catches early movers but accepts more false positives |
+| **> 0.5** | More conservative — higher confidence required before flagging adoption |
+
+### Data-Driven Alternative Thresholds (from Section 10.1 of IAM-PFM Report)
+
+Rather than using an arbitrary threshold like `0.5`, we can calibrate the threshold based on the model's historical predictive performance. Three alternative methods can be used:
+
+1. **Method 1: 90% Historical Sensitivity (Sens)**
+   - **Definition:** Finds the threshold where 90% of actual historical adoptions are correctly caught (10th percentile of predicted probabilities among historical adopters).
+   - **Rationale:** Minimizes False Negatives (failures to predict adoption when it actually occurred), making it highly sensitive to early signals.
+   
+2. **Method 2: Standard Deviation Margin (SD)**
+   - **Definition:** Mean predicted probability among historical adopters minus one standard deviation.
+   - **Rationale:** Includes regions within the normal range of historical early movers, creating a representative threshold for "standard" policy readiness.
+
+3. **Method 3: False Positive Ceiling (FP)**
+   - **Definition:** 75th percentile of predicted probabilities among non-adopters.
+   - **Rationale:** Accepts some false positives to ensure we do not miss the policy adoption signal, serving as an upper ceiling for classification.
+
+#### Calibrated Threshold Values for Current Model
+
+The calculated values for this specific model configuration (**`r params$modelName`**) are:
+
+| Sector | Method 1: 90% Sensitivity (Sens) | Method 2: Standard Deviation Margin (SD) | Method 3: False Positive Ceiling (FP) |
+|--------|----------------------------------|-----------------------------------------|--------------------------------------|
+| **Bulk** | **`r sprintf("%.1f%%", thresh_bulk_local$Sens * 100)`** | **`r sprintf("%.1f%%", thresh_bulk_local$SD * 100)`** | **`r sprintf("%.1f%%", thresh_bulk_local$FP * 100)`** |
+| **Diffuse** | **`r sprintf("%.1f%%", thresh_diffuse_local$Sens * 100)`** | **`r sprintf("%.1f%%", thresh_diffuse_local$SD * 100)`** | **`r sprintf("%.1f%%", thresh_diffuse_local$FP * 100)`** |
+
+*Note: You can re-render this report and update projections by setting the `adoptionThreshold` parameter (e.g. `adoptionThreshold = 0.35` or `0.28`) in your render call.*
+
+## Session Information
+
+```{r session, echo=FALSE}
+tryCatch(
+  print(sessionInfo()),
+  error = function(e) {
+    cat("R Version:", R.version.string, "\n")
+    cat("Platform:", R.version$platform, "\n")
+  }
+)
+```

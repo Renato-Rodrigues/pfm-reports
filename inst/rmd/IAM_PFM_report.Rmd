@@ -1,0 +1,1097 @@
+---
+title: "IAM-PFM: Integrated Assessment Model with Political Feasibility Module"
+subtitle: "Econometric Model Results, Diagnostics and Validation Report"
+author: "Renato Rodrigues"
+date: "`r Sys.Date()`"
+params:
+  modelData:     NULL
+  modelDataFile: "data/modelData.RData"
+  modelDir:      "cache"
+  cachefolder:      ""
+  gdxPath:       ""
+  assetDir:      "output/IAM_PFM_report"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    number_sections: true
+    code_folding: hide
+    fig_width: 9
+    fig_height: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.align = "center")
+
+library(dplyr)
+library(tidyr)
+library(kableExtra)
+library(patchwork)
+library(scales)
+
+# Shared helpers (theme, colours, driver lists)
+library(pfmreports)
+library(pfmreports)
+library(pfmreports)
+
+# Report-specific helpers
+library(pfmreports)
+library(pfmreports)
+
+# Asset output folder (plots, etc.)
+plotOutputDir <- file.path(params$assetDir, "plots")
+if (!dir.exists(plotOutputDir)) dir.create(plotOutputDir, recursive = TRUE)
+
+# Load or compute model data
+modelData <- if (!is.null(params$modelData) && is.list(params$modelData)) {
+  params$modelData
+} else {
+  loadModelData(params)
+}
+
+# Unpack
+panelData         <- modelData$panelData
+cor_df_AP         <- modelData$cor_df_AP
+cor_df_IQ         <- modelData$cor_df_IQ
+cor_df_ctrl       <- modelData$cor_df_ctrl
+cor_df_vdem       <- modelData$cor_df_vdem
+md                <- modelData$md
+md2               <- modelData$md2
+md3               <- modelData$md3
+md4               <- modelData$md4
+md5               <- modelData$md5
+md6               <- modelData$md6
+future_mag        <- modelData$future_mag
+future_df_bulk    <- modelData$future_df_bulk
+future_df_diffuse <- modelData$future_df_diffuse
+
+diag_results <- diagnoseModelResults(
+  workflows = list(md = md, md2 = md2, md3 = md3, md4 = md4, md5 = md5, md6 = md6)
+)
+```
+
+---
+
+# Summary
+
+The **IAM-PFM** (Integrated Assessment Model with Political Feasibility Module) embeds two-stage hurdle models for carbon-pricing into the REMIND integrated assessment model. For each of two electricity-sector archetypes — **Bulk** (large industrial/utility consumers) and **Diffuse** (transport, buildings, small industry) — the hurdle comprises:
+
+* **Stage 1 — Adoption** (`logistf`): penalised logistic regression predicting whether a jurisdiction has adopted carbon pricing (binary outcome).
+* **Stage 2 — Stringency** (gaussian GLM, identity link on log(1+ECP); ADR 0007): conditional on adoption, a GLM predicts log(1+ECP), back-transformed to the Effective Carbon Price (ECP) as `exp(Xβ)−1`.
+
+Four model variants were estimated:
+
+```{r table-variants, echo=FALSE}
+table_data <- data.frame(
+  Variant = c("**md**", "**md2**", "**md3**", "**md4**", "**md5**", "**md6**"),
+  `Actor Power drivers` = c(
+    "Full set (VRE share, Electrification, Coal, Oil/Gas, Fossil in Industry)",
+    "Actor Power Index composite",
+    "Actor Power Index composite",
+    "Actor Power Index composite",
+    "Actor Power Index composite",
+    "Actor Power Index composite"
+  ),
+  `IQ source` = c(
+    "WGI: Government Effectiveness",
+    "WGI: Government Effectiveness",
+    "WGI: Government Effectiveness",
+    "WGI: Government Effectiveness",
+    "V-Dem: Rule of Law + Vertical Accountability",
+    "WGI + V-Dem: Gov. Effectiveness + Rule of Law (VDem)"
+  ),
+  `Region Fixed effects` = c(
+    "clustered regions (EU+, OECD+, other)",
+    "clustered regions (EU+, OECD+, other)",
+    "54-region mapping",
+    "clustered regions (EU+, OECD+, other)",
+    "clustered regions (EU+, OECD+, other)",
+    "clustered regions (EU+, OECD+, other)"
+  ),
+  `Lagged ECP` = c("NO", "NO", "NO", "YES", "NO", "NO"),
+  check.names = FALSE
+)
+
+kable(table_data, escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE) %>%
+  column_spec(1, width = "8%") %>%
+  column_spec(2, width = "32%") %>%
+  column_spec(3, width = "32%") %>%
+  column_spec(4, width = "20%") %>%
+  column_spec(5, width = "8%") %>%
+  row_spec(5:6, background = "#f0fff0")
+```
+
+**Top-line findings:**
+
+```{r exec-summary-bullets, echo=FALSE, results='asis'}
+cat(diag_results$globalFindings)
+```
+
+---
+
+# Model Architecture {.tabset}
+
+## Conceptual Flow
+
+```{r architecture-diagram, echo=FALSE, fig.height=3}
+nodes <- data.frame(
+  x     = c(1, 3, 5, 5),
+  y     = c(2, 2, 3, 1),
+  label = c(
+    "Panel Data\n2000–2022", "Stage 1\nAdoption\n(logistf)",
+    "Stage 2\nStringency\n(gaussian GLM)", "ECP = 0\n(no policy)"
+  ),
+  fill  = c("grey70", col_md, col_bulk, "grey85")
+)
+
+ggplot(nodes, aes(x, y)) +
+  geom_tile(aes(fill = fill), width = 1.4, height = 0.7, colour = "white", linewidth = 1.2) +
+  geom_text(aes(label = label), size = 3.2, fontface = "bold", colour = "white") +
+  scale_fill_identity() +
+  annotate("segment", x = 1.72, xend = 2.28, y = 2, yend = 2,
+    arrow = arrow(length = unit(0.25, "cm")), linewidth = 0.8, colour = "grey40") +
+  annotate("segment", x = 3.72, xend = 4.28, y = 2.3, yend = 2.85,
+    arrow = arrow(length = unit(0.25, "cm")), linewidth = 0.8, colour = col_bulk) +
+  annotate("segment", x = 3.72, xend = 4.28, y = 1.7, yend = 1.15,
+    arrow = arrow(length = unit(0.25, "cm")), linewidth = 0.8, colour = "grey50") +
+  annotate("text", x = 4, y = 2.7, label = "Pr(ECP > 0) = 1", size = 2.8, colour = col_bulk) +
+  annotate("text", x = 4, y = 1.3, label = "Pr(ECP > 0) = 0", size = 2.8, colour = "grey50") +
+  xlim(0, 6.5) + ylim(0.4, 3.7) +
+  labs(title = "IAM-PFM Two-Stage Hurdle Architecture") +
+  theme_void() +
+  theme(plot.title = element_text(face = "bold", hjust = 0.5, size = 13))
+```
+
+## Variable Groups
+
+```{r variable-table, echo=FALSE}
+var_df <- data.frame(
+  Group = c(
+    rep("Actor Power (AP)", 5),
+    rep("IQ — WGI (md1–md4)", 1),
+    rep("IQ — V-Dem (md5)", 2),
+    rep("IQ — Combined (md6)", 2),
+    rep("Controls", 2),
+    rep("Fixed Effects / Trend", 2)
+  ),
+  Variable = c(
+    "VRE Share", "Electrification", "Coal Primary Energy Share",
+    "Oil/Gas Primary Energy Share", "Fossil Share in Industry",
+    "Government Effectiveness (WGI)",
+    "Rule of Law (VDem)", "Vertical Accountability (VDem)",
+    "Government Effectiveness (WGI)", "Rule of Law (VDem)",
+    "GDP per Capita", "Population",
+    "Region FE (EU / OECD+ / other)", "Time Trend"
+  ),
+  Role = c(
+    rep("Proxy for fossil-fuel incumbents' resistance", 5),
+    "State capacity — WGI source",
+    "Rule of law quality — V-Dem source", "Electoral accountability — V-Dem source",
+    "State capacity — WGI", "Rule of law quality — V-Dem",
+    rep("Economic & geographic controls", 2),
+    "Captures unobserved regional heterogeneity", "Secular trend in adoption/stringency"
+  )
+)
+
+kable(var_df, caption = "Model Variable Groups and Roles") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
+  collapse_rows(columns = 1, valign = "top")
+```
+
+## Formal Specification
+
+The model follows a two-stage hurdle specification to capture both the **extensive margin** (policy adoption) and **intensive margin** (policy stringency).
+
+### Stage 1: Adoption (Logit)
+
+Predicts the probability that a jurisdiction $i$ at time $t$ has adopted carbon pricing ($ECP > 0$) using a logit link:
+
+$$\text{logit}(Pr(ECP_{i,t,s} > 0)) = \alpha_{0,s} + \sum_l \alpha_{1,l,s} AP_{i,t-1,s,l} + \sum_k \alpha_{2,k,s} IQ_{i,t-1,s,k} + AP\_Index_{i,t-1,s} \times \sum_k \alpha_{e,k,s} IQ_{i,t-1,s,k} + \sum_j \alpha_{4,j,s} Ctrl_{i,t-1,s,j} + CRFE + TT + \epsilon_{i,t-1,s}$$
+
+### Stage 2: Stringency (Gaussian GLM, identity link on log(1+ECP))
+
+Conditional on adoption, predicts the level of the Effective Carbon Price (ECP) using a log-link:
+
+$$\ln(E[ECP_{i,t,s} | ECP_{i,t,s} > 0]) = \beta_{0,s} + \sum_l \beta_{1,l,s} AP_{i,t-1,s,l} + \sum_k \beta_{2,k,s} IQ_{i,t-1,s,k} + AP\_Index_{i,t-1,s} \times \sum_k \beta_{e,k,s} IQ_{i,t-1,s,k} + \sum_j \beta_{4,j,s} Ctrl_{i,t-1,s,j} + CRFE + TT + \epsilon_{i,t-1,s}$$
+
+**Where:**
+
+* $AP_{i,t-1,s,l}$ denotes **Actor Power** drivers (proxies for fossil-fuel incumbents).
+* $IQ_{i,t-1,s,k}$ denotes **Institutional Quality** drivers (state capacity and governance).
+* $AP\_Index_{i,t-1,s}$ is the composite **Actor Power Index**.
+* $Ctrl_{i,t-1,s,j}$ are geographic and economic **control variables**.
+* $CRFE$ are **Carbon-pricing Region Fixed Effects** (capturing EU/OECD+ heterogeneity).
+* $TT$ is a linear **Time Trend**.
+* All drivers are **lagged by 1 year** ($t-1$) to avoid simultaneity bias.
+
+---
+
+# Correlation Analysis {.tabset}
+
+High correlations between predictors within the same group can inflate variance and destabilise estimates.
+
+## Actor Power Drivers
+
+```{r cor-ap, echo=FALSE}
+kableCorrelationMatrix(cor_df_AP, caption = "Actor Power Correlation Matrix",
+  show = "lower", percentile = 0.85)
+```
+
+```{r cor-ap-note, echo=FALSE, results='asis'}
+cor_ap_mat <- as.matrix(cor_df_AP[, -1])
+rownames(cor_ap_mat) <- cor_df_AP$Driver
+diag(cor_ap_mat) <- NA
+high_pair <- which(abs(cor_ap_mat) == max(abs(cor_ap_mat), na.rm = TRUE), arr.ind = TRUE)[1, ]
+low_pair  <- which(abs(cor_ap_mat) == min(abs(cor_ap_mat), na.rm = TRUE), arr.ind = TRUE)[1, ]
+cat(
+  "> **Note:** ",
+  rownames(cor_ap_mat)[high_pair[1]], "and", colnames(cor_ap_mat)[high_pair[2]],
+  "share r =", round(cor_ap_mat[high_pair[1], high_pair[2]], 2),
+  "— moderate but not disqualifying.",
+  rownames(cor_ap_mat)[low_pair[1]], "and", colnames(cor_ap_mat)[low_pair[2]],
+  "are essentially orthogonal (r =", round(cor_ap_mat[low_pair[1], low_pair[2]], 2), ")."
+)
+```
+
+## Institutional Quality Drivers (WGI)
+
+```{r cor-iq, echo=FALSE}
+kableCorrelationMatrix(cor_df_IQ, caption = "Institutional Quality Correlation Matrix (WGI)",
+  show = "lower", percentile = 0.85)
+```
+
+```{r cor-iq-note, echo=FALSE, results='asis'}
+cor_iq_mat <- as.matrix(cor_df_IQ[, -1])
+diag(cor_iq_mat) <- NA
+mean_r <- round(mean(abs(cor_iq_mat), na.rm = TRUE), 2)
+max_r  <- round(max(abs(cor_iq_mat), na.rm = TRUE), 2)
+cat(
+  "> **Critical finding:** The World Governance Indicators are highly inter-correlated",
+  "(mean |r| =", mean_r, ", max |r| =", max_r, ").",
+  "Using more than two simultaneously risks severe multicollinearity.",
+  "Select a small subset (e.g. Government Effectiveness (WGI), Voice & Accountability (WGI),",
+  "Political Stability (WGI)) and verify VIF < 10 after model fitting."
+)
+```
+
+## Institutional Quality Drivers (V-Dem)
+
+```{r cor-vdem, echo=FALSE}
+kableCorrelationMatrix(cor_df_vdem,
+  caption = "Institutional Quality Correlation Matrix — WGI vs V-Dem",
+  show = "lower", percentile = 0.85)
+```
+
+```{r cor-vdem-note, echo=FALSE, results='asis'}
+vdem_cols <- c("Rule of Law (VDem)", "Vertical Accountability (VDem)",
+               "Horizontal Accountability (VDem)", "Diagonal Accountability (VDem)")
+vdem_present <- intersect(vdem_cols, colnames(cor_df_vdem))
+if (length(vdem_present) >= 2) {
+  cor_vdem_mat <- as.matrix(cor_df_vdem[cor_df_vdem$Driver %in% vdem_cols, vdem_present])
+  diag(cor_vdem_mat) <- NA
+  mean_vdem <- round(mean(abs(cor_vdem_mat), na.rm = TRUE), 2)
+  max_vdem  <- round(max(abs(cor_vdem_mat), na.rm = TRUE), 2)
+  cat(
+    "> **V-Dem internal correlation:** The four V-Dem indicators are correlated",
+    "(mean |r| =", mean_vdem, ", max |r| =", max_vdem, ").",
+    "**md5** uses Rule of Law (VDem) + Vertical Accountability (VDem) as IQ drivers.",
+    "**md6** cross-tests Government Effectiveness (WGI) alongside Rule of Law (VDem).",
+    "Cross-source pairs near the diagonal of this matrix reveal whether WGI and V-Dem",
+    "measure the same construct or capture complementary dimensions."
+  )
+} else {
+  cat("> V-Dem indicators not found in panel data. Ensure V-Dem source data is installed.")
+}
+```
+
+## Control Variables
+
+```{r cor-ctrl, echo=FALSE}
+kableCorrelationMatrix(cor_df_ctrl, caption = "Controls Correlation Matrix",
+  show = "lower", percentile = 0.85)
+```
+
+```{r cor-ctrl-note, echo=FALSE, results='asis'}
+cor_ctrl_mat <- as.matrix(cor_df_ctrl[, -1])
+diag(cor_ctrl_mat) <- NA
+high_ctrl <- which(abs(cor_ctrl_mat) == max(abs(cor_ctrl_mat), na.rm = TRUE), arr.ind = TRUE)[1, ]
+cat(
+  "> ",
+  rownames(as.data.frame(cor_df_ctrl[, -1]))[high_ctrl[1]],
+  "and", colnames(cor_ctrl_mat)[high_ctrl[2]],
+  "are strongly correlated (r =",
+  round(cor_ctrl_mat[high_ctrl[1], high_ctrl[2]], 2),
+  ") and should not both appear in the same model.",
+  "Use at most one from each highly correlated pair to keep VIF controlled."
+)
+```
+
+---
+
+# Model Fit Summary
+
+```{r fit-summary, echo=FALSE}
+build_fit_row <- function(wf, model_name, sector, stage) {
+  bm <- wf$bestModels
+  if (is.null(bm) || nrow(bm) == 0) return(NULL)
+  row <- bm[bm$sector == sector & bm$stage == stage, ]
+  if (nrow(row) == 0) return(NULL)
+  diag <- get_best_diag(wf, sector, stage)
+  data.frame(
+    Model     = model_name, Sector = sector,
+    Stage     = ifelse(stage == "adoption", "Adoption", "Stringency"),
+    PseudoR2  = row$pseudoR2, AIC = row$aic,
+    nSig      = row$nSignificant, nPred = row$nPredictors,
+    Converged = row$converged,
+    Separation = isTRUE(diag$separation),
+    maxVIF    = row$maxVIF,
+    stringsAsFactors = FALSE
+  )
+}
+
+wfs <- list(
+  list(wf = md,  name = "md (full AP)"),
+  list(wf = md2, name = "md2 (API only)"),
+  list(wf = md3, name = "md3 (REMIND FE)"),
+  list(wf = md4, name = "md4 (Lagged ECP)"),
+  list(wf = md5, name = "md5 (V-Dem IQ)"),
+  list(wf = md6, name = "md6 (WGI+VDem IQ)")
+)
+
+grid <- expand.grid(wf_idx = 1:6, sector = c("Bulk", "Diffuse"),
+  stage = c("adoption", "stringency"), stringsAsFactors = FALSE)
+grid$stage_order  <- ifelse(grid$stage == "adoption", 1, 2)
+grid$sector_order <- ifelse(grid$sector == "Bulk", 1, 2)
+grid <- grid[order(grid$stage_order, grid$sector_order, grid$wf_idx), ]
+
+fit_df <- do.call(rbind, lapply(1:nrow(grid), function(i) {
+  wf_info <- wfs[[grid$wf_idx[i]]]
+  build_fit_row(wf_info$wf, wf_info$name, grid$sector[i], grid$stage[i])
+}))
+
+kable(fit_df, format = "html", caption = "IAM-PFM Model Fit Summary — All Variants",
+  col.names = c("Model", "Sector", "Stage", "Pseudo-R²", "AIC",
+    "Sig. pred.", "Total pred.", "Converged", "Sep. flag", "Max VIF")
+) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE) %>%
+  column_spec(4, bold = TRUE,
+    color = ifelse(fit_df$PseudoR2 >= 0.5, col_good,
+      ifelse(fit_df$PseudoR2 >= 0.2, col_warn, col_bad)))
+```
+
+```{r fit-summary-narrative, echo=FALSE, results='asis'}
+cat(diag_results$fitSummaryNarrative)
+```
+
+---
+
+# Model Detailed Results {.tabset}
+
+```{r detailed-results-loop, echo=FALSE, results='asis', fig.height=5}
+wf_meta <- list(
+  "md"  = "md: Results with Full AP Drivers",
+  "md2" = "md2: Results with API Only",
+  "md3" = "md3: Results with REMIND Region FE",
+  "md4" = "md4: Results with Lagged ECP in Stringency",
+  "md5" = "md5: V-Dem IQ (Rule of Law + Vertical Accountability)",
+  "md6" = "md6: Combined WGI + V-Dem IQ"
+)
+
+for (wfid in names(wf_meta)) {
+  wf_obj <- get(wfid)
+  cat("\n## ", wf_meta[[wfid]], " {.tabset}\n\n")
+
+  for (sec in c("Bulk", "Diffuse")) {
+    cat("\n### ", sec, " {.tabset}\n\n")
+
+    for (stg in c("adoption", "stringency")) {
+      cat("\n#### ", tools::toTitleCase(stg), "\n\n")
+
+      coef_df <- get_best_coefs(wf_obj, sec, stg) %>% filter(term != "(Intercept)")
+
+      if (nrow(coef_df) > 0) {
+        diag_fit <- get_best_diag(wf_obj, sec, stg)
+        stg_lbl  <- ifelse(stg == "adoption", "Log-odds", "ECP")
+
+        p <- render_forest_plot(
+          coef_df,
+          title    = sprintf("%s %s — Coefficient Plot", sec, tools::toTitleCase(stg)),
+          subtitle = sprintf(
+            "%s coefficients | Pseudo-R² = %.3f | AIC = %.1f | %d/%d significant",
+            stg_lbl, diag_fit$pseudoR2, diag_fit$aic,
+            diag_fit$nSignificant, diag_fit$nPredictors
+          )
+        )
+
+        if (!is.null(p) && stg == "stringency") {
+          extreme_data <- coef_df %>% filter(abs(statistic) > 15)
+          if (nrow(extreme_data) > 0) {
+            p <- p + geom_text(data = extreme_data,
+              aes(label = "⚠ Extreme z", y = estimate),
+              nudge_y = -0.8, size = 3, colour = col_bad)
+          }
+        }
+
+        if (!is.null(p)) {
+          print(p)
+          fname <- sprintf("forest_%s_%s_%s", wfid, sec, stg)
+          ggsave(file.path(plotOutputDir, paste0(fname, ".png")), p, width = 10, height = 6, dpi = 300)
+          ggsave(file.path(plotOutputDir, paste0(fname, ".svg")), p, width = 10, height = 6)
+        }
+        cat("\n\n")
+
+        d <- diag_results$modelDiagnoses[[wfid]][[paste0(sec, "_", stg)]]
+        if (!is.null(d)) {
+          cat("**Top predictors** (by |z|):", paste0("**", vapply(d$topPredictors, clean_term_plain, character(1)), "**", collapse = ", "), "\n\n")
+          if (length(d$extremeZTerms) > 0)
+            cat("> ⚠ **Extreme z-values detected** on:", paste(d$extremeZTerms, collapse = ", "), "\n\n")
+          if (isTRUE(d$separation) && stg == "adoption")
+            cat("> ℹ Separation flag detected — logistf handles this via penalised ML; widen prediction intervals.\n\n")
+          if (wfid == "md2" && stg == "adoption") {
+            d_md <- diag_results$modelDiagnoses$md[[paste0(sec, "_", stg)]]
+            if (!is.null(d_md)) {
+              delta_r2  <- round(d_md$r2 - d$r2, 3)
+              delta_aic <- round(d$aic - d_md$aic, 1)
+              cat(sprintf("> ℹ **Comparison with md:** ΔPseudo-R² = %.3f, ΔAIC = %.1f.\n\n", delta_r2, delta_aic))
+            }
+          }
+          cat("> ", d$verdictIcon, "**Verdict:**", d$verdict$text, "\n")
+        }
+      } else {
+        cat("> ❌ **Model failed to converge or select a valid specification.**\n")
+      }
+      cat("\n\n")
+    }
+  }
+}
+```
+
+---
+
+# Model Comparison
+
+## Adoption
+
+```{r comparison-adoption, echo=FALSE, fig.height=4}
+comp_adopt <- do.call(rbind, lapply(names(diag_results$modelDiagnoses), function(wfn) {
+  wf  <- get(wfn)
+  lbl <- switch(wfn, "md" = "md (full AP)", "md2" = "md2 (API only)",
+    "md3" = "md3 (REMIND FE)", "md4" = "md4 (Lagged ECP)", wfn)
+  if (!is.null(wf$bestModels) && nrow(wf$bestModels) > 0)
+    wf$bestModels[wf$bestModels$stage == "adoption", c("sector", "pseudoR2", "aic")] %>%
+      mutate(Model = lbl)
+  else NULL
+}))
+
+variant_colours <- c("md (full AP)" = col_md, "md2 (API only)" = col_md2,
+  "md3 (REMIND FE)" = col_md3, "md4 (Lagged ECP)" = col_md4)
+
+p1 <- ggplot(comp_adopt, aes(x = sector, y = pseudoR2, fill = Model)) +
+  geom_col(position = "dodge", width = 0.6) +
+  geom_text(aes(label = sprintf("%.3f", pseudoR2)),
+    position = position_dodge(0.6), vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = variant_colours) +
+  labs(title = "Adoption — Pseudo-R²", y = "McFadden Pseudo-R²", x = NULL) +
+  ylim(0, 0.95) + theme_report()
+
+p2 <- ggplot(comp_adopt, aes(x = sector, y = aic, fill = Model)) +
+  geom_col(position = "dodge", width = 0.6) +
+  geom_text(aes(label = sprintf("%.1f", aic)),
+    position = position_dodge(0.6), vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = variant_colours) +
+  labs(title = "Adoption — AIC (lower = better)", y = "AIC", x = NULL) +
+  theme_report()
+
+p1 + p2 + plot_layout(guides = "collect") & theme(legend.position = "bottom")
+```
+
+```{r comparison-adoption-narrative, echo=FALSE, results='asis'}
+cat(">", diag_results$comparisonNarrative$adoption, "\n")
+```
+
+## Stringency
+
+```{r comparison-stringency, echo=FALSE, fig.height=4}
+comp_str <- do.call(rbind, lapply(names(diag_results$modelDiagnoses), function(wfn) {
+  wf  <- get(wfn)
+  lbl <- switch(wfn, "md" = "md (full AP)", "md2" = "md2 (API only)",
+    "md3" = "md3 (REMIND FE)", "md4" = "md4 (Lagged ECP)", wfn)
+  if (!is.null(wf$bestModels) && nrow(wf$bestModels) > 0)
+    wf$bestModels[wf$bestModels$stage == "stringency", c("sector", "pseudoR2", "aic")] %>%
+      mutate(Model = lbl)
+  else NULL
+}))
+
+p3 <- ggplot(comp_str, aes(x = sector, y = pseudoR2, fill = Model)) +
+  geom_col(position = "dodge", width = 0.6) +
+  geom_text(aes(label = sprintf("%.3f", pseudoR2)),
+    position = position_dodge(0.6), vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = variant_colours) +
+  labs(title = "Stringency — Pseudo-R²", y = "Pseudo-R²", x = NULL) +
+  ylim(0, max(comp_str$pseudoR2) * 1.3) + theme_report()
+
+p4 <- ggplot(comp_str, aes(x = sector, y = aic, fill = Model)) +
+  geom_col(position = "dodge", width = 0.6) +
+  geom_text(aes(label = sprintf("%.0f", aic)),
+    position = position_dodge(0.6), vjust = -0.4, size = 3.5) +
+  scale_fill_manual(values = variant_colours) +
+  labs(title = "Stringency — AIC", y = "AIC", x = NULL) + theme_report()
+
+p3 + p4 + plot_layout(guides = "collect") & theme(legend.position = "bottom")
+```
+
+```{r comparison-stringency-narrative, echo=FALSE, results='asis'}
+cat(diag_results$comparisonNarrative$stringency, "\n")
+```
+
+---
+
+# Diagnostic Deep-Dive
+
+## Workflow Summary {.tabset}
+
+### md
+
+```{r workflow-summary-md, echo=FALSE, comment=""}
+cat(md$workflowSummary)
+```
+
+### md2
+
+```{r workflow-summary-md2, echo=FALSE, comment=""}
+cat(md2$workflowSummary)
+```
+
+### md3
+
+```{r workflow-summary-md3, echo=FALSE, comment=""}
+cat(md3$workflowSummary)
+```
+
+### md4
+
+```{r workflow-summary-md4, echo=FALSE, comment=""}
+cat(md4$workflowSummary)
+```
+
+## Group Analysis {.tabset}
+
+### md
+
+```{r group-analysis-md, echo=FALSE}
+kable(md$groupAnalysisTable, format = "html",
+  caption = "Group-Level Variance Partitioning — md (Full AP Drivers)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE)
+```
+
+```{r group-analysis-md-findings, echo=FALSE, results='asis'}
+ga_md <- md$groupAnalysisTable
+ga_md$.r2num <- as.numeric(gsub("%", "", ga_md$`Pseudo-R2 contribution`))
+adopt_top <- ga_md[ga_md$stage == "adoption", ]
+adopt_top <- adopt_top[order(adopt_top$.r2num, decreasing = TRUE), ]
+str_top   <- ga_md[ga_md$stage == "stringency", ]
+str_top   <- str_top[order(str_top$.r2num, decreasing = TRUE), ]
+cat("**Findings:** The group analysis reveals how much explanatory power each predictor block contributes independently.\n\n")
+if (nrow(adopt_top) > 0)
+  cat("- **Adoption:** Top contributing group is", adopt_top$group[1],
+    sprintf("(%s of variance explained).\n", adopt_top$`Pseudo-R2 contribution`[1]))
+if (nrow(str_top) > 0)
+  cat("- **Stringency:** Top contributing group is", str_top$group[1],
+    sprintf("(%s).", str_top$`Pseudo-R2 contribution`[1]),
+    "If Region Fixed Effects dominate, much of the explained variance reflects",
+    "between-region differences rather than within-region temporal dynamics,",
+    "which limits out-of-sample projection utility.\n")
+```
+
+### md2
+
+```{r group-analysis-md2, echo=FALSE}
+kable(md2$groupAnalysisTable, format = "html",
+  caption = "Group-Level Variance Partitioning — md2 (API Only)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE)
+```
+
+```{r group-analysis-md2-findings, echo=FALSE, results='asis'}
+ga_md2 <- md2$groupAnalysisTable
+ga_md2$.r2num <- as.numeric(gsub("%", "", ga_md2$`Pseudo-R2 contribution`))
+adopt_top2 <- ga_md2[ga_md2$stage == "adoption", ]
+adopt_top2 <- adopt_top2[order(adopt_top2$.r2num, decreasing = TRUE), ]
+cat("**Findings:** The md2 group analysis shows a cleaner decomposition.\n\n")
+if (nrow(adopt_top2) > 0)
+  cat("- Without individual AP drivers competing for variance, the top contributor is",
+    adopt_top2$group[1],
+    sprintf("(%s of variance explained),", adopt_top2$`Pseudo-R2 contribution`[1]),
+    "suggesting the composite API captures political-economy dynamics more efficiently",
+    "than disaggregated fuel-specific proxies.\n")
+```
+
+### md3
+
+```{r group-analysis-md3, echo=FALSE}
+kable(md3$groupAnalysisTable, format = "html",
+  caption = "Group-Level Variance Partitioning — md3 (REMIND FE)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE)
+```
+
+### md4
+
+```{r group-analysis-md4, echo=FALSE}
+kable(md4$groupAnalysisTable, format = "html",
+  caption = "Group-Level Variance Partitioning — md4 (Lagged ECP)") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE)
+```
+
+## Pseudo-R² Comparison
+
+```{r r2-context, echo=FALSE, fig.height=4.5}
+r2_df <- do.call(rbind, lapply(names(diag_results$modelDiagnoses), function(wfn) {
+  res <- get(wfn)$bestModels
+  if (!is.null(res) && nrow(res) > 0)
+    res %>% mutate(Model = paste0(sector, " ", stage, " (", wfn, ")"))
+  else NULL
+})) %>%
+  mutate(
+    Quality      = case_when(pseudoR2 >= 0.4 ~ "Good", pseudoR2 >= 0.2 ~ "Moderate", TRUE ~ "Poor"),
+    stage_order  = ifelse(stage == "adoption", 1, 2),
+    sector_order = ifelse(sector == "Bulk", 1, 2)
+  ) %>%
+  arrange(desc(stage_order), desc(sector_order), Model) %>%
+  mutate(Model = factor(Model, levels = unique(Model)))
+
+p <- ggplot(r2_df, aes(x = Model, y = pseudoR2,
+    fill = factor(Quality, levels = c("Poor", "Moderate", "Good")))) +
+  geom_col(width = 0.6) +
+  geom_text(aes(label = sprintf("%.3f", pseudoR2)), hjust = -0.15, size = 3.5) +
+  scale_fill_manual(values = c(col_bad, col_warn, col_good), name = "Fit quality") +
+  coord_flip() + ylim(0, 1) +
+  labs(title = "McFadden Pseudo-R² Across All Models",
+    subtitle = "Rules of thumb: < 0.2 = poor, 0.2–0.4 = moderate, > 0.4 = good",
+    x = NULL, y = "Pseudo-R²") +
+  theme_report()
+print(p)
+ggsave(file.path(plotOutputDir, "model_comparison_r2.png"), p, width = 10, height = 5, dpi = 300)
+ggsave(file.path(plotOutputDir, "model_comparison_r2.svg"), p, width = 10, height = 5)
+```
+
+```{r r2-suitability-narrative, echo=FALSE, results='asis'}
+r2_tiers <- lapply(names(diag_results$modelDiagnoses), function(wfn) {
+  lapply(diag_results$modelDiagnoses[[wfn]], function(d) {
+    list(model = paste0(d$sector, " ", d$stage, " (", wfn, ")"),
+      r2 = d$r2, ready = d$iamReady, issues = length(d$extremeZTerms) > 0)
+  })
+})
+r2_flat <- do.call(c, r2_tiers)
+r2_good <- Filter(function(x) !is.na(x$r2) && x$r2 >= 0.4, r2_flat)
+r2_mod  <- Filter(function(x) !is.na(x$r2) && x$r2 >= 0.2 && x$r2 < 0.4, r2_flat)
+r2_poor <- Filter(function(x) !is.na(x$r2) && x$r2 < 0.2, r2_flat)
+cat("**Findings & Model Suitability Summary:**\n\n")
+if (length(r2_good) > 0)
+  cat("* **Top tier (Pseudo-R2 >= 0.4):**",
+    paste(sapply(r2_good, `[[`, "model"), collapse = "; "),
+    "-- suitable for IAM projection where no separation issues exist.\n")
+for (m in r2_mod) {
+  suffix <- if (m$issues) " Despite the moderate R2, underlying separation inflates this statistic -- treat as unreliable." else ""
+  cat("* **Middle tier:**", m$model, sprintf("(R2 = %.3f).", m$r2), suffix, "\n")
+}
+for (m in r2_poor)
+  cat("* **Bottom tier:**", m$model, sprintf("(R2 = %.3f) --", m$r2),
+    if (m$issues) "critical separation detected; not suitable." else "low fit; use as conservative baseline.", "\n")
+ready_models <- sapply(Filter(function(x) x$ready == "yes", r2_flat), `[[`, "model")
+cat("\n> **Actionable conclusion:** Use",
+  if (length(ready_models) > 0) paste(ready_models, collapse = ", ") else "none",
+  "for IAM deployment. Models with critical separation require structural redesign.\n")
+```
+
+---
+
+# Issues, Warnings and Recommendations
+
+## Summary Issue Table
+
+```{r issues, echo=FALSE}
+if (nrow(diag_results$issuesTable) > 0) {
+  kable(diag_results$issuesTable, format = "html",
+    caption = "Dynamically detected issues, consequences and recommended fixes",
+    col.names = c("Priority", "Model", "Issue", "Consequence", "Fix")) %>%
+    kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE) %>%
+    column_spec(1, bold = TRUE) %>%
+    collapse_rows(columns = 1)
+} else {
+  cat("> No issues detected across all models.")
+}
+```
+
+---
+
+# IAM Integration Notes
+
+## What These Models Enable
+
+The IAM-PFM module translates IAM-projected socioeconomic and energy pathways into **probabilistic carbon price trajectories** using the estimated hurdle parameters:
+
+**1. Adoption Probability:**
+$$\Pr(\text{ECP}_t > 0) = \text{logit}^{-1}(\hat{\eta}^{(\text{adopt})}_t)$$
+
+**2. Conditional Stringency:**
+$$\mathbb{E}[\text{ECP}_t \mid \text{ECP}_t > 0] = \exp(\hat{\eta}^{(\text{string})}_t)$$
+
+**3. Expected Effective Carbon Price:**
+$$\mathbb{E}[\text{ECP}_t] = \Pr(\text{ECP}_t > 0) \times \mathbb{E}[\text{ECP}_t \mid \text{ECP}_t > 0]$$
+
+## Projection-Ready Models
+
+```{r readiness, echo=FALSE}
+kable(diag_results$readinessTable, format = "html",
+  caption = "IAM Projection Readiness Assessment (dynamically computed)",
+  col.names = c("Model", "Status", "Rationale")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = TRUE) %>%
+  column_spec(2, bold = TRUE,
+    color = ifelse(grepl("✅", diag_results$readinessTable$Ready), col_good,
+      ifelse(grepl("⚠", diag_results$readinessTable$Ready), col_warn, col_bad)))
+```
+
+```{r summary-verdict, echo=FALSE, results='asis'}
+rd       <- diag_results$readinessTable
+n_ready  <- sum(grepl("✅", rd$Ready))
+n_monitor <- sum(grepl("⚠", rd$Ready))
+n_not    <- sum(grepl("❌", rd$Ready))
+cat("**Summary Verdict:**\n\nOf the", nrow(rd), "model variants assessed:\n\n")
+if (n_ready > 0)   cat("*", n_ready,   "are **fully ready** for IAM deployment.\n")
+if (n_monitor > 0) cat("*", n_monitor, "**require monitoring but are usable** (widen confidence intervals or bound projections).\n")
+if (n_not > 0)     cat("*", n_not,     "**cannot be used reliably** due to structural separation. These need fundamental redesign before deployment.\n")
+cat("\nFor immediate IAM integration, deploy the models marked Ready or Monitor, and replace",
+  "models flagged Not Ready with externally calibrated alternatives until separation issues are resolved.\n")
+```
+
+## Key Projection Caveats
+
+```{r projection-caveats, echo=FALSE, results='asis'}
+cat(diag_results$projectionCaveats$asNumberedList)
+```
+
+---
+
+# Projection Results
+
+## Adoption Threshold {.tabset}
+
+```{r calc-thresholds, echo=FALSE}
+calc_thresholds <- function(model_obj) {
+  if (is.null(model_obj)) return(list(Sens = 0.5, SD = 0.5, FP = 0.5))
+  hist_probs       <- if (!is.null(model_obj$predict)) model_obj$predict else model_obj$fitted.values
+  actual_outcomes  <- model_obj$y
+  adopters_prob    <- hist_probs[actual_outcomes == 1]
+  non_adopters_prob <- hist_probs[actual_outcomes == 0]
+  t1 <- if (length(adopters_prob) > 0)     quantile(adopters_prob, 0.10, na.rm = TRUE) else 0.5
+  t2 <- if (length(adopters_prob) > 0)     mean(adopters_prob, na.rm = TRUE) - sd(adopters_prob, na.rm = TRUE) else 0.5
+  t3 <- if (length(non_adopters_prob) > 0) quantile(non_adopters_prob, 0.75, na.rm = TRUE) else 0.5
+  list(
+    Sens = round(max(0.25, min(0.99, t1)), 2),
+    SD   = round(max(0.25, min(0.99, t2)), 2),
+    FP   = round(max(0.25, min(0.99, t3)), 2)
+  )
+}
+
+thresh_bulk    <- calc_thresholds(md2$selections$Bulk_adoption$bestModel$model)
+thresh_diffuse <- calc_thresholds(md2$selections$Diffuse_adoption$bestModel$model)
+```
+
+### Bulk
+
+- **Method 1: 90% Historical Sensitivity (`r thresh_bulk$Sens`)**: Finds the threshold where 90% of historical adoptions are caught. Minimises False Negatives.
+- **Method 2: Standard Deviation Margin (`r thresh_bulk$SD`)**: Mean adoption probability minus one SD — includes regions within the normal range of historical early movers.
+- **Method 3: False Positive Ceiling (`r thresh_bulk$FP`)**: 75th percentile of probabilities for non-adopters. Accepts some false positives to avoid missing the signal.
+
+### Diffuse
+
+- **Method 1: 90% Historical Sensitivity (`r thresh_diffuse$Sens`)**: Finds the threshold where 90% of historical adoptions are caught. Minimises False Negatives.
+- **Method 2: Standard Deviation Margin (`r thresh_diffuse$SD`)**: Mean adoption probability minus one SD — includes regions within the normal range of historical early movers.
+- **Method 3: False Positive Ceiling (`r thresh_diffuse$FP`)**: 75th percentile of probabilities for non-adopters. Accepts some false positives to avoid missing the signal.
+
+## Projected Probability {.tabset}
+
+```{r proj-prob, echo=FALSE, results='asis', fig.height=5, fig.width=10, warning=FALSE, message=FALSE}
+if (!is.null(future_mag)) {
+  get_projection_plot <- function(df, model_obj, sector_name, threshold) {
+    if (is.null(model_obj)) return(NULL)
+    needed_vars <- intersect(all.vars(model_obj$formula), colnames(df))
+    df_clean    <- df[complete.cases(df[, needed_vars, drop = FALSE]), ]
+    if (nrow(df_clean) == 0) return(NULL)
+    pred_link <- tryCatch(predict(model_obj, newdata = df_clean), error = function(e) NULL)
+    if (is.null(pred_link)) return(NULL)
+    df_clean$prob <- 1 / (1 + exp(-pred_link))
+
+    top_regions      <- intersect(c("USA", "CHN", "IND", "JPN", "DEU", "GBR", "FRA", "BRA", "RUS"), unique(df_clean$region))
+    df_clean$highlight <- ifelse(df_clean$region %in% top_regions, as.character(df_clean$region), "Other")
+    df_clean$highlight <- factor(df_clean$highlight, levels = c(top_regions, "Other"))
+    my_colors <- setNames(
+      c("#1f77b4", "#d62728", "#ff7f0e", "#9467bd", "#2ca02c", "#8c564b", "#e377c2", "#17becf", "#7f7f7f")[1:length(top_regions)],
+      top_regions
+    )
+    my_colors["Other"] <- "grey80"
+
+    p <- ggplot(df_clean, aes(x = year, y = prob, group = region, color = highlight,
+        alpha = highlight == "Other", linewidth = highlight != "Other")) +
+      geom_hline(yintercept = threshold, linetype = "dashed", color = "grey50") +
+      geom_line() +
+      scale_color_manual(values = my_colors) +
+      scale_alpha_manual(values = c("TRUE" = 0.4, "FALSE" = 1), guide = "none") +
+      scale_linewidth_manual(values = c("TRUE" = 0.5, "FALSE" = 1.2), guide = "none") +
+      theme_report() +
+      labs(title = sprintf("Projected Probability of Adoption (%s)", sector_name),
+        subtitle = sprintf("Dashed line = threshold %.2f (90%% historical sensitivity)", threshold),
+        x = "Year", y = "Pr(Adoption)", color = "Region") +
+      theme(legend.position = "right")
+
+    fname <- sprintf("prob_%s_%.2f", sector_name, threshold)
+    ggsave(file.path(plotOutputDir, paste0(fname, ".png")), p, width = 10, height = 5, dpi = 300)
+    ggsave(file.path(plotOutputDir, paste0(fname, ".svg")), p, width = 10, height = 5)
+    p
+  }
+
+  for (sec in c("Bulk", "Diffuse")) {
+    cat("\n### ", sec, " {.tabset}\n\n")
+    df      <- if (sec == "Bulk") future_df_bulk else future_df_diffuse
+    model_obj <- md2$selections[[paste0(sec, "_adoption")]]$bestModel$model
+    t_list  <- if (sec == "Bulk") thresh_bulk else thresh_diffuse
+    for (t_name in c("Sens", "SD", "FP")) {
+      cat("\n#### ", t_name, "\n\n")
+      p <- get_projection_plot(df, model_obj, sec, t_list[[t_name]])
+      if (!is.null(p)) print(p)
+      cat("\n\n")
+    }
+  }
+}
+```
+
+## Expected Adoption Timeline {.tabset}
+
+```{r timeline-tables, echo=FALSE, results='asis', warning=FALSE, message=FALSE}
+if (!is.null(future_mag)) {
+  render_adoption_timeline <- function(df, model_obj, threshold) {
+    if (is.null(model_obj)) return(NULL)
+    needed_vars <- intersect(all.vars(model_obj$formula), colnames(df))
+    df_clean    <- df[complete.cases(df[, needed_vars, drop = FALSE]), ]
+    if (nrow(df_clean) == 0) return(NULL)
+    pred_link <- tryCatch(predict(model_obj, newdata = df_clean), error = function(e) NULL)
+    if (is.null(pred_link)) return(NULL)
+    df_clean$prob <- 1 / (1 + exp(-pred_link))
+
+    adopt_data <- df_clean %>%
+      group_by(region) %>%
+      summarise(AdoptionYear = ifelse(any(prob >= threshold), min(year[prob >= threshold]), Inf), .groups = "drop") %>%
+      mutate(
+        Category = case_when(
+          AdoptionYear <= 2030 ~ "Forerunners", AdoptionYear <= 2050 ~ "Early Majority",
+          AdoptionYear <= 2070 ~ "Late Majority", TRUE ~ "Laggards"
+        ),
+        YearRange = case_when(
+          Category == "Forerunners"    ~ "<= 2030",   Category == "Early Majority" ~ "2031–2050",
+          Category == "Late Majority"  ~ "2051–2070", Category == "Laggards"       ~ "> 2070"
+        ),
+        RegYear = ifelse(AdoptionYear == Inf, region, sprintf("%s (%s)", region, AdoptionYear))
+      )
+
+    final_table <- adopt_data %>%
+      group_by(Category, YearRange) %>%
+      summarise(Regions = paste(RegYear, collapse = ", "), .groups = "drop") %>%
+      mutate(Category = factor(Category, levels = c("Forerunners", "Early Majority", "Late Majority", "Laggards"))) %>%
+      arrange(Category)
+
+    cat(as.character(
+      kable(final_table, format = "html", col.names = c("Category", "Expected Adoption Year", "Regions")) %>%
+        kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE)
+    ))
+    cat("\n\n")
+  }
+
+  for (sec in c("Bulk", "Diffuse")) {
+    cat("\n### ", sec, " {.tabset}\n\n")
+    df        <- if (sec == "Bulk") future_df_bulk else future_df_diffuse
+    model_obj <- md2$selections[[paste0(sec, "_adoption")]]$bestModel$model
+    t_list    <- if (sec == "Bulk") thresh_bulk else thresh_diffuse
+    for (t_name in c("Sens", "SD", "FP")) {
+      cat("\n#### ", t_name, "\n\n")
+      render_adoption_timeline(df, model_obj, t_list[[t_name]])
+      cat("\n\n")
+    }
+  }
+}
+```
+
+## Spatial Distribution of Adoption {.tabset}
+
+```{r spatial-maps, echo=FALSE, results='asis', fig.height=6, fig.width=10, warning=FALSE, message=FALSE}
+if (!is.null(future_mag)) {
+  mapping_54 <- tryCatch(
+    madrat::toolGetMapping("regionmapping_54.csv", type = "regional", where = "mappingfolder"),
+    error = function(e) NULL
+  )
+
+  if (!is.null(mapping_54)) {
+    suppressPackageStartupMessages(library(sf))
+    world     <- rnaturalearth::ne_countries(scale = "small", returnclass = "sf")
+    world$iso_key <- as.character(world$adm0_a3)
+
+    render_adoption_map <- function(df, model_obj, sector_name, threshold) {
+      needed_vars <- intersect(all.vars(model_obj$formula), colnames(df))
+      df_clean    <- df[complete.cases(df[, needed_vars, drop = FALSE]), ]
+      pred_link   <- tryCatch(predict(model_obj, newdata = df_clean), error = function(e) NULL)
+      if (is.null(pred_link)) return(NULL)
+      df_clean$prob <- 1 / (1 + exp(-pred_link))
+
+      adopt_data <- df_clean %>%
+        group_by(region) %>%
+        summarise(AdoptionYear = ifelse(any(prob >= threshold), min(year[prob >= threshold]), 2151), .groups = "drop") %>%
+        mutate(Category = case_when(
+          AdoptionYear <= 2030 ~ "Forerunners", AdoptionYear <= 2050 ~ "Early Majority",
+          AdoptionYear <= 2070 ~ "Late Majority", TRUE ~ "Laggards"
+        ))
+
+      map_data_df <- mapping_54 %>%
+        mutate(RegionCode = as.character(RegionCode), CountryCode = as.character(CountryCode)) %>%
+        mutate(CountryCode = ifelse(CountryCode == "SSD", "SDS", CountryCode)) %>%
+        left_join(adopt_data, by = c("RegionCode" = "region")) %>%
+        mutate(
+          Category = if_else(CountryCode == "ATA", factor(NA, levels = levels(Category)), Category),
+          Category = factor(Category, levels = c("Forerunners", "Early Majority", "Late Majority", "Laggards"))
+        )
+
+      world_data <- world %>% left_join(map_data_df, by = c("iso_key" = "CountryCode"))
+
+      p <- ggplot() +
+        geom_sf(data = world_data[world_data$iso_key == "ATA", ], fill = "grey90", color = "white", size = 0.05) +
+        geom_sf(data = world_data[world_data$iso_key != "ATA", ], aes(fill = Category), color = "white", size = 0.05) +
+        scale_fill_manual(values = c(
+          "Forerunners"   = "#2ecc71", "Early Majority" = "#82e0aa",
+          "Late Majority" = "#f7dc6f", "Laggards"       = "#e67e22"
+        ), na.value = "grey90", na.translate = FALSE) +
+        theme_minimal() +
+        theme(legend.position = "bottom", panel.grid = element_blank(), axis.text = element_blank()) +
+        labs(title = sprintf("Projected Adoption Timeline Categories (%s)", sector_name),
+          subtitle = sprintf("Threshold: Pr(Adoption) > %s", threshold),
+          fill = "Projected Adoption Timeline")
+
+      print(p)
+      fname <- sprintf("map_%s_%.2f", sector_name, threshold)
+      ggsave(file.path(plotOutputDir, paste0(fname, ".png")), width = 10, height = 6, dpi = 300)
+      ggsave(file.path(plotOutputDir, paste0(fname, ".svg")), width = 10, height = 6)
+    }
+
+    for (sec in c("Bulk", "Diffuse")) {
+      cat("### ", sec, " {.tabset}\n\n")
+      df        <- if (sec == "Bulk") future_df_bulk else future_df_diffuse
+      model_obj <- md2$selections[[paste0(sec, "_adoption")]]$bestModel$model
+      t_list    <- if (sec == "Bulk") thresh_bulk else thresh_diffuse
+      for (t_name in c("Sens", "SD", "FP")) {
+        cat("#### ", t_name, "\n\n")
+        render_adoption_map(df, model_obj, sec, t_list[[t_name]])
+        cat("\n\n")
+      }
+    }
+  } else {
+    cat("> ⚠️ **Could not load region mapping file.** Ensure `regionmapping_54.csv` is in the mapping folder.\n")
+  }
+}
+```
+
+---
+
+# Appendix {.tabset}
+
+## Selection Paths (md)
+
+```{r selection-paths-md, echo=FALSE}
+sp_md <- md$selectionPaths %>%
+  select(sector, stage, step, description, pseudoR2, aic, nSignificant, nPredictors, converged)
+kable(sp_md, format = "html", caption = "Model Selection Path — md (Full AP Drivers)", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+```
+
+## Selection Paths (md2)
+
+```{r selection-paths-md2, echo=FALSE}
+sp_md2 <- md2$selectionPaths %>%
+  select(sector, stage, step, description, pseudoR2, aic, nSignificant, nPredictors, converged)
+kable(sp_md2, format = "html", caption = "Model Selection Path — md2 (API Only)", digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+```
+
+## Selection Paths (md3)
+
+```{r selection-paths-md3, echo=FALSE}
+if (!is.null(md3$selectionPaths)) {
+  sp_md3 <- md3$selectionPaths %>%
+    select(sector, stage, step, description, pseudoR2, aic, nSignificant, nPredictors, converged)
+  kable(sp_md3, format = "html", caption = "Model Selection Path — md3 (REMIND Region FE)", digits = 3) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+} else {
+  cat("No data available.")
+}
+```
+
+## Selection Paths (md4)
+
+```{r selection-paths-md4, echo=FALSE}
+if (!is.null(md4$selectionPaths)) {
+  sp_md4 <- md4$selectionPaths %>%
+    select(sector, stage, step, description, pseudoR2, aic, nSignificant, nPredictors, converged)
+  kable(sp_md4, format = "html", caption = "Model Selection Path — md4 (Lagged ECP)", digits = 3) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+} else {
+  cat("No data available.")
+}
+```
+
+## Best Coefficients (md)
+
+```{r best-coefficients-md, echo=FALSE}
+kable(md$bestCoefficients, format = "html", caption = "Best Model Coefficients — md", digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+```
+
+## Best Coefficients (md2)
+
+```{r best-coefficients-md2, echo=FALSE}
+kable(md2$bestCoefficients, format = "html", caption = "Best Model Coefficients — md2", digits = 4) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+```
+
+## Best Coefficients (md3)
+
+```{r best-coefficients-md3, echo=FALSE}
+if (!is.null(md3$bestCoefficients)) {
+  kable(md3$bestCoefficients, format = "html", caption = "Best Model Coefficients — md3", digits = 4) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+} else {
+  cat("No data available.")
+}
+```
+
+## Best Coefficients (md4)
+
+```{r best-coefficients-md4, echo=FALSE}
+if (!is.null(md4$bestCoefficients)) {
+  kable(md4$bestCoefficients, format = "html", caption = "Best Model Coefficients — md4", digits = 4) %>%
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = TRUE, font_size = 11)
+} else {
+  cat("No data available.")
+}
+```
+
+## Session Information
+
+```{r session, echo=FALSE}
+tryCatch(
+  print(sessionInfo()),
+  error = function(e) {
+    cat("Note: sessionInfo() could not be fully rendered.\n")
+    cat("R Version:", R.version.string, "\n")
+    cat("Platform:", R.version$platform, "\n")
+  }
+)
+```

@@ -1,0 +1,44 @@
+Type: Package
+Package: pfmreports
+Title: Reports and Visualisations for the Political Feasibility Module (PFM)
+Version: 0.1.0
+Date: 2026-06-23
+Authors@R: c(
+    person("Renato", "Rodrigues", , "renato.rodrigues@pik-potsdam.de", role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-5863-5514")),
+    person("Elmar", "Kriegler", , "kriegler@pik-potsdam.de", role = "aut",
+           comment = c(ORCID = "0000-0002-3307-2647"))
+  )
+Description: Report-rendering layer for the Political Feasibility Module. A pure consumer of the
+    curated Run-Group artifacts produced by the pfm compute layer: it reads them and renders the
+    HTML reports and paper figures, performing no estimation or selection of its own. Ships the
+    report templates and exposes one render function per report plus a renderGroup orchestrator.
+License: MIT + file LICENSE
+URL: https://github.com/pik-piam/pfm-reports
+Imports:
+    pfm,
+    magclass,
+    madrat,
+    rmarkdown,
+    knitr,
+    ggplot2,
+    dplyr,
+    tibble,
+    purrr,
+    kableExtra,
+    DT,
+    yaml,
+    jsonlite,
+    rlang,
+    grDevices,
+    tools,
+    stats,
+    utils
+Suggests:
+    testthat,
+    withr,
+    svglite,
+    rprojroot
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.0.0

@@ -1,4 +1,0 @@
-dash>=2.16
-pandas>=2.0
-pyarrow>=14.0
-plotly>=5.18

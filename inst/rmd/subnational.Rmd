@@ -1,0 +1,84 @@
+---
+title: "PFM — Subnational Carbon Pricing: Coverage Sensitivity"
+subtitle: "What changes if the effective carbon price also counts subnational ('within_country') instruments"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document: { toc: true, toc_float: true, theme: flatly, df_print: kable }
+params:
+  rds: "results/exhaustive/subnational.rds"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(dplyr); library(knitr); library(kableExtra)
+o <- tryCatch(readRDS(params$rds), error = function(e) NULL)
+fmtn <- function(x, d = 3) ifelse(is.null(x) || is.na(x), "—", formatC(round(x, d), format = "f", digits = d))
+```
+
+# Executive summary
+
+The World Bank dashboard contains many **subnational** carbon-pricing instruments — California, Quebec, the Chinese ETS pilots, RGGI, provincial systems — which the deployed effective carbon price (ECP) deliberately excludes (`region_type == "country"`). This report shows what changes if they are folded into their parent country's ECP, via the new `calcCarbonPrice(includeSubnational = TRUE)` toggle (ADR 0016, **off by default** — the deployed model is unchanged). It is a **sensitivity extension**, not a change to the deliverable.
+
+```{r guard, results='asis'}
+if (is.null(o)) cat("_Artifact not present — run `pfm::runSubnational(group)` (or `start.R --steps=subnational`)._\n")
+```
+
+```{r body, results='asis', eval=!is.null(o)}
+cat("> **Headline.** Subnational inclusion adds a handful of large **federal economies** — **USA, China, Canada, Japan, Mexico** — as *low-price* adopters in **both** sectors: the industrial (Bulk) sector via the ETS / Chinese pilots, and the household/transport (Diffuse) sector via the economy-wide systems (California, Quebec) that cover transport and buildings. It lifts the effective price of countries whose pricing is largely subnational (Canada most of all — its economy-wide price is dominated by provincial systems). It does **not** change the deliverable's theory tiers or coefficients materially. The only instruments still excluded are the few with **no** sector classification at all in the dashboard (e.g. the Baja California carbon tax).\n\n")
+```
+
+# 1. Discrete adoption changes (new adopter region-years)
+
+A region-year "flips" when its national-only ECP is 0 but its full-coverage ECP is positive — i.e. subnational pricing makes a country an adopter it otherwise was not.
+
+```{r flips, results='asis', eval=!is.null(o)}
+for (sgi in o$sg) {
+  cc <- o$comparison[[sgi]]
+  cat("\n## ", tools::toTitleCase(sgi), " — ", cc$nFlipRegionYears, " new adopter region-years (",
+      cc$nFlipRegions, " regions)\n\n", sep = "")
+  if (is.null(cc$flips) || !nrow(cc$flips)) { cat("_No new adopters in this sector._ ",
+      if (sgi == "diffuse") "Subnational diffuse instruments (e.g. the Baja California carbon tax) lack a sector-group classification in the dashboard and are excluded — a documented data-mapping gap, not an absence of subnational diffuse pricing.\n\n" else "\n\n"); next }
+  tb <- cc$flips %>% group_by(region) %>% summarise(`first year` = min(year), `last year` = max(year),
+        `region-years` = n(), `ECP range (US$/t)` = paste0(round(min(fullECP),1), "–", round(max(fullECP),1)), .groups = "drop")
+  print(kable(tb, format = "html") %>% kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 12))
+  cat("\n\n")
+}
+```
+
+# 2. Price-level changes (countries adopting under both, price rises)
+
+Where a country already had a national instrument, subnational systems can still raise its economy-wide effective price — strikingly so for Canada, whose price is dominated by provincial systems.
+
+```{r rises, results='asis', eval=!is.null(o)}
+rs <- o$comparison$bulk$rises
+if (!is.null(rs) && nrow(rs)) {
+  rs$delta <- round(rs$fullECP - rs$natECP, 2)
+  print(kable(head(rs[order(-rs$delta), ], 12), format = "html", row.names = FALSE) %>%
+        kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 12))
+} else cat("_No price rises recorded._\n")
+```
+
+# 3. Sensitivity: the deliverable re-estimated on the full-coverage panel
+
+The deployed deliverable specs (X-0063 adoption, X-0242 stringency) re-estimated on a 54-region panel whose ECP includes the subnational contribution (emissions-weighted), vs. the national-only panel.
+
+```{r sens, results='asis', eval=!is.null(o)}
+d <- do.call(rbind, lapply(names(o$sensitivity), function(k) { s <- o$sensitivity[[k]]
+  data.frame(`Stage/Sector` = gsub("_", " — ", k),
+             `Tier (nat → full)` = paste0(s$national$tier, " → ", s$full$tier),
+             `ΔR²(theory) nat` = fmtn(s$national$deltaR2Theory), `ΔR²(theory) full` = fmtn(s$full$deltaR2Theory),
+             `pseudo-R² nat` = fmtn(s$national$pseudoR2), `pseudo-R² full` = fmtn(s$full$pseudoR2),
+             `adopt-rate nat` = fmtn(s$national$adoptRate), `adopt-rate full` = fmtn(s$full$adoptRate),
+             check.names = FALSE) }))
+print(kable(d, format = "html") %>% kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 11))
+cat("\n**Reading.** Tiers are unchanged (adoption Green/Green, stringency Blue/Green) and coefficients/VIF barely move. Both adoption sectors shift modestly (Bulk ΔR²(theory) 0.22→0.28, Diffuse 0.40→0.42; adoption rate +2–3 pp) from the newly-pricing federal economies; stringency is essentially flat. The deliverable's conclusions are **robust** to subnational inclusion.\n")
+```
+
+# 4. Method and caveats
+
+- **Toggle, off by default.** `calcCarbonPrice(includeSubnational = TRUE)` folds each `within_country` instrument into its parent country as an emissions-weighted contribution, \(\sum_i price_i \times covered_i / emissions\), combined coverage capped at 100% (first-pass overlap rule). Default `FALSE` leaves the deployed ECP byte-identical (ADR 0016).
+- **First-pass overlap.** Where national and subnational instruments overlap (Canada's federal backstop + provinces; China's national ETS + pilots), the 100% cap bounds double-counting but does not implement exact supersede/complement rules — a documented approximation suitable for a sensitivity.
+- **`all` (economy-wide) instruments** (California, Quebec) apply their price to **both** sectors, with covered emissions split by the parent country's bulk/diffuse emission shares — so the Diffuse sector now receives a subnational contribution. The only instruments still excluded are the few carrying **no** sector classification at all in the dashboard (all-NA per-sector flags, e.g. the Baja California carbon tax). The reader now derives `sector_group` from the dashboard's per-sector coverage flags as a fallback (ADR 0016), so future instruments classify automatically; the residual all-NA cases would need a `wbSector.csv` / `fuels_covered` override.
+- **Sectoral split** of subnational covered emissions uses the *parent country's* sectoral structure (EDGAR is national) — a minor approximation.
+
+*Generated from the Run-Group artifact `subnational.rds` (`pfm::runSubnational`) under `results/<group>/` (ADR 0018). Subnational toggle per ADR 0016.*

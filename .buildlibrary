@@ -1,0 +1,9 @@
+ValidationKey: '206270'
+AutocreateReadme: no
+AutocreateCITATION: yes
+AcceptedWarnings: .*
+AcceptedNotes: .*
+allowLinterWarnings: yes
+enforceVersionUpdate: no
+skipCoverage: yes
+UsePkgDown: no
