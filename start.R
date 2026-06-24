@@ -7,6 +7,7 @@
 #   Rscript start.R --nCores=128 --steps=sweep,robustness,temporal,subnational --render
 #   Rscript start.R --group=guided --mode=guided --cluster=local
 #   Rscript start.R --group=no-fe54 --qos=medium --time=2-00:00:00 --selectFE=H12,OECDp,Mundlak
+#   Rscript start.R --selectFE=all                    # lift the FE constraint (allow pooled noFE)
 #
 # Paths (relative paths are resolved against the current working directory):
 #   madrat data cache : --cachefolder= | config cachefolder/cacheDir | default data/cache
@@ -67,5 +68,14 @@ callArgs <- list(
   render          = render,
   forceRefit      = hasFlag("forceRefit")
 )
-if (!is.null(selectFE)) callArgs$selectFE <- strsplit(selectFE, ",")[[1]]  # forwarded to runSweep
+# Forwarded to runSweep -> runChannelsWorkflow. Default (arg omitted) leaves selectFE unset, so the
+# workflow's own default applies: c("H12","OECDp","Mundlak") — a real region-FE/Mundlak deliverable
+# is required and pooled `noFE` is never auto-selected. `--selectFE=all|none|off` lifts the constraint.
+if (!is.null(selectFE)) {
+  if (tolower(selectFE) %in% c("all", "none", "off")) {
+    callArgs["selectFE"] <- list(NULL)            # explicit NULL (not list-element deletion): lift it
+  } else {
+    callArgs$selectFE <- strsplit(selectFE, ",")[[1]]
+  }
+}
 do.call(pfm::startRun, callArgs)
