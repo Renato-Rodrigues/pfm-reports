@@ -14,7 +14,8 @@
 #   Fit Cache (models): --modelDir=    | config modelDir              | default output
 #   Results Root      : --resultsDir=  | config resultsDir            | default output
 #   scenario gdx      : --gdxFile=     | config gdxPath               | default data/fulldata.gdx
-# Other defaults: group=exhaustive, mode=exhaustive, steps=sweep, nCores=32. SLURM vs local is
+# Other defaults: group=exhaustive, mode=exhaustive, steps=sweep,robustness,temporal,subnational,
+# nCores=32 (render is opt-in via --render). SLURM vs local is
 # auto-detected (override with --cluster=slurm|local).
 suppressMessages(library(pfm))
 
@@ -50,7 +51,7 @@ selectFE <- getArg("selectFE", NULL)
 
 callArgs <- list(
   group           = getArg("group", "exhaustive"),
-  steps           = strsplit(getArg("steps", "sweep"), ",")[[1]],
+  steps           = strsplit(getArg("steps", "sweep,robustness,temporal,subnational"), ",")[[1]],
   mode            = getArg("mode", "exhaustive"),
   selectionMethod = getArg("selectionMethod", "levels-first"),
   resultsDir      = absify(getArg("resultsDir", def("resultsDir", "output"))),
