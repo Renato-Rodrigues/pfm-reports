@@ -15,7 +15,15 @@ getPfmConfig(key, default = NULL)
 The configuration value, or \code{default}.
 }
 \description{
-Reads \code{./config.yml} (then \code{./config.yml.example}) from the working directory. This
-is a convenience for the command-line wrappers; the package render functions take explicit
-arguments and do not rely on it.
+Resolution order (2026-06-24): \enumerate{
+\item a matching session option — \code{getOption("pfm.<key>")} then
+\code{getOption("pfmreports.<key>")} — so the absolute paths set by
+\code{pfm::startRun()} / the \pkg{pfmreports} render functions (e.g.
+\code{options(pfm.modelDir = <abs>)}) win over config/defaults during rendering;
+\item \code{./config.yml} (then \code{./config.yml.example}) in the working directory;
+\item the supplied \code{default}.
+}
+This closes the cluster bug where deployed-model reports fell back to a relative
+\code{"../output"} \code{modelDir} (ignoring the absolute path the render function set) and
+refit into stray nested folders (e.g. \code{output/output/models}).
 }
