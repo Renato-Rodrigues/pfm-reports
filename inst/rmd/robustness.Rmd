@@ -105,6 +105,32 @@ if (!is.null(frontier) && nrow(frontier)) {
 } else cat("_Frontier unavailable (BIC not present in the sweep RDS)._")
 ```
 
+# 3b. Temporal-stability frontier
+
+Temporal sign-stability (whether a spec's *theory-term* signs hold when the model is trained on the
+early window only) does **not** drive the deliverable selection (decision 2026-06-25, ADR 0027) — it
+is reported here instead. As we raise the *minimum required* worse-sector sign-stability τ from 0
+(no constraint = the deliverable) toward 1.0 (fully stable), the best maximin spec at each level is
+shown — collapsed to the τ-points where the **winner changes**. A deliverable that holds across the
+whole frontier is temporally robust; where the winner shifts, the table shows what a
+stability-first analyst would have picked instead, and at what stability/fit cost.
+
+```{r temporal-frontier}
+tf <- rb$temporalFrontier
+if (!is.null(tf) && nrow(tf)) {
+  tft <- tf %>% transmute(Stage = stage, `min stability τ` = round(minStability, 2),
+    `Selected (X-id)` = sub(" .*", "", model), Channels = channels,
+    `Worse tier` = minTier, `mean ΔR²` = round(meanDeltaR2, 3), `maxVIF` = round(maxVIF, 1),
+    `summed BIC` = round(sumBIC, 1), `stability` = round(stability, 2),
+    `AUC` = ifelse(is.na(auc), "", sprintf("%.3f", auc)),
+    `RMSE` = ifelse(is.na(rmse), "", sprintf("%.3f", rmse)))
+  kable(tft, format = "html") %>%
+    kable_styling(bootstrap_options = c("striped","hover","condensed"), full_width = TRUE, font_size = 12) %>%
+    collapse_rows(columns = 1, valign = "top")
+} else cat("_Temporal-stability frontier unavailable (run the robustness step on a sweep with the ",
+           "`trendShare`/temporal columns)._")
+```
+
 # 4. Control specification-curve
 
 Each ladder rung is re-fit against the full enumerated set of control combinations — income-form ∈
