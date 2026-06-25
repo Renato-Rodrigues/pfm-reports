@@ -31,6 +31,12 @@
   knitWd <- getwd()
   outputDir <- .absPath(outputDir)
   dir.create(outputDir, showWarnings = FALSE, recursive = TRUE)
+  # Anchor the report panel cache to an ABSOLUTE location (under outputDir), so it is never
+  # written cwd-relative into the run-group folder during a cluster render (2026-06-24). A
+  # user/config override (pfmreports.panelCacheDir) still wins.
+  if (!nzchar(getOption("pfmreports.panelCacheDir", ""))) {
+    options(pfmreports.panelCacheDir = file.path(outputDir, "panel-cache"))
+  }
   if (isTRUE(verbose)) message("[pfmreports] rendering ", name, " -> ",
                                file.path(outputDir, outputFile))
   rmarkdown::render(

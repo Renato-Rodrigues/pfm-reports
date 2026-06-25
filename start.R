@@ -8,6 +8,7 @@
 #   Rscript start.R --group=guided --mode=guided --cluster=local
 #   Rscript start.R --group=no-fe54 --qos=medium --time=2-00:00:00 --selectFE=H12,OECDp,Mundlak
 #   Rscript start.R --selectFE=all                    # lift the FE constraint (allow pooled noFE)
+#   Rscript start.R --bootstrap=200 --bootstrapDetail=full   # + selection-uncertainty bootstrap (ADR 0025)
 #
 # Paths (relative paths are resolved against the current working directory):
 #   madrat data cache : --cachefolder= | config cachefolder/cacheDir | default data/cache
@@ -49,9 +50,19 @@ if (!is.null(gdx) && !file.exists(gdx)) {
 render   <- hasFlag("render")
 selectFE <- getArg("selectFE", NULL)
 
+# Selection-uncertainty bootstrap (ADR 0025): --bootstrap=<N> adds the heavy `selection-bootstrap`
+# step (region cluster bootstrap of the selection). --bootstrapDetail=channel|full (default
+# channel = channel-set stability; full also reports exact-spec frequency, for the publication run).
+bootN    <- getArg("bootstrap", NULL)
+stepsArg <- getArg("steps", "sweep,robustness,temporal,subnational")
+stepsVec <- strsplit(stepsArg, ",")[[1]]
+if (!is.null(bootN) && !("selection-bootstrap" %in% stepsVec)) {
+  stepsVec <- c(stepsVec, "selection-bootstrap")
+}
+
 callArgs <- list(
   group           = getArg("group", "exhaustive"),
-  steps           = strsplit(getArg("steps", "sweep,robustness,temporal,subnational"), ",")[[1]],
+  steps           = stepsVec,
   mode            = getArg("mode", "exhaustive"),
   selectionMethod = getArg("selectionMethod", "levels-first"),
   resultsDir      = absify(getArg("resultsDir", def("resultsDir", "output"))),
@@ -67,6 +78,8 @@ callArgs <- list(
   mem             = getArg("mem", NULL),
   outputDir       = absify(getArg("outputDir", def("outputDir", "output"))),
   render          = render,
+  bootstrapResamples = as.integer(if (is.null(bootN)) "200" else bootN),
+  bootstrapDetail = getArg("bootstrapDetail", "channel"),
   forceRefit      = hasFlag("forceRefit")
 )
 # Forwarded to runSweep -> runChannelsWorkflow. Default (arg omitted) leaves selectFE unset, so the

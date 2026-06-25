@@ -189,7 +189,9 @@ fit_model <- function(cfg, sector, stage) {
         useMundlak                = isTRUE(cfg$useMundlak),
         logisticTimeTrend         = isTRUE(cfg$logisticTimeTrend),
         gdpGovInteraction         = isTRUE(cfg$gdpGovInteraction),
-        logTransform              = TRUE
+        logTransform              = TRUE,
+        priceLink                 = cfg$priceLink %||% "log1p",
+        priceCeilingMax           = cfg$priceCeilingMax %||% 1000
       )
     }
   }, error = function(e) { message("Model fit error (", sector, "/", stage, "): ", conditionMessage(e)); NULL })

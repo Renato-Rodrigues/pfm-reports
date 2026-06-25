@@ -76,6 +76,8 @@ for (sec in sectors) {
     logisticTimeTrend = isTRUE(c0$logisticTimeTrend),
     panelTransform = c0$panelTransform,
     nickellCorrection = isTRUE(c0$nickellCorrection),
+    priceLink = c0$priceLink %||% "log1p",
+    priceCeilingMax = c0$priceCeilingMax %||% 1000,
     modelDir = model_dir, verbose = FALSE
   )
 }

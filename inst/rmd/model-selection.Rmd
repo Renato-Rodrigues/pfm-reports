@@ -301,6 +301,143 @@ howToRead(
   "Projection-Sanity verdict are in the Selection report.", type = "table")
 ```
 
+# Selection uncertainty (ADR 0025)
+
+How stable is the chosen deliverable to the specification search? Two in-report layers (the
+region-block bootstrap is a separate opt-in cluster step).
+
+> **Note — these layers reflect the *maximin ranking* (before the Projection-Sanity gate).** The
+> deployed deliverable is the maximin band member that *also* passes Projection-Sanity (clamp /
+> explosion checks), applied only in the full pipeline. So the band leader / knob winner shown here
+> can differ from the deployed spec — e.g. the stringency maximin-top may be a Vertical-Accountability
+> spec while the deployed one is the Diagonal-Accountability spec that passed sanity. Read these for
+> **channel-set stability**, and see the Selection report for the single deployed model.
+
+## Near-tie confidence set {.tabset}
+
+```{r conf-set, results='asis'}
+eps <- 0.025  # deliverable near-tie tolerance (ADR 0022)
+chOf <- function(m) vapply(strsplit(as.character(m), " ", fixed = TRUE),
+                           function(x) if (length(x) >= 2) x[[2]] else "", character(1))  # IQ-channel token from the spec name
+for (stg in stages) {
+  mm <- wf$maximin[[stg]]; if (is.null(mm)) next
+  p <- mm[mm$gatePass %in% TRUE, , drop = FALSE]; if (!nrow(p)) next
+  lead <- p$meanDeltaR2[1]
+  band <- p[p$minTier == p$minTier[1] & !is.na(p$meanDeltaR2) & p$meanDeltaR2 >= lead - eps, ,
+            drop = FALSE]
+  band$channels <- chOf(band$model)
+  cat(sprintf("### %s\n\n", stg))
+  cat(sprintf("**%d spec(s)** are within ε = %.3f of the leader (statistically tied on theory). ",
+              nrow(band), eps))
+  uch <- unique(band$channels)
+  cat(sprintf("They span **%d distinct channel set(s)**%s.\n\n", length(uch),
+              if (length(uch) == 1) " — i.e. the channel choice is unambiguous in the tie" else ""))
+  print(interactiveTable(
+    band[, intersect(c("model", "channels", "minTier", "meanDeltaR2", "sumBIC", "idleControl",
+                       "fragility"), names(band))],
+    caption = paste0(stg, " — near-tie confidence set (within ε of the leader)")))
+  cat("\n\n")
+}
+howToRead(
+  "The specifications statistically tied with the deliverable (same worse-sector tier, mean ",
+  "ΔR²(theory) within ε). A small set sharing one channel set means the pick is robust; a large ",
+  "set spanning many channel sets means the exact winner is partly arbitrary — read the *channel* ",
+  "agreement, not the single row.", type = "table")
+```
+
+## Knob-sensitivity {.tabset}
+
+```{r knob-sens, results='asis'}
+realFE <- "fe:(H12|OECDp|Mundlak)"
+mmCols <- intersect(c("model", "sector", "sigActorPower", "sigInstQual", "sigInteractions",
+                      "deltaR2Theory", "pseudoR2", "bic", "maxVIF", "converged", "usesLagged",
+                      "nFE", "nObs", "sigControl", "nControl", "trendShare"), names(results))
+base_args <- list(nearTieEps = 0.025, feParsimonyWeight = 0, dropIdleControls = TRUE,
+                  softVifGate = 6)
+knobs <- list(
+  "deliverable (default)"             = list(),
+  "classic BIC (feParsimonyWeight=1)" = list(feParsimonyWeight = 1),
+  "keep idle controls"                = list(dropIdleControls = FALSE),
+  "no VIF preference"                 = list(softVifGate = Inf),
+  "wider band (ε=0.05)"               = list(nearTieEps = 0.05),
+  "tighter band (ε=0.01)"             = list(nearTieEps = 0.01))
+chOf <- function(m) vapply(strsplit(as.character(m), " ", fixed = TRUE),
+                           function(x) if (length(x) >= 2) x[[2]] else "", character(1))
+for (stg in stages) {
+  sub_s <- results[results$stage == stg & grepl(realFE, results$model), , drop = FALSE]
+  if (!nrow(sub_s)) next
+  rows <- lapply(names(knobs), function(nm) {
+    args <- utils::modifyList(c(list(df = sub_s[, mmCols, drop = FALSE]), base_args), knobs[[nm]])
+    mm <- tryCatch(do.call(pfm::computeMaximinScore, args), error = function(e) NULL)
+    if (is.null(mm)) return(NULL)
+    top <- mm[mm$gatePass %in% TRUE, , drop = FALSE]
+    if (!nrow(top)) return(data.frame(knob = nm, winner = "(none gate-passing)", channels = "",
+                                      tier = "", meanDeltaR2 = NA_real_))
+    data.frame(knob = nm, winner = top$model[1], channels = chOf(top$model[1]),
+               tier = top$minTier[1], meanDeltaR2 = round(top$meanDeltaR2[1], 3))
+  })
+  tab <- do.call(rbind, rows)
+  nWin <- length(unique(tab$winner)); nCh <- length(unique(tab$channels[nzchar(tab$channels)]))
+  cat(sprintf("### %s\n\n", stg))
+  cat(sprintf(paste0("Across %d knob settings: **%d distinct winning spec(s)**, **%d distinct ",
+              "channel set(s)**.%s\n\n"), nrow(tab), nWin, nCh,
+              if (nCh == 1) " The channel set is invariant — the result is a knob-robust channel claim."
+              else " The exact winner moves with the knobs; report channel agreement, not the row."))
+  print(interactiveTable(tab, caption = paste0(stg, " — winner under each selection-knob setting")))
+  cat("\n\n")
+}
+howToRead(
+  "Re-runs the Maximin Selection Rule on the sweep under each knob flipped one at a time. The ",
+  "scientific claim is the **channel set**, which is far more stable than the exact winning row; ",
+  "a single distinct channel set across knobs is the robustness headline. Sensitivity to ε and ",
+  "to the FE-discount is expected — see the Parsimony Frontier.", type = "table")
+```
+
+## Region-block bootstrap {.tabset}
+
+```{r boot-stability, results='asis'}
+bootPath <- file.path(dirname(rds_path), "selection-bootstrap.rds")
+if (!file.exists(bootPath)) {
+  cat("> *Region-block bootstrap not run for this group. Add the `selection-bootstrap` step ",
+      "(`start.R --bootstrap=<N>` or `run-sweep-slurm.sh --paper`) to populate this section ",
+      "(ADR 0025).*\n\n")
+} else {
+  boot <- readRDS(bootPath)
+  cat(sprintf(paste0("Resampling **whole regions** with replacement, %d resamples, detail = %s, ",
+              "candidate pool = top-%d gate-passing specs. The winner's channel set is recorded ",
+              "per resample.\n\n"), boot$nResamples %||% NA_integer_, boot$detail %||% "?",
+              boot$topK %||% NA_integer_))
+  for (stg in names(boot$stages)) {
+    s <- boot$stages[[stg]]
+    cat(sprintf("### %s\n\n", stg))
+    csf <- s$channelSetFreq
+    if (is.null(csf) || !length(csf)) { cat("> *No successful resamples.*\n\n"); next }
+    df <- data.frame(channel_set = names(csf), frequency = round(as.numeric(csf), 3))
+    cat(sprintf(paste0("**%d effective resamples**; the top channel set wins **%d%%** of the time ",
+                "across **%d** distinct channel sets.\n\n"), s$nEffective %||% NA_integer_,
+                round(100 * max(as.numeric(csf))), length(csf)))
+    print(interactiveTable(df, caption = paste0(stg, " — winning channel-set frequency (bootstrap)")))
+    if (!is.null(s$channelTokenFreq) && length(s$channelTokenFreq)) {
+      tf <- s$channelTokenFreq
+      cat("\n**Per-channel survival:** ",
+          paste(sprintf("%s %d%%", names(tf), round(100 * as.numeric(tf))), collapse = " · "), "\n\n")
+    }
+    if (!is.null(s$specFreq) && length(s$specFreq)) {
+      sf <- utils::head(s$specFreq, 5)
+      cat("**Top exact specs:** ",
+          paste(sprintf("%s (%d%%)", names(sf), round(100 * as.numeric(sf))), collapse = "; "), "\n\n")
+    }
+  }
+  howToRead(
+    "The gold-standard selection-uncertainty check (ADR 0025): the entire selection is re-run on ",
+    "region resamples. Read the **channel set / per-channel survival** — a channel appearing in a ",
+    "high share of resamples is robust to which regions happen to be in the sample; a deliverable ",
+    "whose channel set wins only a minority of resamples is partly an artefact of the sample. ",
+    "Exact-spec frequency (detail = full) is expected to be low and is not the headline.",
+    type = "table")
+}
+```
+
 # All fits
 
 ```{r all-fits, results='asis'}

@@ -63,13 +63,14 @@ is_absolute_path <- function(path) {
   grepl("^[A-Za-z]:", path) || grepl("^/", path) || grepl("^\\\\", path)
 }
 
-# Internal: resolve a path against the working directory when relative.
+# Internal: resolve a path to a clean ABSOLUTE path. Relative paths are joined to the working
+# directory; the result is normalised (collapses "..", duplicate slashes) so an already-absolute
+# path can never be re-relativised downstream (2026-06-24: closes the stray-folder path bug).
 #' @keywords internal
 .absPath <- function(path) {
-  if (is.null(path) || !nzchar(path) || is_absolute_path(path)) {
-    return(path)
-  }
-  file.path(getwd(), path)
+  if (is.null(path) || !nzchar(path)) return(path)
+  p <- if (is_absolute_path(path)) path else file.path(getwd(), path)
+  normalizePath(p, winslash = "/", mustWork = FALSE)
 }
 
 #' Directory of the active Run-Group (ADR 0018)
