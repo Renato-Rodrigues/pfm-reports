@@ -48,6 +48,28 @@ interactiveTable <- function(df, caption = NULL, pageLength = 15, digits = 3, fi
   }
 }
 
+#' Render several interactive tables as one tagList
+#'
+#' Use instead of \code{print(interactiveTable(...))} inside a \code{results='asis'} loop: a
+#' \pkg{DT} widget \code{print()}ed in such a loop loses its JS/CSS dependencies and renders blank.
+#' Returning a single \code{htmltools::tagList} (the chunk's value, NOT \code{results='asis'})
+#' attaches the dependencies correctly. Each list name becomes an \code{<h4>} sub-heading.
+#'
+#' @param items Named list of data.frames.
+#' @param pageLength,filter Passed to \code{\link{interactiveTable}}.
+#' @param captions Optional named character vector of captions (defaults to the list names).
+#' @return An \code{htmltools::tagList} (print it as the chunk value).
+#' @export
+tabledList <- function(items, pageLength = 15, filter = "none", captions = NULL) {
+  htmltools::tagList(lapply(names(items), function(nm) {
+    cap <- if (!is.null(captions) && nm %in% names(captions)) captions[[nm]] else nm
+    htmltools::tagList(
+      htmltools::h4(nm),
+      interactiveTable(items[[nm]], caption = cap, pageLength = pageLength, filter = filter)
+    )
+  }))
+}
+
 #' Display-cap a numeric vector at its p99 (Price Outlier convention)
 #'
 #' @param x Numeric vector.

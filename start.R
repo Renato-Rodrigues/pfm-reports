@@ -9,6 +9,8 @@
 #   Rscript start.R --group=no-fe54 --qos=medium --time=2-00:00:00 --selectFE=H12,OECDp,Mundlak
 #   Rscript start.R --selectFE=all                    # lift the FE constraint (allow pooled noFE)
 #   Rscript start.R --bootstrap=200 --bootstrapDetail=full   # + selection-uncertainty bootstrap (ADR 0025)
+#   Rscript start.R --bootstrap=200 --bootstrapDetail=full --resume --render  # resume: skip steps whose
+#                                                           #   artifact already exists (don't re-pay them)
 #
 # Paths (relative paths are resolved against the current working directory):
 #   madrat data cache : --cachefolder= | config cachefolder/cacheDir | default data/cache
@@ -80,7 +82,8 @@ callArgs <- list(
   render          = render,
   bootstrapResamples = as.integer(if (is.null(bootN)) "200" else bootN),
   bootstrapDetail = getArg("bootstrapDetail", "channel"),
-  forceRefit      = hasFlag("forceRefit")
+  forceRefit      = hasFlag("forceRefit"),
+  resume          = hasFlag("resume")
 )
 # Forwarded to runSweep -> runChannelsWorkflow. Default (arg omitted) leaves selectFE unset, so the
 # workflow's own default applies: c("H12","OECDp","Mundlak") — a real region-FE/Mundlak deliverable

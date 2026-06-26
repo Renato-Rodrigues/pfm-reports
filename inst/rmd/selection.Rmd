@@ -23,7 +23,6 @@ library(dplyr)
 
 root <- getwd()
 library(pfmreports)
-library(pfmreports)
 
 rds_path <- params$workflowRds
 if (!grepl("^([A-Za-z]:|/|\\\\)", rds_path)) rds_path <- file.path(root, rds_path)
@@ -139,83 +138,171 @@ for (stg in stages) {
 
 # Selection Algorithm {.tabset}
 
-## Stage 0 — Channel Screen
+## How selection works
+
+```{r how-selection, results='asis'}
+# Live parameters from the run where present (falls back to the documented defaults).
+sel_meta  <- wf$selectionMeta %||% list()
+vifGate   <- sel_meta$vifGate   %||% 10
+nearEps   <- sel_meta$nearTieEps %||% 0.025
+feSet     <- sel_meta$selectFE   %||% c("H12", "OECDp", "Mundlak")
+priceSev  <- sel_meta$priceSevere %||% 2000
+clampSev  <- sel_meta$clampSevereFrac %||% 0.25
+nSpec     <- length(unique(results$model))
+cat(sprintf(paste0(
+"The deliverable is chosen by a fixed, pre-registered pipeline — no per-result discretion. ",
+"For this run: **%d specifications** (`%s` sweep), gates and thresholds as shown.\n\n",
+"1. **Stage 0 — Channel Screen.** Before any model is fit, candidate institutional channels are ",
+"screened per sector/stage: pairs that are too collinear (|r| above threshold) are marked ",
+"*forbidden* (may never co-enter a spec), and each slot's candidates are ranked by partial ",
+"correlation with the outcome. *(see the Stage-0 tab)*\n",
+"2. **The sweep (fit grid).** Every surviving spec is fit for all four sector×stage cells ",
+"(Adoption/Stringency × Bulk/Diffuse). Saturating-price stringency twins are fit on the ",
+"stringency stage only (ADR 0028).\n",
+"3. **Hard gates (pass/fail, both sectors).** maxVIF < **%g**, model converged, no unintended ",
+"lagged term, ΔR² ≤ 1. A spec failing any gate in either sector is set `gatePass = FALSE` and ",
+"ranks last. *(see Gate attrition)*\n",
+"4. **Maximin tier.** Specs are ranked by their **worse sector's** theory Tier ",
+"(Green > Blue > Yellow) — a spec is only as good as its weaker sector.\n",
+"5. **ΔR²(theory) tie-break.** Within a tier, higher mean ΔR²(theory) wins (the unique ",
+"incremental theory signal).\n",
+"6. **Within-band tie-breaks** (specs within ε = **%g** of the leader): drop-idle-control → ",
+"VIF/temporal fragility → low trend share → FE-discounted BIC → name. Temporal sign-stability ",
+"is **not** a selection key (it is a robustness exhibit, ADR 0027).\n",
+"7. **Projection Sanity gate.** The maximin leader is projection-tested on the scenario; severe ",
+"violations (price > **%g** USD/tCO2, invalid prices, a dead region block, > **%g%%** ",
+"clamp-pinned region-years) disqualify it and the next candidate is tried (expanding batches). ",
+"The first candidate that passes is the **deliverable**. *(see Projection Sanity trace & flags)*\n\n",
+"Region fixed effects swept: **%s**. Everything labelled *report-only* below (AUC, Brier, RMSE, ",
+"calibration) is shown for transparency and plays **no** role in selection.\n"),
+  nSpec, wf$mode, vifGate, nearEps, priceSev, round(100 * clampSev),
+  paste(feSet, collapse = ", ")))
+```
+
+## Stage 0 — Channel Screen {.tabset}
+
+The **Channel Screen** is the pre-fit filter (Stage 0 of ADR 0004): for each sector×stage it
+flags *forbidden* channel pairs (too collinear to co-enter a spec) and ranks each slot's
+candidate channels by their partial correlation with the outcome — the data-driven definition of
+the "best" accountability/state-capacity index, computed *before* any model is estimated. One
+sub-tab per sector×stage below.
 
 ```{r screen, results='asis'}
-if (length(wf$screens) > 0) {
-  shown <- FALSE
-  for (nm in names(wf$screens)) {
+# Order the four screens stage-first to match the requested Adoption_Bulk / Adoption_Diffuse /
+# Stringency_Bulk / Stringency_Diffuse tabs (wf$screens is keyed <sector>_<stage>).
+wantOrder <- c("Bulk_Adoption", "Diffuse_Adoption", "Bulk_Stringency", "Diffuse_Stringency")
+tabLabel  <- c(Bulk_Adoption = "Adoption_Bulk", Diffuse_Adoption = "Adoption_Diffuse",
+               Bulk_Stringency = "Stringency_Bulk", Diffuse_Stringency = "Stringency_Diffuse")
+keys <- intersect(wantOrder, names(wf$screens))
+if (length(keys) == 0) keys <- names(wf$screens)
+if (length(keys) == 0) {
+  cat("> No screen results in this workflow RDS.\n")
+} else {
+  for (nm in keys) {
     scr <- wf$screens[[nm]]
-    if (is.null(scr)) next
-    cat(sprintf("### %s\n\n", nm))
+    cat(sprintf("### %s\n\n", tabLabel[[nm]] %||% nm))
+    if (is.null(scr)) { cat("*No screen computed.*\n\n"); next }
     if (nrow(scr$forbiddenPairs) > 0) {
       print(knitr::kable(scr$forbiddenPairs, digits = 3,
                          caption = paste0("Forbidden pairs (|r| > ", scr$corThreshold, ")")))
       cat("\n\n")
-    } else {
-      cat("*No forbidden channel pairs.*\n\n")
-    }
+    } else cat("*No forbidden channel pairs.*\n\n")
     if (nrow(scr$slotRankings) > 0) {
       print(knitr::kable(scr$slotRankings, digits = 3,
                          caption = "Slot rankings (partial correlation with the outcome)"))
       cat("\n\n")
     }
-    shown <- TRUE
+    howToRead(
+      "Forbidden pairs may never co-enter one spec (too collinear). Slot rankings give each ",
+      "candidate channel's partial correlation with the outcome controlling for the other ",
+      "slots — higher = the stronger candidate for that slot in this sector/stage.", type = "table")
   }
-  if (shown) howToRead(
-    "Stage 0 of ADR 0004, computed before any model was fit. Forbidden pairs may never ",
-    "co-enter one spec. Slot rankings give each candidate's partial correlation with the ",
-    "outcome controlling for the GovEff slot — the data-driven definition of 'best ",
-    "accountability index'.", type = "table")
-} else {
-  cat("> No screen results in this workflow RDS.\n")
 }
 ```
 
 ## Maximin rankings
 
-```{r maximin, results='asis'}
-for (stg in stages) {
-  cat(sprintf("### %s\n\n", stg))
-  print(interactiveTable(wf$maximin[[stg]],
-                         caption = paste0(stg, " — Maximin ranking (all specs)")))
-  cat("\n\n")
-}
-howToRead(
-  "All specs ranked by the Maximin Selection Rule: worse-sector tier first ",
-  "(Green > Blue > Yellow), tie-broken by mean ΔR²(theory). gatePass = FALSE rows ",
-  "failed VIF/convergence/lagged gates in at least one sector and rank last. ",
-  "Sort by meanDeltaR2 or minDeltaR2 to see the alternative orderings.", type = "table")
+Every spec ranked by the full Maximin Selection Rule (worse-sector tier → mean ΔR²(theory) →
+within-band tie-breaks). This is the master table the deliverable is read off; one block per
+stage. `gatePass = FALSE` rows failed a hard gate in at least one sector and sort last.
+
+```{r maximin}
+tabledList(stats::setNames(lapply(stages, function(stg) wf$maximin[[stg]]), stages),
+           pageLength = 15, filter = "top")
 ```
 
-## Projection Sanity trace
+```{r maximin-cap, results='asis'}
+howToRead(
+  "Worse-sector tier first (Green > Blue > Yellow), tie-broken by mean ΔR²(theory), then the ",
+  "within-band keys. `rank` is the maximin position; `gatePass = FALSE` rows failed VIF/",
+  "convergence/lagged gates in a sector and rank last. Sort by meanDeltaR2 / minDeltaR2 / sumBIC ",
+  "to see the alternative orderings.", type = "table")
+```
+
+## Projection Sanity trace {.tabset}
+
+The **expanding-batch walk** down the maximin ranking: starting from the top, each candidate is
+projection-tested and its severe/warning flag counts recorded, until one passes — that one is
+selected. Split by stage below.
 
 ```{r sanity-trace, results='asis'}
 any_trace <- FALSE
 for (stg in stages) {
   sn <- wf$sanity[[stg]]
-  if (is.null(sn) || is.null(sn$trace)) next
-  any_trace <- TRUE
   cat(sprintf("### %s\n\n", stg))
+  if (is.null(sn) || is.null(sn$trace)) {
+    cat("> Sanity gate not run for this stage (no scenario data) — selection was pure maximin.\n\n")
+    next
+  }
+  any_trace <- TRUE
   print(knitr::kable(sn$trace, caption = paste0(stg, " — expanding-batch evaluation order")))
   cat("\n\n")
-}
-if (any_trace) {
   howToRead(
-    "The expanding-batch walk down the maximin ranking: each candidate's severe/warning ",
-    "flag counts from the five Projection Sanity rules, in evaluation order. The first ",
-    "PASS is selected; 'not evaluable' rows are FD specs (no scenario projection method ",
-    "yet, ADR 0005) or projection failures.", type = "table")
-} else {
-  cat("> Sanity gate was not run (no scenario data) — selection was pure maximin.\n")
+    "`order` is the maximin position evaluated; `nSevere`/`nWarning` are the flag counts from ",
+    "the Projection Sanity rules. The first row with 0 severe flags is selected. 'Not evaluable' ",
+    "rows are FD specs (no scenario projection method yet, ADR 0005) or projection failures.",
+    type = "table")
 }
+if (!any_trace) cat("\n> Sanity gate was not run in any stage — selection was pure maximin.\n")
+```
+
+## Gate attrition
+
+```{r gate-attrition, results='asis'}
+# Funnel of how many specs survive each hard gate, per stage (sweep-derivable).
+funnel <- do.call(rbind, lapply(stages, function(stg) {
+  rs <- results[results$stage == stg, ]
+  byModel <- split(rs, rs$model)
+  passAll <- function(f) sum(vapply(byModel, function(d) all(f(d)), logical(1)))
+  data.frame(
+    Stage = stg,
+    `Specifications` = length(byModel),
+    `Converged (both sectors)` = passAll(function(d) isTRUE(all(d$converged))),
+    `+ maxVIF < 10` = passAll(function(d) all(d$converged) && all(d$maxVIF < 10, na.rm = TRUE)),
+    `+ ΔR² ≤ 1 (gate-passing pool)` = sum(vapply(split(wf$maximin[[stg]], wf$maximin[[stg]]$model),
+                                                  function(d) isTRUE(any(d$gatePass)), logical(1))),
+    `Sanity-evaluated` = if (!is.null(wf$sanity[[stg]]$trace)) nrow(wf$sanity[[stg]]$trace) else NA_integer_,
+    check.names = FALSE, stringsAsFactors = FALSE)
+}))
+print(knitr::kable(funnel, caption = "Gate attrition — specs surviving each hard gate, per stage"))
+cat("\n\n")
+howToRead(
+  "Each column is the count of specifications still standing after the named hard gate is ",
+  "applied (cumulatively, both sectors). The drop between columns is how aggressively that gate ",
+  "filters; the last gate-passing pool is what the maximin ranking and the Projection Sanity ",
+  "gate then operate on.", type = "table")
 ```
 
 # Alternative Selections {.tabset}
 
+The deliverable follows one rule (the Maximin tab). These are the **same sweep ranked under
+different objectives** — to show how much the choice depends on the rule, and what a
+predictability-first, parsimony-first, theory-first or per-sector analyst would pick instead.
+None of these change the deliverable.
+
 ## Best per sector/stage
 
-```{r best-sector, results='asis'}
+```{r best-sector}
 if (!is.null(wf$bestPerSector)) {
   interactiveTable(wf$bestPerSector, caption = "Independently best model per sector/stage")
 }
@@ -230,7 +317,7 @@ howToRead(
 
 ## Best by predictability
 
-```{r best-pred, results='asis'}
+```{r best-pred}
 pred_ad <- results %>%
   filter(stage == "Adoption", converged, maxVIF < 10) %>%
   group_by(model) %>%
@@ -238,14 +325,16 @@ pred_ad <- results %>%
             meanCalibSlope = mean(calibrationSlope, na.rm = TRUE),
             minTier = min(tier), .groups = "drop") %>%
   arrange(desc(meanAUC)) %>% head(15)
-print(interactiveTable(pred_ad, caption = "Adoption — top 15 by mean AUC (both sectors)"))
-cat("\n\n")
 pred_st <- results %>%
   filter(stage == "Stringency", converged, maxVIF < 10) %>%
   group_by(model, panelTransform) %>%
   summarise(meanRMSE = mean(rmse, na.rm = TRUE), .groups = "drop") %>%
   arrange(meanRMSE) %>% head(15)
-print(interactiveTable(pred_st, caption = "Stringency — top 15 by mean in-sample RMSE"))
+tabledList(list("Adoption — top 15 by mean AUC (both sectors)" = pred_ad,
+                "Stringency — top 15 by mean in-sample RMSE" = pred_st))
+```
+
+```{r best-pred-cap, results='asis'}
 howToRead(
   "Predictive Diagnostics view (report-only — these play no role in selection). ",
   "Adoption: AUC = discrimination (1 = perfect), Brier = probability error (lower ",
@@ -254,17 +343,110 @@ howToRead(
   "is in log-price, FD RMSE in Δlog-price).", type = "table")
 ```
 
+## Best by parsimony
+
+```{r best-parsimony}
+# Simplest-adequate lens: among gate-passing specs, rank by FE-discounted BIC (the maximin
+# tie-break), summed across sectors so it is comparable to the deliverable rule.
+parsi <- lapply(stages, function(stg) {
+  rs <- results %>% filter(stage == stg, converged, maxVIF < 10)
+  if (!"bic" %in% names(rs) || !nrow(rs)) return(NULL)
+  rs %>% group_by(model, panelTransform) %>%
+    summarise(sumBIC = sum(bic, na.rm = TRUE), nFE = max(nFE, na.rm = TRUE),
+              adjBIC = sum(bic, na.rm = TRUE) - sum(nFE * log(pmax(nObs, 1)), na.rm = TRUE),
+              minTier = min(tier), meanDeltaR2 = mean(deltaR2Theory, na.rm = TRUE),
+              .groups = "drop") %>%
+    arrange(adjBIC) %>% head(15)
+})
+names(parsi) <- stages
+tabledList(Filter(Negate(is.null), parsi))
+```
+
+```{r best-parsimony-cap, results='asis'}
+howToRead(
+  "Ranked by FE-discounted BIC (`adjBIC = ΣBIC − Σ nFE·log n`) — the parsimony tie-break the ",
+  "maximin rule uses, so Region-FE granularity doesn't decide on raw parameter count. Lower ",
+  "adjBIC = the simplest spec that still fits. Compare the top row here against the deliverable: ",
+  "if they differ, the deliverable is buying theory tier / ΔR² at a parsimony cost.", type = "table")
+```
+
+## Best by theory content
+
+```{r best-theory}
+theoryRank <- lapply(stages, function(stg) {
+  results %>% filter(stage == stg, converged, maxVIF < 10) %>%
+    group_by(model, panelTransform) %>%
+    summarise(meanDeltaR2 = mean(deltaR2Theory, na.rm = TRUE),
+              minDeltaR2 = min(deltaR2Theory, na.rm = TRUE),
+              meanTheoryFrac = mean(theoryFrac, na.rm = TRUE),
+              minTier = min(tier), .groups = "drop") %>%
+    arrange(desc(meanDeltaR2)) %>% head(15)
+})
+names(theoryRank) <- stages
+tabledList(theoryRank)
+```
+
+```{r best-theory-cap, results='asis'}
+howToRead(
+  "Ranked purely on institutional-theory content — mean ΔR²(theory) (the unique incremental ",
+  "signal from the theory terms), with worse-sector ΔR² and Theory Fraction shown. This ignores ",
+  "the tier gating, so it surfaces specs with the most theory signal even if a group misses 5% ",
+  "significance. ΔR² leads; Theory Fraction is mechanically low under strong Region FE.",
+  type = "table")
+```
+
+## Stringency: log1p vs saturating
+
+```{r price-form}
+# ADR 0028 head-to-head: same channel spec, both price forms. The saturating twin is named
+# "… | satP"; pair on the base name and lay the two forms side by side.
+stForm <- results %>%
+  filter(stage == "Stringency", panelTransform == "levels", converged) %>%
+  mutate(form = ifelse(grepl("\\| satP$", model), "saturating", "log1p"),
+         base = sub(" \\| satP$", "", model)) %>%
+  group_by(base, form) %>%
+  summarise(meanRMSE = mean(rmse, na.rm = TRUE), maxVIF = max(maxVIF, na.rm = TRUE),
+            meanDeltaR2 = mean(deltaR2Theory, na.rm = TRUE), .groups = "drop")
+has_sat <- any(stForm$form == "saturating")
+if (has_sat) {
+  cols <- c("meanRMSE", "maxVIF", "meanDeltaR2")
+  l <- as.data.frame(stForm[stForm$form == "log1p", c("base", cols)])
+  s <- as.data.frame(stForm[stForm$form == "saturating", c("base", cols)])
+  names(l)[-1] <- paste0(cols, "_log1p")
+  names(s)[-1] <- paste0(cols, "_saturating")
+  wide <- merge(l, s, by = "base")
+  wide <- wide[order(wide$meanRMSE_saturating), ]
+  interactiveTable(wide, caption = "Levels-stringency specs — log1p vs saturating (Pmax=1000)",
+                   pageLength = 20, filter = "top")
+}
+```
+
+```{r price-form-cap, results='asis'}
+if (has_sat) {
+  howToRead(
+    "Each row is one channel spec fit both ways (ADR 0028): `_log1p` = unbounded log(1+ECP), ",
+    "`_saturating` = Pmax-bounded. RMSE is on different scales between forms (not directly ",
+    "comparable as a fit contest) — the point is that the saturating form **cannot** produce the ",
+    "explosive out-of-sample price tails the log1p form can, at little ΔR²/VIF cost. Use this to ",
+    "decide whether the bounded form is worth adopting for projection.", type = "table")
+} else {
+  cat("> No saturating (`… | satP`) stringency specs in this sweep — re-run after wiring ADR 0028 ",
+      "(`channelSpecs()` now emits the twins) to populate this comparison.\n")
+}
+```
+
 ## Stage focus — top 10 per stage
 
-```{r stage-focus, results='asis'}
-for (stg in stages) {
-  top10 <- wf$maximin[[stg]] %>% filter(gatePass) %>% head(10)
-  cat(sprintf("### %s\n\n", stg))
-  print(interactiveTable(top10, caption = paste0(stg, " — top 10 gate-passing specs")))
-  cat("\n\n")
-}
-howToRead("The shortlist per stage under the deliverable rule. Models here are the ",
-          "candidates worth a Stage-4 confirmation pass.", type = "table")
+```{r stage-focus}
+focus <- lapply(stages, function(stg) wf$maximin[[stg]] %>% filter(gatePass) %>% head(10))
+names(focus) <- stages
+tabledList(focus)
+```
+
+```{r stage-focus-cap, results='asis'}
+howToRead("The shortlist per stage under the deliverable rule — the gate-passing specs worth a ",
+          "confirmation pass. The top row is the maximin winner before the Projection Sanity gate.",
+          type = "table")
 ```
 
 # Top Model Forest Plots {.tabset}
@@ -286,6 +468,20 @@ howForest()
 ```
 
 # Projection Sanity Flags
+
+**What the sanity flags are.** After the Maximin ranking picks a leader, that spec is *projected*
+forward on the scenario and screened by the **Projection Sanity gate** — a set of rules that catch
+projections no carbon-price path should produce. Each rule that trips records a **flag** with a
+**severity**:
+
+- **severe** — *disqualifying*. The spec is rejected and the next maximin candidate is tried.
+  Severe rules: projected price > 2000 USD/tCO2, invalid/negative prices, a region block that never
+  adopts, or > 25% of region-years pinned at the price clamp (the clamp is load-bearing).
+- **warning** — *recorded but not disqualifying*. e.g. all-region adoption saturation (expected
+  under an ambitious scenario), seam jumps at the history→scenario join, isolated price spikes.
+
+The table below lists **every** flag raised while evaluating candidates (not just the selected
+one), so you can see which specs were rejected and why.
 
 ```{r sanity-flags, results='asis'}
 flag_rows <- list()
@@ -319,11 +515,13 @@ howToRead(
 
 # All Models
 
-```{r all-models, results='asis'}
+```{r all-models}
 interactiveTable(
   results %>%
-    select(model, sector, stage, panelTransform, tier, deltaR2Theory, theoryFrac,
-           aic, pseudoR2, nObs, maxVIF, converged, sigActorPower, sigInstQual,
+    select(model, sector, stage, panelTransform,
+           dplyr::any_of("priceLink"), tier, deltaR2Theory, theoryFrac,
+           aic, dplyr::any_of("bic"), pseudoR2, nObs, dplyr::any_of(c("nFE", "trendShare")),
+           maxVIF, converged, sigActorPower, sigInstQual,
            sigInteractions, auc, brier, calibrationSlope, rmse),
   caption = "Every fit in the sweep — all measures", pageLength = 25, filter = "top"
 )
@@ -339,30 +537,15 @@ howToRead(
 
 # Measure Definitions
 
-```{r defs, results='asis'}
-defs <- data.frame(
-  Measure = c("Tier", "ΔR²(theory)", "Theory Frac.", "AIC", "pseudo-R²", "maxVIF",
-              "Coefficients", "Stringency model", "AUC", "Brier", "Calibration slope",
-              "RMSE", "Maximin rank", "Projection Sanity"),
-  Definition = c(
-    "Green = ≥1 significant term in all three theory groups (Actor Power, Inst. Quality, Interaction); Blue = at least one group; Yellow = none.",
-    "Pseudo-R² of the full model minus a baseline refit with all theory terms removed — the unique explanatory contribution of theory.",
-    "|theory contribution| / Σ|non-intercept contributions| of the linear predictor — how much of the model's signal is theory vs controls/FE/trend.",
-    "Akaike information criterion (−2logL + 2k); lower = better fit-complexity trade-off. Comparable only within the same stage, sector and panelTransform.",
-    "McFadden (adoption) / deviance (stringency) R². In-sample explanatory power.",
-    "Largest variance inflation factor among predictors; ≥10 fails the hard gate.",
-    "Drivers are **standardized**, so every coefficient is per **one standard deviation** of its driver — magnitudes are directly comparable across drivers. Standardization is fit-/tier-neutral; de-scale to natural units by dividing by the driver's SD.",
-    "Log-linear: gaussian **identity** link on log(1+ECP), so E[log(1+ECP)] = Xβ and ECP = expm1(Xβ) (NOT a Gamma/log-link 'double-log').",
-    "Probability a random adopting region-year is ranked above a non-adopting one (0.5 = chance, 1 = perfect discrimination). Report-only.",
-    "Mean squared error of predicted probabilities; compare against predicting the base rate. Report-only.",
-    "Slope of refitting the outcome on the model's own logit: 1 = calibrated, <1 = overconfident. Report-only.",
-    "Root-mean-square error of fitted vs observed outcome on the estimation scale. Report-only.",
-    "Position under the Maximin Selection Rule: worse-sector tier first, then mean ΔR²(theory); hard gates on both sectors.",
-    "Scenario gate. Severe (disqualifying): price > 2000 USD/tCO2, invalid prices, a never-adopting region block. Warnings (reported only): all-region adoption saturation (expected under ambitious policy), seam jumps, price spikes. Expanding batches up to a limit."
-  ),
-  stringsAsFactors = FALSE
-)
-knitr::kable(defs)
-howToRead("Reference card for every measure used in this report and in selection. ",
-          "'Report-only' measures never influence which model is chosen.", type = "table")
+```{r defs}
+# Single source of truth shared across all reports (pfmreports::measureDefinitions); grouped so
+# the reference card covers every statistic shown in this report AND the others in the suite.
+interactiveTable(measureDefinitions(), caption = "Measure / statistic glossary (all PFM reports)",
+                 pageLength = 40, filter = "top")
+```
+
+```{r defs-cap, results='asis'}
+howToRead("The canonical reference card for every measure used anywhere in the PFM report suite ",
+          "(filter the `Group` / `Shown in` columns to narrow it). 'Report-only' measures never ",
+          "influence which model is chosen.", type = "table")
 ```

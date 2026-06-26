@@ -27,6 +27,7 @@ Imports:
     purrr,
     kableExtra,
     DT,
+    htmltools,
     yaml,
     jsonlite,
     rlang,
