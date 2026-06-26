@@ -27,8 +27,6 @@ library(pfm)
 
 root <- getwd()
 library(pfmreports)
-library(pfmreports)
-library(pfmreports)
 
 if (nzchar(params$cachefolder)) madrat::setConfig(cachefolder = params$cachefolder)
 madrat::setConfig(forcecache = TRUE)
@@ -105,6 +103,33 @@ if (!is.null(scen_mag)) {
   }
 }
 has_proj <- any(!vapply(proj, is.null, logical(1)))
+
+# ── Historical region × year fitted probabilities (feeds thresholds, classification, maps) ──────
+histProb <- bind_rows(lapply(sectors, function(sec) {
+  f <- fits[[sec]]
+  p <- fittedProbs(f); idx <- usedRows(f)
+  d <- f$data[idx, , drop = FALSE]
+  n <- min(length(p), nrow(d))
+  data.frame(sector = sec, region = as.character(d$region[seq_len(n)]),
+             year = as.integer(d$year[seq_len(n)]), y = as.numeric(f$model$y)[seq_len(n)],
+             prob = p[seq_len(n)], stringsAsFactors = FALSE)
+}))
+
+# Reference adoption thresholds per sector (ADR 0029): Sens-90 (default), Youden, base-rate.
+thr <- lapply(sectors, function(sec) {
+  d <- histProb[histProb$sector == sec, ]
+  adoptionReferenceThresholds(d$y, d$prob)
+})
+names(thr) <- sectors
+
+# Region → H12 fixed-effect group (for the regional-groups map, C1). Majority H12 per 54-region.
+regionH12 <- tryCatch({
+  m54 <- madrat::toolGetMapping("regionmapping_54.csv", type = "regional", where = "mappingfolder")
+  m12 <- madrat::toolGetMapping("regionmappingH12.csv", type = "regional", where = "mappingfolder")
+  c2h <- stats::setNames(as.character(m12$RegionCode), as.character(m12$CountryCode))
+  tapply(as.character(m54$CountryCode), as.character(m54$RegionCode),
+         function(cc) { tb <- sort(table(c2h[cc]), decreasing = TRUE); if (length(tb)) names(tb)[1] else NA_character_ })
+}, error = function(e) NULL)
 ```
 
 # Executive Summary
@@ -155,8 +180,9 @@ for (sec in sectors) {
          x = "Log-odds per 1 SD of the driver", y = NULL)
   print(p)
   cat("\n\n")
-  print(interactiveTable(ct %>% select(term, estimate, stdError, zValue, pValue, signif),
-                         caption = paste0(sec, " — full coefficient table (per-SD drivers)")))
+  print(knitr::kable(ct %>% select(term, estimate, stdError, zValue, pValue, signif) %>%
+                       mutate(across(where(is.numeric), ~round(.x, 3))),
+                     caption = paste0(sec, " — full coefficient table (per-SD drivers)")))
   cat("\n\n")
 }
 howToRead("The equation is on the log-odds scale with significance stars from ",
@@ -168,6 +194,13 @@ howToRead("The equation is on the log-odds scale with significance stars from ",
 
 # Real-World Effects — Average Marginal Effects {.tabset}
 
+*What this section is for.* The coefficients above are on the log-odds scale, which is hard to
+interpret directly. **Average Marginal Effects (AMEs)** translate each driver into the metric that
+matters — **percentage points of adoption probability** — so you can read off "a one-SD increase in
+this driver raises the adoption probability by X pp, on average". This is the closest single number
+to a real-world effect size for the adoption stage, and the basis for the channel story told to
+REMIND. One tab per sector.
+
 ```{r ame, results='asis'}
 for (sec in sectors) {
   cat(sprintf("## %s\n\n", sec))
@@ -176,7 +209,7 @@ for (sec in sectors) {
     am2 <- am
     num <- vapply(am2, is.numeric, logical(1))
     am2[num] <- lapply(am2[num], function(x) round(x * 100, 2))
-    print(interactiveTable(am2, caption = paste0(sec, " — AME in percentage points of P(adoption), per 1 SD")))
+    print(knitr::kable(am2, caption = paste0(sec, " — AME in percentage points of P(adoption), per 1 SD")))
     cat("\n\n")
   } else cat("*AMEs not available.*\n\n")
 }
@@ -250,13 +283,18 @@ for (sec in sectors) {
   for (v in names(pp)) {
     prof <- pp[[v]]
     if (is.null(prof) || nrow(prof) == 0) next
-    xcol <- setdiff(colnames(prof), c("prob", "lower", "upper"))[1]
+    # The profile df is (variable, x, prob, lower, upper): x = the SWEPT driver value. Use it
+    # explicitly — picking the first non-prob column grabbed the constant `variable` label and
+    # drew every point at one x (a vertical line). 2026-06-26.
+    xcol <- if ("x" %in% colnames(prof)) "x" else
+      setdiff(colnames(prof), c("variable", "prob", "lower", "upper"))[1]
     p <- ggplot(prof, aes(x = .data[[xcol]], y = prob)) +
       geom_ribbon(aes(ymin = lower, ymax = upper), fill = "#1f77b4", alpha = 0.2) +
       geom_line(colour = "#1f77b4", linewidth = 1) +
       coord_cartesian(ylim = c(0, 1)) +
       theme_report() +
-      labs(title = paste0(sec, " — P(adoption) vs ", v), x = v, y = "P(adoption)")
+      labs(title = paste0(sec, " — P(adoption) vs ", v),
+           x = paste0(v, " (standardized, per SD)"), y = "P(adoption)")
     print(p)
     cat("\n\n")
   }
@@ -265,6 +303,218 @@ howToRead("Each curve sweeps one theory variable from its observed minimum to ma
           "while all other variables sit at sample means; the ribbon is the delta-method ",
           "95% interval. A flat curve with a wide ribbon = the channel is not doing ",
           "real work despite a significant coefficient.")
+```
+
+# Adoption Thresholds {.tabset}
+
+*What this section is for.* The model outputs a continuous P(adoption); to talk about *which*
+regions "adopt" you need a probability cutoff. This section shows, per sector, how the
+classification quality changes across cutoffs and pins three reference thresholds (ADR 0029). The
+**Sens-90** threshold is the default used by the classification and maps below.
+
+```{r thresholds, results='asis'}
+rogersPal <- c("Innovators" = "#1a9850", "Early Adopters" = "#66bd63", "Early Majority" = "#fee08b",
+               "Late Majority" = "#fdae61", "Laggards" = "#d73027", "Non-Adopters" = "#bdbdbd")
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  d <- histProb[histProb$sector == sec, ]
+  tbl <- adoptionThresholdTable(d$y, d$prob)
+  refs <- thr[[sec]]
+  print(knitr::kable(tbl %>% mutate(across(where(is.numeric), ~round(.x, 3))),
+                     caption = sprintf("%s — classification quality across thresholds", sec)))
+  cat(sprintf(paste0("\n\n**Reference thresholds — %s:** Sens-90 = **%.2f** (default; catches ≥90%% ",
+    "of historical adopters) · Youden-optimal = **%.2f** · base-rate = **%.2f**.\n\n"),
+    sec, refs$Sens90, refs$Youden, refs$BaseRate))
+  howToRead(
+    "Each row is a candidate probability cutoff. **sensitivity** = share of historical adopter ",
+    "region-years correctly flagged; **specificity** = share of non-adopters correctly left out; ",
+    "**Youden J** = sensitivity + specificity − 1 (peak = best single cutoff); **predAdoptRate** = ",
+    "share of region-years predicted to adopt. Sens-90 deliberately favours catching adopters ",
+    "(few misses) over avoiding false positives.", type = "table")
+}
+```
+
+# Adopter Classification (Rogers) {.tabset}
+
+*What this section is for.* Ranking regions by **when the model says they adopt** (first year fitted
+P crosses the threshold) and binning them into the classic Rogers diffusion groups — Innovators,
+Early Adopters, Early/Late Majority, Laggards, Non-Adopters (ADR 0029). It answers "who leads and who
+trails on carbon-pricing feasibility". The master table uses the **Sens-90** threshold and also shows
+each region's group under the Youden and base-rate thresholds, so you can see which regions are
+threshold-sensitive.
+
+## Classification table
+
+```{r classif-table}
+clsAll <- bind_rows(lapply(sectors, function(sec) {
+  d <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+  s  <- rogersClassify(d, thr[[sec]]$Sens90)[, c("region", "adoptionYear", "group")]
+  yo <- rogersClassify(d, thr[[sec]]$Youden)[, c("region", "group")]
+  br <- rogersClassify(d, thr[[sec]]$BaseRate)[, c("region", "group")]
+  m <- Reduce(function(a, b) merge(a, b, by = "region"),
+              list(setNames(s, c("region", "adoptionYear", "Sens90_group")),
+                   setNames(yo, c("region", "Youden_group")),
+                   setNames(br, c("region", "BaseRate_group"))))
+  m$sector <- sec
+  m$changesWithThreshold <- !(as.character(m$Sens90_group) == as.character(m$Youden_group) &
+                              as.character(m$Sens90_group) == as.character(m$BaseRate_group))
+  m[, c("sector", "region", "adoptionYear", "Sens90_group", "Youden_group",
+        "BaseRate_group", "changesWithThreshold")]
+}))
+interactiveTable(clsAll, caption = "Rogers adopter classification (Sens-90 default; group under each threshold)",
+                 pageLength = 25, filter = "top")
+```
+
+```{r classif-table-cap, results='asis'}
+howToRead(
+  "One row per region/sector. `adoptionYear` is the first year the fitted probability crosses the ",
+  "Sens-90 threshold (blank = never → Non-Adopter). `*_group` is the Rogers band under each ",
+  "reference threshold; **changesWithThreshold = TRUE** flags regions whose band depends on the ",
+  "threshold choice — read their classification cautiously.", type = "table")
+```
+
+## Band counts by threshold {.tabset}
+
+```{r classif-counts, results='asis'}
+for (tn in c("Sens90", "Youden", "BaseRate")) {
+  cat(sprintf("### %s\n\n", tn))
+  g_all <- bind_rows(lapply(sectors, function(sec) {
+    d <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+    data.frame(sector = sec, group = rogersClassify(d, thr[[sec]][[tn]])$group)
+  }))
+  print(knitr::kable(as.data.frame.matrix(table(g_all$group, g_all$sector)),
+                     caption = sprintf("Region counts per Rogers band — %s threshold", tn)))
+  cat("\n\n")
+}
+howToRead(
+  "How the band membership shifts with the threshold: a stricter (higher) cutoff pushes regions ",
+  "later and swells Non-Adopters; a looser cutoff pulls regions into the early bands. Compare the ",
+  "three tabs to gauge how robust the classification is.", type = "table")
+```
+
+# Spatial Distribution {.tabset}
+
+*What this section is for.* The same information on a world map, so regional patterns are visible at
+a glance. Regions are mapped to countries via `regionmapping_54`. (Maps need the `sf` and
+`rnaturalearth` packages; without them this section shows a note instead.)
+
+```{r maps, results='asis', fig.height=5.2}
+lastY <- max(histProb$year)
+mapsAvailable <- requireNamespace("sf", quietly = TRUE) && requireNamespace("rnaturalearth", quietly = TRUE)
+if (!mapsAvailable) {
+  cat("> Maps unavailable — install `sf` and `rnaturalearth` to render the spatial section.\n")
+} else {
+  ## A. Adoption probability (historical, last year)
+  cat("## P(adoption) — historical {.tabset}\n\n")
+  for (sec in sectors) {
+    cat(sprintf("### %s\n\n", sec))
+    d <- histProb[histProb$sector == sec & histProb$year == lastY, ]
+    p <- plotRegionWorldMap(setNames(d$prob, d$region), discrete = FALSE, limits = c(0, 1),
+      title = sprintf("Fitted P(adoption) — %s, %d", sec, lastY), legend = "P(adoption)")
+    if (!is.null(p)) { print(p); cat("\n\n") } else cat("*Map could not be drawn.*\n\n")
+  }
+  howToRead("Each region shaded by its fitted adoption probability in the last historical year — ",
+            "darker = more likely to have carbon pricing. The between-region gradient is the ",
+            "cross-sectional feasibility picture.")
+
+  ## A'. Scenario probability (if available)
+  if (has_proj) {
+    cat("## P(adoption) — scenario {.tabset}\n\n")
+    projY <- 2050
+    for (sec in names(proj)) {
+      if (is.null(proj[[sec]])) next
+      cat(sprintf("### %s\n\n", sec))
+      dd <- proj[[sec]]; yy <- dd$year[which.min(abs(dd$year - projY))][1]
+      d <- dd[dd$year == yy, ]
+      p <- plotRegionWorldMap(setNames(d$prob, d$region), discrete = FALSE, limits = c(0, 1),
+        title = sprintf("Projected P(adoption) — %s, %d (SSP2)", sec, yy), legend = "P(adoption)")
+      if (!is.null(p)) { print(p); cat("\n\n") } else cat("*Map could not be drawn.*\n\n")
+    }
+    howToRead("Projected adoption probability around 2050 under SSP2 — compare with the historical ",
+              "map to see where the scenario expects pricing to spread.")
+  }
+
+  ## B. Adopter category (Sens-90)
+  cat("## Adopter category {.tabset}\n\n")
+  for (sec in sectors) {
+    cat(sprintf("### %s\n\n", sec))
+    d <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+    cls <- rogersClassify(d, thr[[sec]]$Sens90)
+    p <- plotRegionWorldMap(cls[, c("region", "group")], discrete = TRUE, palette = rogersPal,
+      title = sprintf("Rogers adopter category — %s (Sens-90)", sec), legend = "Adopter group")
+    if (!is.null(p)) { print(p); cat("\n\n") } else cat("*Map could not be drawn.*\n\n")
+  }
+  howToRead("Regions coloured by Rogers band (green = early, red = laggard, grey = never crosses ",
+            "the threshold in sample) — the spatial view of the classification table above.")
+
+  ## C1. H12 fixed-effect grouping
+  cat("## Regional groups (H12 FE)\n\n")
+  if (!is.null(regionH12)) {
+    p <- plotRegionWorldMap(regionH12, discrete = TRUE,
+      title = "H12 fixed-effect region grouping", legend = "H12 group")
+    if (!is.null(p)) { print(p); cat("\n\n") } else cat("*Map could not be drawn.*\n\n")
+    howToRead("The 12 REMIND macro-regions that the model's region fixed effects are grouped into — ",
+              "regions sharing a colour share an estimated intercept (the FE strategy, ADR 0011).")
+  } else cat("*Region→H12 mapping unavailable.*\n\n")
+}
+```
+
+# Adoption Timeline — Early Warning {.tabset}
+
+*What this section is for.* Where does the model **lead or lag** reality? The bar spans each region's
+*observed* adoption period; the dot is the year the model's fitted probability first crosses the
+Sens-90 threshold. A dot left of the bar = the model saw conditions ripen early; right of the bar =
+the model was late.
+
+```{r timeline, results='asis', fig.height=7}
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  d <- histProb[histProb$sector == sec, ]
+  obs <- d %>% filter(y == 1) %>% group_by(region) %>%
+    summarise(obsStart = min(year), obsEnd = max(year), .groups = "drop")
+  cls <- rogersClassify(d[, c("region", "year", "prob")], thr[[sec]]$Sens90)
+  tl <- merge(obs, cls[, c("region", "adoptionYear")], by = "region", all = TRUE)
+  tl <- tl %>% filter(is.finite(obsStart) | is.finite(adoptionYear)) %>%
+    arrange(adoptionYear, obsStart)
+  if (!nrow(tl)) { cat("*No adopters in sample.*\n\n"); next }
+  tl$region <- factor(tl$region, levels = rev(unique(tl$region)))
+  p <- ggplot(tl) +
+    geom_segment(aes(x = obsStart, xend = obsEnd, y = region, yend = region),
+                 colour = "grey70", linewidth = 2, na.rm = TRUE) +
+    geom_point(aes(x = adoptionYear, y = region), colour = "#d62728", size = 2, na.rm = TRUE) +
+    theme_report() +
+    labs(title = sprintf("%s — observed adoption period (bar) vs model crossing (dot)", sec),
+         x = NULL, y = NULL)
+  print(p); cat("\n\n")
+}
+howToRead("Grey bar = observed adoption period; red dot = first year fitted P crosses Sens-90. ",
+          "Dot before the bar = model anticipates (early warning); dot after = model lags; ",
+          "bar with no dot = the model never reaches the threshold for an observed adopter.")
+```
+
+# Per-Region Fit {.tabset}
+
+*What this section is for.* The granular diagnostic: each region's fitted probability over its
+observed 0/1 adoption path. Collapsed by default (54 panels per sector).
+
+```{r per-region, results='asis', fig.height=9}
+for (sec in sectors) {
+  cat(sprintf("## %s\n\n", sec))
+  d <- histProb[histProb$sector == sec, ]
+  p <- ggplot(d, aes(year)) +
+    geom_step(aes(y = y), colour = "grey60") +
+    geom_line(aes(y = prob), colour = "#1f77b4", linewidth = 0.7) +
+    facet_wrap(~region, ncol = 6) +
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_report() +
+    theme(strip.text = element_text(size = 6), axis.text = element_text(size = 5)) +
+    labs(title = sprintf("%s — fitted P(adoption) (blue) vs observed adoption (grey step)", sec),
+         x = NULL, y = NULL)
+  print(p); cat("\n\n")
+}
+howToRead("Per region: grey step = observed 0/1 adoption, blue = fitted probability. A good fit has ",
+          "blue rising into the grey step. Blue high before the step = early signal; blue flat-low ",
+          "under a step = the spec misses that region's adoption.")
 ```
 
 # Future Projections (SSP2) {.tabset}
@@ -290,11 +540,18 @@ if (has_proj) {
             "(dead blocks, a severe Projection Sanity rule).")
 
   cat("## Snapshot table\n\n")
-  snap <- pall %>%
-    filter(year %in% c(2030, 2050, 2070, 2100)) %>%
-    select(sector, region, year, prob) %>%
-    tidyr::pivot_wider(names_from = year, values_from = prob, names_prefix = "P")
-  print(interactiveTable(snap, caption = "P(adoption) at snapshot years", pageLength = 20))
+  # Base-R pivot (no tidyr dependency): one column per snapshot year present in the projection.
+  yrs <- intersect(c(2030, 2050, 2070, 2100), sort(unique(pall$year)))
+  sl <- pall[pall$year %in% yrs, c("sector", "region", "year", "prob")]
+  if (length(yrs) && nrow(sl)) {
+    snap <- Reduce(function(a, b) merge(a, b, by = c("sector", "region"), all = TRUE),
+      lapply(yrs, function(yy) {
+        d <- sl[sl$year == yy, c("sector", "region", "prob")]
+        names(d)[3] <- paste0("P", yy); d
+      }))
+    snap <- snap %>% mutate(across(where(is.numeric), ~round(.x, 3))) %>% arrange(sector, region)
+    print(knitr::kable(snap, caption = "P(adoption) at snapshot years"))
+  } else cat("*No projection rows at the snapshot years.*\n")
   cat("\n\n")
   howToRead("Projected adoption probability per region at four snapshot years — sort a ",
             "column to rank regions by projected feasibility at that horizon.",
@@ -302,6 +559,7 @@ if (has_proj) {
 
   cat("## Seam check\n\n")
   seam <- bind_rows(lapply(sectors, function(sec) {
+    if (is.null(proj[[sec]]) || !nrow(proj[[sec]])) return(NULL)   # skip non-projectable sector
     f <- fits[[sec]]
     p <- fittedProbs(f)
     idx <- usedRows(f)
@@ -318,15 +576,33 @@ if (has_proj) {
       mutate(sector = sec, jump = prob - histProb) %>%
       arrange(desc(abs(jump)))
   }))
-  print(interactiveTable(seam %>% mutate(across(where(is.numeric), ~round(.x, 3))),
-                         caption = "Fitted (last historical) vs projected (first scenario) probability"))
-  cat("\n\n")
-  howToRead("The model-level seam test: fitted probability at the last historical year ",
-            "vs the projection at the first scenario year, per region. |jump| > 0.3 is ",
-            "the Projection Sanity warning threshold — large jumps mean scenario drivers ",
-            "are discontinuous with history for that region.", type = "table")
+  if (!is.null(seam) && nrow(seam)) {
+    print(knitr::kable(seam %>% mutate(across(where(is.numeric), ~round(.x, 3))),
+                       caption = "Fitted (last historical) vs projected (first scenario) probability"))
+    cat("\n\n")
+    howToRead("The model-level seam test: fitted probability at the last historical year ",
+              "vs the projection at the first scenario year, per region. |jump| > 0.3 is ",
+              "the Projection Sanity warning threshold — large jumps mean scenario drivers ",
+              "are discontinuous with history for that region.", type = "table")
+  } else cat("*No projectable sector for the seam check.*\n")
 } else {
   cat("> Projections unavailable: no scenario panel, or the selected spec is an FD ",
       "transform (not projectable — ADR 0005).\n")
 }
+```
+
+# Measure Definitions
+
+```{r defs}
+interactiveTable(
+  measureDefinitions(groups = c("Predictive (report-only)", "Model form", "Theory content",
+                                "Tier", "Projection")),
+  caption = "Measure / statistic glossary (adoption-relevant; full card in the selection report)",
+  pageLength = 30, filter = "top")
+```
+
+```{r defs-cap, results='asis'}
+howToRead("Definitions for the statistics shown in this report, drawn from the shared canonical ",
+          "glossary (`pfmreports::measureDefinitions`) used across all PFM reports. 'Report-only' ",
+          "measures never influence which model is chosen.", type = "table")
 ```
