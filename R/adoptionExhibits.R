@@ -58,6 +58,11 @@ adoptionReferenceThresholds <- function(y, prob, sensTarget = 0.90, fineGrid = s
 #' @export
 rogersClassify <- function(df, threshold) {
   lv <- c("Innovators", "Early Adopters", "Early Majority", "Late Majority", "Laggards", "Non-Adopters")
+  if (is.null(df) || nrow(df) == 0) {
+    return(data.frame(region = character(0), adoptionYear = numeric(0),
+                      rankPct = numeric(0), group = factor(character(0), levels = lv),
+                      stringsAsFactors = FALSE))
+  }
   byR <- split(df, df$region)
   ay <- vapply(byR, function(d) {
     cross <- d$year[is.finite(d$prob) & d$prob >= threshold]
