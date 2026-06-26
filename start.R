@@ -101,13 +101,21 @@ if (hasFlag("priority")) {
   if (is.null(getArg("qos", NULL))) callArgs$qos <- "priority"
   ps <- tryCatch(pfm::prioritySizing(qos = callArgs$qos, partition = callArgs$partition),
                  error = function(e) NULL)
-  if (is.null(ps)) ps <- list(nCores = 16L, mem = "64G", time = "24:00:00", detail = "detection failed")
-  if (is.null(nCoresArg))            callArgs$nCores <- ps$nCores
-  if (is.null(getArg("mem", NULL)))  callArgs$mem    <- ps$mem
-  if (is.null(getArg("time", NULL))) callArgs$time   <- ps$time
-  message("[start] priority mode auto-sized: qos=", callArgs$qos, " nCores=", callArgs$nCores,
-          " mem=", callArgs$mem, " time=", callArgs$time, "  [", ps$detail,
-          "]  (override any with --nCores/--mem/--time/--qos)")
+  if (is.null(ps)) ps <- list(nCores = 16L, mem = "64G", time = "24:00:00",
+                              partition = callArgs$partition, partitionOk = NA, detail = "detection failed")
+  if (is.null(nCoresArg))               callArgs$nCores    <- ps$nCores
+  if (is.null(getArg("mem", NULL)))     callArgs$mem       <- ps$mem
+  if (is.null(getArg("time", NULL)))    callArgs$time      <- ps$time
+  # Switch to a partition that permits the QOS (the default `standard` does not allow `priority`).
+  if (is.null(getArg("partition", NULL)) && !is.null(ps$partition)) callArgs$partition <- ps$partition
+  message("[start] priority mode auto-sized: qos=", callArgs$qos, " partition=", callArgs$partition,
+          " nCores=", callArgs$nCores, " mem=", callArgs$mem, " time=", callArgs$time,
+          "  [", ps$detail, "]")
+  if (!isTRUE(ps$partitionOk)) {
+    message("[start] WARNING: could not confirm a partition that allows qos='", callArgs$qos,
+            "' — submission may be rejected. Check `scontrol show partition | grep -iE 'PartitionName|AllowQos'`",
+            " and pass --partition=<one that allows it>.")
+  }
 }
 # Forwarded to runSweep -> runChannelsWorkflow. Default (arg omitted) leaves selectFE unset, so the
 # workflow's own default applies: c("H12","OECDp","Mundlak") — a real region-FE/Mundlak deliverable
