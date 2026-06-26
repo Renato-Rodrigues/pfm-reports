@@ -40,10 +40,16 @@
   if (isTRUE(verbose)) message("[pfmreports] rendering ", name, " -> ",
                                file.path(outputDir, outputFile))
   t0 <- Sys.time()
+  # Inject the shared wide-layout CSS into every report (one place; no per-Rmd YAML edits).
+  cssFile <- system.file("rmd", "pfm-report.css", package = "pfmreports")
+  outOpts <- if (nzchar(cssFile) && file.exists(cssFile)) list(css = cssFile) else NULL
+  interDir <- tempfile("pfmreports-")
+  dir.create(interDir, showWarnings = FALSE, recursive = TRUE)   # render does not always create it
   rmarkdown::render(
     input = tmpl, output_file = outputFile, output_dir = outputDir,
-    intermediates_dir = tempfile("pfmreports-"), knit_root_dir = knitWd,
-    params = params, envir = new.env(parent = globalenv()), quiet = !verbose
+    intermediates_dir = interDir, knit_root_dir = knitWd,
+    params = params, envir = new.env(parent = globalenv()), quiet = !verbose,
+    output_options = outOpts
   )
   # Completion marker (parsed by pfm::runStatus for the per-report render checklist, ADR 0030).
   if (isTRUE(verbose)) message("[pfmreports] done ", name, " (",

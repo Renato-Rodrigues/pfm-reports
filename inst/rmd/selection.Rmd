@@ -318,9 +318,9 @@ howToRead(
   "the Chosen Models quantifies the price of cross-sector consistency.", type = "table")
 ```
 
-## Best by predictability
+## Best by predictability {.tabset}
 
-```{r best-pred}
+```{r best-pred-prep, include=FALSE}
 pred_ad <- results %>%
   filter(stage == "Adoption", converged, maxVIF < 10) %>%
   group_by(model) %>%
@@ -333,8 +333,6 @@ pred_st <- results %>%
   group_by(model, panelTransform) %>%
   summarise(meanRMSE = mean(rmse, na.rm = TRUE), .groups = "drop") %>%
   arrange(meanRMSE) %>% head(15)
-tabledList(list("Adoption — top 15 by mean AUC (both sectors)" = pred_ad,
-                "Stringency — top 15 by mean in-sample RMSE" = pred_st))
 ```
 
 ```{r best-pred-cap, results='asis'}
@@ -346,9 +344,21 @@ howToRead(
   "is in log-price, FD RMSE in Δlog-price).", type = "table")
 ```
 
-## Best by parsimony
+### Adoption
 
-```{r best-parsimony}
+```{r best-pred-ad}
+interactiveTable(pred_ad, caption = "Adoption — top 15 by mean AUC (both sectors)")
+```
+
+### Stringency
+
+```{r best-pred-st}
+interactiveTable(pred_st, caption = "Stringency — top 15 by mean in-sample RMSE")
+```
+
+## Best by parsimony {.tabset}
+
+```{r best-parsimony-prep, include=FALSE}
 # Simplest-adequate lens: among gate-passing specs, rank by FE-discounted BIC (the maximin
 # tie-break), summed across sectors so it is comparable to the deliverable rule.
 parsi <- lapply(stages, function(stg) {
@@ -362,7 +372,6 @@ parsi <- lapply(stages, function(stg) {
     arrange(adjBIC) %>% head(15)
 })
 names(parsi) <- stages
-tabledList(Filter(Negate(is.null), parsi))
 ```
 
 ```{r best-parsimony-cap, results='asis'}
@@ -373,9 +382,23 @@ howToRead(
   "if they differ, the deliverable is buying theory tier / ΔR² at a parsimony cost.", type = "table")
 ```
 
-## Best by theory content
+### Adoption
 
-```{r best-theory}
+```{r best-parsimony-ad}
+if (!is.null(parsi[["Adoption"]])) interactiveTable(parsi[["Adoption"]],
+  caption = "Adoption — top 15 by FE-discounted BIC") else cat("_No gate-passing adoption specs._")
+```
+
+### Stringency
+
+```{r best-parsimony-st}
+if (!is.null(parsi[["Stringency"]])) interactiveTable(parsi[["Stringency"]],
+  caption = "Stringency — top 15 by FE-discounted BIC") else cat("_No gate-passing stringency specs._")
+```
+
+## Best by theory content {.tabset}
+
+```{r best-theory-prep, include=FALSE}
 theoryRank <- lapply(stages, function(stg) {
   results %>% filter(stage == stg, converged, maxVIF < 10) %>%
     group_by(model, panelTransform) %>%
@@ -386,7 +409,6 @@ theoryRank <- lapply(stages, function(stg) {
     arrange(desc(meanDeltaR2)) %>% head(15)
 })
 names(theoryRank) <- stages
-tabledList(theoryRank)
 ```
 
 ```{r best-theory-cap, results='asis'}
@@ -396,6 +418,18 @@ howToRead(
   "the tier gating, so it surfaces specs with the most theory signal even if a group misses 5% ",
   "significance. ΔR² leads; Theory Fraction is mechanically low under strong Region FE.",
   type = "table")
+```
+
+### Adoption
+
+```{r best-theory-ad}
+interactiveTable(theoryRank[["Adoption"]], caption = "Adoption — top 15 by mean ΔR²(theory)")
+```
+
+### Stringency
+
+```{r best-theory-st}
+interactiveTable(theoryRank[["Stringency"]], caption = "Stringency — top 15 by mean ΔR²(theory)")
 ```
 
 ## Stringency: log1p vs saturating
@@ -438,18 +472,29 @@ if (has_sat) {
 }
 ```
 
-## Stage focus — top 10 per stage
+## Stage focus — top 10 per stage {.tabset}
 
-```{r stage-focus}
+```{r stage-focus-prep, include=FALSE}
 focus <- lapply(stages, function(stg) wf$maximin[[stg]] %>% filter(gatePass) %>% head(10))
 names(focus) <- stages
-tabledList(focus)
 ```
 
 ```{r stage-focus-cap, results='asis'}
 howToRead("The shortlist per stage under the deliverable rule — the gate-passing specs worth a ",
           "confirmation pass. The top row is the maximin winner before the Projection Sanity gate.",
           type = "table")
+```
+
+### Adoption
+
+```{r stage-focus-ad}
+interactiveTable(focus[["Adoption"]], caption = "Adoption — top 10 gate-passing specs")
+```
+
+### Stringency
+
+```{r stage-focus-st}
+interactiveTable(focus[["Stringency"]], caption = "Stringency — top 10 gate-passing specs")
 ```
 
 # Top Model Forest Plots {.tabset}

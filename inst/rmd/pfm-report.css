@@ -1,0 +1,10 @@
+/* Wider report layout (injected by pfmreports::.renderRmd for every report). The flatly/bootstrap
+   default container is ~940-1140px, which cramps the wide coefficient/spec tables and the
+   fig.width=10 charts. Use more of the horizontal space while keeping text readable. */
+.main-container {
+  max-width: 1500px !important;
+  width: 95% !important;
+}
+/* let DT tables and figures use the wider container */
+.dataTables_wrapper { width: 100% !important; }
+img, .figure, .ggplot { max-width: 100%; }

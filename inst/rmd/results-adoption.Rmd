@@ -115,14 +115,16 @@ histProb <- bind_rows(lapply(sectors, function(sec) {
              prob = p[seq_len(n)], stringsAsFactors = FALSE)
 }))
 
-# Combined historical and projected probabilities per region, year and sector (for future categories)
+# Combined historical and projected probabilities per region, year and sector (for future categories).
+# NOTE: keep the `sector` column — downstream code filters `fullProb[fullProb$sector == sec, ]`, which
+# silently returns 0 rows (empty classification/maps) if sector is dropped.
 fullProb <- bind_rows(lapply(sectors, function(sec) {
-  histD <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+  histD <- histProb[histProb$sector == sec, c("sector", "region", "year", "prob")]
   if (has_proj && !is.null(proj[[sec]])) {
     projD <- proj[[sec]][, c("region", "year", "prob")]
-    # Avoid duplicate years at the seam
-    projD <- projD[!(projD$year %in% histD$year), ]
-    bind_rows(histD, projD)
+    projD$sector <- sec
+    projD <- projD[!(projD$year %in% histD$year), ]  # avoid duplicate years at the seam
+    bind_rows(histD, projD[, c("sector", "region", "year", "prob")])
   } else {
     histD
   }
