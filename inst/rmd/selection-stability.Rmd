@@ -1,0 +1,196 @@
+---
+title: "PFM Selection Stability — `r params$reportName`"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_depth: 1
+    toc_float:
+      collapsed: true
+    number_sections: true
+    code_folding: hide
+params:
+  bootstrapRds: "results/exhaustive/selection-bootstrap.rds"
+  reportName: "default"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 10, fig.height = 4.8)
+library(ggplot2)
+library(dplyr)
+library(pfmreports)
+
+root <- getwd()
+boot_path <- params$bootstrapRds
+if (!grepl("^([A-Za-z]:|/|\\\\)", boot_path)) boot_path <- file.path(root, boot_path)
+boot <- if (file.exists(boot_path)) readRDS(boot_path) else NULL
+
+# IQ-channel token from a spec name ("X-0385 WGIge|noRoL|DiagAcc ..." -> "WGIge|noRoL|DiagAcc").
+chOf <- function(m) vapply(strsplit(as.character(m), " ", fixed = TRUE),
+                           function(x) if (length(x) >= 2) x[[2]] else "", character(1))
+# Smallest set of channel sets covering >= cover of the resample mass (the selection confidence set).
+confSet <- function(freq, cover = 0.90) {
+  if (is.null(freq) || !length(freq)) return(character(0))
+  f <- sort(as.numeric(freq), decreasing = TRUE); names(f) <- names(sort(freq, decreasing = TRUE))
+  names(f)[seq_len(which(cumsum(f) >= cover)[1])]
+}
+freqDF <- function(x, key) {
+  if (is.null(x) || !length(x)) return(NULL)
+  data.frame(setNames(list(names(x), round(as.numeric(x), 3)), c(key, "frequency")),
+             stringsAsFactors = FALSE, check.names = FALSE)
+}
+barFreq <- function(df, key, title, fill = "#1f77b4") {
+  ggplot(utils::head(df[order(-df$frequency), ], 15),
+         aes(x = frequency, y = reorder(.data[[key]], frequency))) +
+    geom_col(fill = fill, alpha = 0.85) +
+    geom_text(aes(label = sprintf("%.0f%%", 100 * frequency)), hjust = -0.1, size = 3) +
+    scale_x_continuous(labels = scales::percent, expand = expansion(mult = c(0, 0.12))) +
+    theme_report() + labs(title = title, x = "share of resamples", y = NULL)
+}
+stages <- if (!is.null(boot)) names(boot$stages) else character(0)
+```
+
+# Overview
+
+*What this report is for.* The **selection-uncertainty bootstrap** (ADR 0025): a region-block
+(cluster) resample of the *model selection*. It answers "**how stable is the chosen channel set to
+the specification search and to which regions happen to be in the sample?**" — the single best
+defence against the overfitting / specification-search critique.
+
+```{r overview, results='asis'}
+if (is.null(boot)) {
+  cat("> **Selection-bootstrap artifact not found.** Run the `selection-bootstrap` step ",
+      "(`run-sweep-slurm.sh --paper`, or `start.R --bootstrap=<N>`) to populate this report (ADR 0025).\n")
+  knitr::knit_exit()
+}
+cat(sprintf(paste0(
+  "- **Method:** the %d regions are resampled with replacement (region-block bootstrap), the top-**%d** ",
+  "gate-passing candidate pool is refit on each resample, re-ranked by the Maximin rule, and the ",
+  "**winning channel set** is recorded. **%d resamples**, detail = **%s**.\n",
+  "- **Deployed deliverable (point estimate):** %s.\n"),
+  54L, boot$topK %||% NA_integer_, boot$nResamples %||% NA_integer_, boot$detail %||% "?",
+  paste(sprintf("%s = `%s`", names(boot$specNames), boot$specNames), collapse = "; ")))
+```
+
+> **Read this as *specification stability*, not a confidence interval on effects.** The bootstrap
+> resamples *which model is selected*, not the coefficients or predictions — so it quantifies how
+> robust the **channel choice** is, not the size of any effect. With only 54 region-clusters the
+> resamples are correlated and small-N, so treat the frequencies as a robustness *indicator*, not a
+> formal frequentist guarantee. The frequencies reflect the **maximin ranking**; the deployed spec is
+> the maximin member that also passes Projection-Sanity (see the Selection report).
+
+# Stability by stage {.tabset}
+
+```{r by-stage, results='asis', fig.height=4.6}
+for (stg in stages) {
+  s <- boot$stages[[stg]]
+  cat(sprintf("## %s\n\n", stg))
+  csf <- s$channelSetFreq
+  if (is.null(csf) || !length(csf)) { cat("> *No successful resamples for this stage.*\n\n"); next }
+  deliv <- chOf(boot$specNames[[stg]])
+  topSet <- names(csf)[which.max(as.numeric(csf))]; topPct <- round(100 * max(as.numeric(csf)))
+  cs <- confSet(csf, 0.90)
+
+  ### 1. Channel-set frequency
+  cat("### Channel-set selection frequency\n\n")
+  cat(sprintf("**%d effective resamples.** The top channel set **`%s`** wins **%d%%**, across **%d** distinct sets.\n\n",
+              s$nEffective %||% NA_integer_, topSet, topPct, length(csf)))
+  dfc <- freqDF(csf, "channel_set")
+  print(barFreq(dfc, "channel_set", paste0(stg, " — winning channel-set frequency"))); cat("\n\n")
+  print(knitr::kable(dfc[order(-dfc$frequency), ], row.names = FALSE,
+                     caption = paste0(stg, " — channel-set selection frequency"))); cat("\n\n")
+  howToRead("How often each institutional-channel combination wins the Maximin selection across the ",
+            "region resamples. A single set dominating (high %) = a robust channel choice; mass spread ",
+            "across many sets = the exact channel combination is partly sample-driven.", type = "table")
+
+  ### 2. Per-channel inclusion
+  cat("### Per-channel inclusion frequency\n\n")
+  tf <- s$channelTokenFreq
+  if (!is.null(tf) && length(tf)) {
+    dft <- freqDF(tf, "channel")
+    print(barFreq(dft, "channel", paste0(stg, " — per-channel survival"), fill = "#2ca02c")); cat("\n\n")
+    print(knitr::kable(dft[order(-dft$frequency), ], row.names = FALSE,
+                       caption = paste0(stg, " — share of winning specs containing each channel"))); cat("\n\n")
+    howToRead("The share of bootstrap winners that include each individual channel. Channels near ",
+              "100% are *robustly* part of the story; low-frequency channels are fragile and should ",
+              "be reported cautiously.", type = "table")
+  } else cat("*Per-channel frequency unavailable.*\n\n")
+
+  ### 3. Exact-spec frequency
+  cat("### Exact-spec frequency\n\n")
+  if (!is.null(s$specFreq) && length(s$specFreq)) {
+    dsf <- freqDF(s$specFreq, "spec"); dsf <- dsf[order(-dsf$frequency), ]
+    dsf$deployed <- ifelse(dsf$spec == boot$specNames[[stg]], "◄ deployed", "")
+    print(knitr::kable(utils::head(dsf, 15), row.names = FALSE,
+                       caption = paste0(stg, " — exact winning-spec frequency (top 15)"))); cat("\n\n")
+    howToRead("How often the *exact* specification (X-id) wins — always lower than the channel-set ",
+              "frequency, because tied specs within a channel set trade the win. The deployed spec is ",
+              "flagged; a low exact-spec % with a high channel-set % is the expected, healthy pattern.",
+              type = "table")
+  } else cat("*Exact-spec frequency needs `detail = \"full\"` (set `--bootstrapDetail=full`).*\n\n")
+
+  ### 4. Selection confidence set
+  cat("### Selection confidence set (90%)\n\n")
+  cat(sprintf("The smallest group of channel sets covering **≥ 90%%** of resamples: **%d set(s)** — %s.\n\n",
+              length(cs), paste(sprintf("`%s`", cs), collapse = ", ")))
+  howToRead("The channel sets the data cannot reliably distinguish from the winner at the 90% level. ",
+            "One set = an unambiguous channel choice; several = report them as a set, not a single pick.")
+
+  ### 5. Deliverable check
+  cat("### Deliverable check\n\n")
+  matchModal <- identical(deliv, topSet)
+  delivPct <- round(100 * (as.numeric(csf[deliv]) %||% 0))
+  cat(sprintf(paste0("Deployed deliverable channel set: **`%s`**. It is %s the modal bootstrap winner, ",
+              "and wins **%d%%** of resamples%s.\n\n"),
+              deliv, if (matchModal) "**the same as**" else "**different from**", delivPct,
+              if (!matchModal) sprintf(" (modal = `%s` at %d%%)", topSet, topPct) else ""))
+  howToRead("Validation: if the deployed deliverable is the modal bootstrap winner, the point estimate ",
+            "sits where the resamples concentrate (reassuring). If not, the deliverable is in a ",
+            "contested region — disclose it and lean on the channel set, not the exact spec.")
+}
+```
+
+# Paper summary
+
+```{r paper-summary, results='asis'}
+rows <- lapply(stages, function(stg) {
+  s <- boot$stages[[stg]]; csf <- s$channelSetFreq
+  if (is.null(csf) || !length(csf)) return(NULL)
+  tf <- s$channelTokenFreq
+  data.frame(
+    Stage = stg,
+    `Top channel set` = names(csf)[which.max(as.numeric(csf))],
+    `Top set %` = round(100 * max(as.numeric(csf))),
+    `Confidence set (#sets, 90%)` = length(confSet(csf, 0.90)),
+    `Channels ≥ 80%` = if (!is.null(tf)) paste(names(tf)[as.numeric(tf) >= 0.8], collapse = ", ") else "",
+    check.names = FALSE, stringsAsFactors = FALSE)
+})
+tab <- do.call(rbind, Filter(Negate(is.null), rows))
+if (!is.null(tab) && nrow(tab)) {
+  for (i in seq_len(nrow(tab))) {
+    r <- tab[i, ]
+    cat(sprintf(paste0("> In a 200-region-block bootstrap of the model selection, the %s-stage ",
+        "deliverable's channel set (`%s`) was selected in **%d%%** of resamples; the 90%% selection ",
+        "confidence set contains **%d** channel set(s)%s. This indicates the channel choice is %s to ",
+        "the specification search and to sample composition.\n\n"),
+        tolower(r$Stage), r$`Top channel set`, r$`Top set %`, r$`Confidence set (#sets, 90%)`,
+        if (nzchar(r$`Channels ≥ 80%`)) sprintf(", with %s present in ≥80%% of winners", r$`Channels ≥ 80%`) else "",
+        if (r$`Top set %` >= 50) "robust" else "moderately sensitive"))
+  }
+  print(knitr::kable(tab, row.names = FALSE, caption = "Selection-stability summary (paper-ready)"))
+  cat("\n\n")
+  howToRead("Drop-in robustness paragraph(s) + table for the paper's model-selection section. The ",
+            "headline number is the channel-set selection frequency; the confidence-set size is the ",
+            "honest uncertainty statement.", type = "table")
+}
+```
+
+# Measure Definitions
+
+```{r defs}
+interactiveTable(measureDefinitions(groups = c("Selection uncertainty", "Selection", "Tier")),
+                 caption = "Selection-stability glossary (full card in the selection report)",
+                 pageLength = 20, filter = "top")
+```

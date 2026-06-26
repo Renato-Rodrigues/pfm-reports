@@ -393,50 +393,13 @@ howToRead(
   "to the FE-discount is expected — see the Parsimony Frontier.", type = "table")
 ```
 
-## Region-block bootstrap {.tabset}
+## Region-block bootstrap
 
-```{r boot-stability, results='asis'}
-bootPath <- file.path(dirname(rds_path), "selection-bootstrap.rds")
-if (!file.exists(bootPath)) {
-  cat("> *Region-block bootstrap not run for this group. Add the `selection-bootstrap` step ",
-      "(`start.R --bootstrap=<N>` or `run-sweep-slurm.sh --paper`) to populate this section ",
-      "(ADR 0025).*\n\n")
-} else {
-  boot <- readRDS(bootPath)
-  cat(sprintf(paste0("Resampling **whole regions** with replacement, %d resamples, detail = %s, ",
-              "candidate pool = top-%d gate-passing specs. The winner's channel set is recorded ",
-              "per resample.\n\n"), boot$nResamples %||% NA_integer_, boot$detail %||% "?",
-              boot$topK %||% NA_integer_))
-  for (stg in names(boot$stages)) {
-    s <- boot$stages[[stg]]
-    cat(sprintf("### %s\n\n", stg))
-    csf <- s$channelSetFreq
-    if (is.null(csf) || !length(csf)) { cat("> *No successful resamples.*\n\n"); next }
-    df <- data.frame(channel_set = names(csf), frequency = round(as.numeric(csf), 3))
-    cat(sprintf(paste0("**%d effective resamples**; the top channel set wins **%d%%** of the time ",
-                "across **%d** distinct channel sets.\n\n"), s$nEffective %||% NA_integer_,
-                round(100 * max(as.numeric(csf))), length(csf)))
-    print(interactiveTable(df, caption = paste0(stg, " — winning channel-set frequency (bootstrap)")))
-    if (!is.null(s$channelTokenFreq) && length(s$channelTokenFreq)) {
-      tf <- s$channelTokenFreq
-      cat("\n**Per-channel survival:** ",
-          paste(sprintf("%s %d%%", names(tf), round(100 * as.numeric(tf))), collapse = " · "), "\n\n")
-    }
-    if (!is.null(s$specFreq) && length(s$specFreq)) {
-      sf <- utils::head(s$specFreq, 5)
-      cat("**Top exact specs:** ",
-          paste(sprintf("%s (%d%%)", names(sf), round(100 * as.numeric(sf))), collapse = "; "), "\n\n")
-    }
-  }
-  howToRead(
-    "The gold-standard selection-uncertainty check (ADR 0025): the entire selection is re-run on ",
-    "region resamples. Read the **channel set / per-channel survival** — a channel appearing in a ",
-    "high share of resamples is robust to which regions happen to be in the sample; a deliverable ",
-    "whose channel set wins only a minority of resamples is partly an artefact of the sample. ",
-    "Exact-spec frequency (detail = full) is expected to be low and is not the headline.",
-    type = "table")
-}
-```
+The gold-standard selection-uncertainty check — a region-block bootstrap of the entire selection
+(ADR 0025) — now lives in its **own report, "Selection Stability"** (`selection_stability_*.html`),
+where it is presented in full (channel-set + per-channel frequency charts, exact-spec frequency, the
+90% selection confidence set, a deliverable check, and a paper-ready summary). It is a separate,
+heavy cluster step, so isolating it keeps this report fast to render.
 
 # All fits
 

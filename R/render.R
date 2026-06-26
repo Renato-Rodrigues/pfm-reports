@@ -169,6 +169,20 @@ renderRobustness <- function(group = getPfmConfig("group", "exhaustive"),
              outputDir = outputDir, verbose = verbose)
 }
 
+#' Render the Selection-Stability report (consumes \code{selection-bootstrap.rds})
+#'
+#' @inheritParams renderSelection
+#' @return Path to the rendered HTML (invisibly).
+#' @export
+renderSelectionStability <- function(group = getPfmConfig("group", "exhaustive"),
+                                     resultsDir = .defResults(), reportName = group,
+                                     outputDir = .defOutput(), verbose = TRUE) {
+  .renderRmd("selection-stability", sprintf("selection_stability_%s.html", reportName),
+             params = list(bootstrapRds = runGroupArtifact("selection-bootstrap.rds", group, resultsDir),
+                           reportName = reportName),
+             outputDir = outputDir, verbose = verbose)
+}
+
 #' Render the Subnational sensitivity report (consumes \code{subnational.rds})
 #'
 #' @inheritParams renderSelection
@@ -202,12 +216,14 @@ renderGroup <- function(group = getPfmConfig("group", "exhaustive"),
                         cachefolder = .defCache(), gdxFile = .defGdx(), reportName = group,
                         outputDir = .defOutput(), verbose = TRUE, nCores = NULL) {
   all <- c("selection", "model-selection", "results-adoption", "results-stringency",
-           "publication", "robustness", "subnational")
+           "publication", "robustness", "subnational", "selection-stability")
   reports <- if (is.null(reports)) all else intersect(all, reports)
   fns <- list(
     "selection" = function() renderSelection(group, resultsDir, reportName, outputDir, verbose),
     "model-selection" = function() renderModelSelection(group, resultsDir, reportName,
                                                         outputDir = outputDir, verbose = verbose),
+    "selection-stability" = function() renderSelectionStability(group, resultsDir, reportName,
+                                                               outputDir, verbose),
     "results-adoption" = function() renderResultsAdoption(group, resultsDir, modelDir, cachefolder,
                                                           gdxFile, reportName, outputDir, verbose),
     "results-stringency" = function() renderResultsStringency(group, resultsDir, modelDir,
