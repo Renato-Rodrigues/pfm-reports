@@ -5,5 +5,7 @@
 #'
 #' @param a,b Values; \code{a} is returned unless it is \code{NULL}.
 #' @return \code{a} if non-NULL, else \code{b}.
+#' @name nullCoalesce
+#' @aliases %||%
 #' @export
 `%||%` <- function(a, b) if (is.null(a)) b else a
