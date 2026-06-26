@@ -387,6 +387,12 @@ threshold-sensitive.
 ```{r classif-table}
 clsAll <- bind_rows(lapply(sectors, function(sec) {
   d <- fullProb[fullProb$sector == sec, c("region", "year", "prob")]
+  if (nrow(d) == 0) {
+    return(data.frame(sector = character(0), region = character(0), adoptionYear = numeric(0),
+                      Sens90_group = factor(character(0)), Youden_group = factor(character(0)),
+                      BaseRate_group = factor(character(0)), changesWithThreshold = logical(0),
+                      stringsAsFactors = FALSE))
+  }
   s  <- rogersClassify(d, thr[[sec]]$Sens90)[, c("region", "adoptionYear", "group")]
   yo <- rogersClassify(d, thr[[sec]]$Youden)[, c("region", "group")]
   br <- rogersClassify(d, thr[[sec]]$BaseRate)[, c("region", "group")]
@@ -419,8 +425,15 @@ for (tn in c("Sens90", "Youden", "BaseRate")) {
   cat(sprintf("### %s\n\n", tn))
   g_all <- bind_rows(lapply(sectors, function(sec) {
     d <- fullProb[fullProb$sector == sec, c("region", "year", "prob")]
-    data.frame(sector = sec, group = rogersClassify(d, thr[[sec]][[tn]])$group)
+    if (nrow(d) == 0) {
+      return(data.frame(sector = character(0), group = factor(character(0)), stringsAsFactors = FALSE))
+    }
+    data.frame(sector = sec, group = rogersClassify(d, thr[[sec]][[tn]])$group, stringsAsFactors = FALSE)
   }))
+  if (nrow(g_all) == 0) {
+    cat("*No data available to construct the table.*\n\n")
+    next
+  }
   print(knitr::kable(as.data.frame.matrix(table(g_all$group, g_all$sector)),
                      caption = sprintf("Region counts per Rogers band — %s threshold", tn)))
   cat("\n\n")
