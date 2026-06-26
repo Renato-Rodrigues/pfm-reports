@@ -86,6 +86,27 @@ capAtP99 <- function(x, probs = 0.99) {
   list(values = x, cap = cap, nAbove = nAbove)
 }
 
+#' Shared price-chart display cap anchored near a target (ADR 0032)
+#'
+#' Picks whichever of p99 / p99.5 / p99.9 of the positive values is closest to \code{target}
+#' \emph{without exceeding it}; falls back to \code{target} if even p99 is above it. This is a
+#' \emph{disclosed display} cap for readability (NOT the model's extrapolation clamp); use one common
+#' value across all price charts so they share a y-range and a few extrapolation outliers don't squash
+#' the visible range.
+#'
+#' @param x Numeric price vector (pooled across the charts that should share a range).
+#' @param target Anchor in USD/tCO2. Default 1000.
+#' @return A single numeric cap.
+#' @importFrom stats quantile
+#' @export
+priceDisplayCap <- function(x, target = 1000) {
+  pos <- x[is.finite(x) & x > 0]
+  if (!length(pos)) return(target)
+  qs <- as.numeric(stats::quantile(pos, probs = c(0.99, 0.995, 0.999), na.rm = TRUE))
+  below <- qs[qs <= target]
+  if (length(below)) max(below) else target
+}
+
 #' Annotation string for capped charts
 #'
 #' @param capInfo Output of \code{\link{capAtP99}}.

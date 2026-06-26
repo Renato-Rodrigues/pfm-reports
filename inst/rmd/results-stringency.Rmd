@@ -101,19 +101,33 @@ if (!is.null(scen_mag)) {
                                    modelDir = model_dir), error = function(e) NULL)
     } else NULL
     if (!is.null(pS)) {
-      out <- pS %>% select(region, year, sector, price)
+      # Carry the UNCLAMPED model price + the clamp-pinned flag (ADR 0032): the report displays the
+      # raw projection and uses the clamp only as a "beyond the extrapolation guard" indicator.
+      keep <- intersect(c("region", "year", "sector", "price", "priceUnclamped", "clampPinned"),
+                        colnames(pS))
+      out <- pS[, keep, drop = FALSE]
+      if (!"priceUnclamped" %in% names(out)) out$priceUnclamped <- out$price          # older fits
+      if (!"clampPinned" %in% names(out)) out$clampPinned <- FALSE
       if (!is.null(pA)) {
         out <- merge(out, pA %>% select(region, year, prob), by = c("region", "year"))
-        out$expectedPrice <- out$prob * out$price
+        out$expectedPrice <- out$prob * out$priceUnclamped                            # unclamped
       } else {
         out$prob <- NA_real_
-        out$expectedPrice <- out$price
+        out$expectedPrice <- out$priceUnclamped
       }
       proj[[sec]] <- out
     }
   }
 }
 has_proj <- length(proj) > 0
+
+# Shared display cap for ALL price charts (ADR 0032): the p99/p99.5/p99.9 of the pooled prices that is
+# closest to 1000 USD/tCO2 without exceeding it. A disclosed display cap (not the model clamp).
+histPx <- unlist(lapply(sectors, function(sec) {
+  f <- fits[[sec]]; expm1(c(as.numeric(f$model$y), as.numeric(stats::fitted(f$model))))
+}))
+projPx <- if (has_proj) { p0 <- bind_rows(proj); c(p0$priceUnclamped, p0$expectedPrice) } else numeric(0)
+priceCap <- priceDisplayCap(c(histPx, projPx), target = 1000)
 ```
 
 # Executive Summary
@@ -269,17 +283,19 @@ tr <- bind_rows(lapply(sectors, function(sec) {
              observed = expm1(as.numeric(f$model$y)),
              fitted = expm1(as.numeric(fitted(f$model))))
 }))
-ci <- capAtP99(c(tr$observed, tr$fitted))
+nAbove <- sum(c(tr$observed, tr$fitted) > priceCap, na.rm = TRUE)
 trL <- tr %>%
   tidyr::pivot_longer(c(observed, fitted), names_to = "kind", values_to = "price") %>%
-  mutate(price = pmin(price, ci$cap))
+  mutate(price = pmin(price, priceCap))
 ggplot(trL, aes(year, price, colour = kind, group = interaction(region, kind))) +
   geom_line(alpha = 0.35, linewidth = 0.35) +
   facet_wrap(~sector) +
   scale_colour_manual(values = c(observed = "#1f77b4", fitted = "#d62728")) +
+  coord_cartesian(ylim = c(0, priceCap)) +
   theme_report() +
   labs(title = "Observed vs fitted carbon prices (adopting region-years)",
-       x = NULL, y = "USD/tCO2", colour = NULL, subtitle = capAnnotation(ci))
+       x = NULL, y = "USD/tCO2", colour = NULL,
+       subtitle = sprintf("Shared display cap %.0f USD/tCO2 (%d value(s) above)", priceCap, nAbove))
 ```
 
 ```{r traj-cap, results='asis'}
@@ -344,40 +360,47 @@ if (has_proj) {
   pall <- bind_rows(proj)
 
   cat("## Hurdle-expected price trajectories\n\n")
-  pp <- pall %>% mutate(expCapped = pmin(expectedPrice, 1000))
+  nAboveP <- sum(pall$expectedPrice > priceCap, na.rm = TRUE)
+  pp <- pall %>% mutate(expCapped = pmin(expectedPrice, priceCap))
   p <- ggplot(pp, aes(year, expCapped, group = region)) +
     geom_line(alpha = 0.35, linewidth = 0.4, colour = "#1f77b4") +
     stat_summary(aes(group = 1), fun = median, geom = "line",
                  colour = "#d62728", linewidth = 1.2) +
     facet_wrap(~sector) +
     theme_report() +
-    scale_y_continuous(limits = c(0, 1000)) +
-    labs(title = "Projected expected carbon price: P(adoption) × price | adoption",
-         x = NULL, y = "USD/tCO2", subtitle = "Capped at 1000 USD/tCO2")
+    coord_cartesian(ylim = c(0, priceCap)) +
+    labs(title = "Projected expected carbon price: P(adoption) × price | adoption (UNCLAMPED)",
+         x = NULL, y = "USD/tCO2",
+         subtitle = sprintf("Shared display cap %.0f USD/tCO2 (%d region-year(s) above)", priceCap, nAboveP))
   print(p)
   cat("\n\n")
 
-  outliers <- pall %>%
-    filter(expectedPrice > 1000) %>%
-    mutate(expectedPrice = round(expectedPrice, 1)) %>%
-    select(sector, region, year, expectedPrice) %>%
-    arrange(desc(expectedPrice))
-  if (nrow(outliers) > 0) {
-    print(knitr::kable(outliers, caption = "Projected expected prices above 1000 USD/tCO2"))
-  } else {
-    cat("*No projected expected prices exceed 1000 USD/tCO2.*\n")
-  }
+  # Sanity indicator (ADR 0032): region-years where the UNCLAMPED model price exceeds the
+  # extrapolation guard (clampPinned) — i.e. the model is projecting beyond its data there. The clamp
+  # is NOT applied to the displayed value; it is shown here as a "way off" flag.
+  pinFrac <- if ("clampPinned" %in% names(pall)) mean(pall$clampPinned, na.rm = TRUE) else NA_real_
+  cat(sprintf("**Extrapolation indicator:** %s of projected region-years are beyond the extrapolation guard%s.\n\n",
+              if (is.na(pinFrac)) "n/a" else sprintf("%.0f%%", 100 * pinFrac),
+              if (!is.na(pinFrac) && pinFrac > 0.25) " — **> 25%, a severe clamp-reliance flag (this spec would be rejected in selection)**" else ""))
+  guardrows <- if ("clampPinned" %in% names(pall)) {
+    pall %>% filter(clampPinned) %>%
+      mutate(priceUnclamped = round(priceUnclamped, 1), expectedPrice = round(expectedPrice, 1)) %>%
+      select(sector, region, year, priceUnclamped, expectedPrice) %>%
+      arrange(desc(priceUnclamped)) %>% head(50)
+  } else pall[0, ]
+  if (nrow(guardrows) > 0) {
+    print(knitr::kable(guardrows, caption = "Region-years beyond the extrapolation guard (model extrapolating past data)"))
+  } else cat("*No region-years exceed the extrapolation guard — the projection stays within data range.*\n")
   cat("\n\n")
 
-  howToRead("The hurdle expectation per region: adoption probability times the ",
-            "conditional price, back-transformed to USD/tCO2 and display-capped at 1000 USD/tCO2. ",
-            "Red = median region. This is the quantity a REMIND rigidity factor would ",
-            "be built from — shapes matter more than absolute levels. **Why curves stay modest ",
-            "(≈ a few hundred $/tCO2):** this is the *expected* price = P(adoption) × conditional ",
-            "price, and the conditional Diffuse price is held at its observed-anchored projection ",
-            "ceiling (the price-explosion guard, ADR 0023); multiplying by P(adoption) < 1 then ",
-            "pulls the expected value further below the conditional price. It is not an artificial ",
-            "cap at 300 — the 1000 display cap rarely binds here.")
+  howToRead("The hurdle expectation per region: adoption probability times the **unclamped** ",
+            "conditional price (the genuine model projection, ADR 0032 — the extrapolation clamp is ",
+            "NOT applied to the displayed value), back-transformed to USD/tCO2. Red = median region. ",
+            "The y-axis is a shared *display* cap (the p99/p99.5/p99.9 nearest 1000 USD/tCO2) common ",
+            "to all price charts; the few region-years above it are listed in the extrapolation table ",
+            "above. Levels are modest because this is the *expected* price = P(adoption) × conditional ",
+            "price (P < 1), not because of a clamp. Specs that lean on the guard for > 25% of ",
+            "region-years are rejected from selection — so the deliverable projects within its data.")
 
   cat("## Price ranking at snapshots\n\n")
   snap <- pall %>%
@@ -395,15 +418,15 @@ if (has_proj) {
 
   cat("## Projected price distribution\n\n")
   pv <- pall %>% filter(year %in% c(2030, 2050, 2070, 2100))
-  pv$expectedPrice <- pmin(pv$expectedPrice, 1000)
+  pv$expectedPrice <- pmin(pv$expectedPrice, priceCap)
   p2 <- ggplot(pv, aes(factor(year), expectedPrice)) +
     geom_violin(fill = "#1f77b4", alpha = 0.3, colour = "#1f77b4", scale = "width") +
     geom_boxplot(width = 0.15, outlier.size = 1, outlier.colour = "grey40", fill = "white", alpha = 0.6) +
     facet_wrap(~sector) +
     theme_report() +
-    scale_y_continuous(limits = c(0, 1000)) +
+    coord_cartesian(ylim = c(0, priceCap)) +
     labs(title = "Distribution of expected prices across regions",
-         x = NULL, y = "USD/tCO2", subtitle = "Capped at 1000 USD/tCO2")
+         x = NULL, y = "USD/tCO2", subtitle = sprintf("Shared display cap %.0f USD/tCO2", priceCap))
   print(p2)
   cat("\n\n")
   howToRead("Cross-region distribution of the hurdle-expected price at each snapshot. ",
