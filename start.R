@@ -11,6 +11,8 @@
 #   Rscript start.R --bootstrap=200 --bootstrapDetail=full   # + selection-uncertainty bootstrap (ADR 0025)
 #   Rscript start.R --bootstrap=200 --bootstrapDetail=full --resume --render  # resume: skip steps whose
 #                                                           #   artifact already exists (don't re-pay them)
+#   Rscript start.R --priority                              # high-priority QOS; auto-sizes nCores/mem/
+#                                                           #   time to the detected QOS+node allowance
 #
 # Paths (relative paths are resolved against the current working directory):
 #   madrat data cache : --cachefolder= | config cachefolder/cacheDir | default data/cache
@@ -85,6 +87,28 @@ callArgs <- list(
   forceRefit      = hasFlag("forceRefit"),
   resume          = hasFlag("resume")
 )
+# Report rendering runs in parallel by default (ADR 0030; min(nReports, 4) workers). --renderCores=N
+# raises the cap to use a big node fully.
+rc <- getArg("renderCores", NULL)
+if (!is.null(rc)) callArgs$renderCores <- as.integer(rc)
+
+# --priority: schedule on the high-priority QOS and AUTO-SIZE to the detected allowance (ADR 0031).
+# pfm::prioritySizing() queries `sacctmgr` (QOS cpu/mem/wall caps) and `sinfo` (node size) and returns
+# the largest cores/mem/time a single-node priority job may request. Each axis is only auto-set when
+# the user did NOT pass it explicitly (so --priority --nCores=8 still wins). Falls back to 16 cores
+# when SLURM tools are unavailable (e.g. a local dry run).
+if (hasFlag("priority")) {
+  if (is.null(getArg("qos", NULL))) callArgs$qos <- "priority"
+  ps <- tryCatch(pfm::prioritySizing(qos = callArgs$qos, partition = callArgs$partition),
+                 error = function(e) NULL)
+  if (is.null(ps)) ps <- list(nCores = 16L, mem = "64G", time = "24:00:00", detail = "detection failed")
+  if (is.null(nCoresArg))            callArgs$nCores <- ps$nCores
+  if (is.null(getArg("mem", NULL)))  callArgs$mem    <- ps$mem
+  if (is.null(getArg("time", NULL))) callArgs$time   <- ps$time
+  message("[start] priority mode auto-sized: qos=", callArgs$qos, " nCores=", callArgs$nCores,
+          " mem=", callArgs$mem, " time=", callArgs$time, "  [", ps$detail,
+          "]  (override any with --nCores/--mem/--time/--qos)")
+}
 # Forwarded to runSweep -> runChannelsWorkflow. Default (arg omitted) leaves selectFE unset, so the
 # workflow's own default applies: c("H12","OECDp","Mundlak") — a real region-FE/Mundlak deliverable
 # is required and pooled `noFE` is never auto-selected. `--selectFE=all|none|off` lifts the constraint.

@@ -41,7 +41,9 @@ Suggests:
     svglite,
     rprojroot,
     sf,
-    rnaturalearth
+    rnaturalearth,
+    future,
+    future.apply
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Config/roxygen2/version: 8.0.0

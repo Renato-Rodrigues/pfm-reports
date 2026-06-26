@@ -39,12 +39,23 @@
   }
   if (isTRUE(verbose)) message("[pfmreports] rendering ", name, " -> ",
                                file.path(outputDir, outputFile))
+  t0 <- Sys.time()
   rmarkdown::render(
     input = tmpl, output_file = outputFile, output_dir = outputDir,
     intermediates_dir = tempfile("pfmreports-"), knit_root_dir = knitWd,
     params = params, envir = new.env(parent = globalenv()), quiet = !verbose
   )
+  # Completion marker (parsed by pfm::runStatus for the per-report render checklist, ADR 0030).
+  if (isTRUE(verbose)) message("[pfmreports] done ", name, " (",
+                               .fmtRenderDur(as.numeric(difftime(Sys.time(), t0, units = "secs"))), ")")
   invisible(file.path(outputDir, outputFile))
+}
+
+# Internal: compact render duration for the done-marker, e.g. 4 -> "4s", 95 -> "1m 35s".
+#' @keywords internal
+.fmtRenderDur <- function(secs) {
+  s <- round(secs)
+  if (s >= 60) sprintf("%dm %02ds", s %/% 60, s %% 60) else paste0(s, "s")
 }
 
 # ── Run-Group consumer reports ──────────────────────────────────────────────────
@@ -175,12 +186,15 @@ renderSubnational <- function(group = getPfmConfig("group", "exhaustive"),
 #' @param reports Character vector subset of
 #'   \code{c("selection","model-selection","results-adoption","results-stringency",
 #'   "publication","robustness","subnational")}, or \code{NULL} for all.
+#' @param nCores Integer. Reports to render in parallel (ADR 0030). Default
+#'   \code{min(length(reports), 4)} — the reports are independent; the panel cache is pre-warmed
+#'   once so workers only read it. \code{1} = sequential. Override with a larger value on a big node.
 #' @return Named list of rendered HTML paths (invisibly).
 #' @export
 renderGroup <- function(group = getPfmConfig("group", "exhaustive"),
                         reports = NULL, resultsDir = .defResults(), modelDir = .defModel(),
                         cachefolder = .defCache(), gdxFile = .defGdx(), reportName = group,
-                        outputDir = .defOutput(), verbose = TRUE) {
+                        outputDir = .defOutput(), verbose = TRUE, nCores = NULL) {
   all <- c("selection", "model-selection", "results-adoption", "results-stringency",
            "publication", "robustness", "subnational")
   reports <- if (is.null(reports)) all else intersect(all, reports)
@@ -198,11 +212,47 @@ renderGroup <- function(group = getPfmConfig("group", "exhaustive"),
     "robustness" = function() renderRobustness(group, resultsDir, reportName, outputDir, verbose),
     "subnational" = function() renderSubnational(group, resultsDir, reportName, outputDir, verbose)
   )
-  out <- list()
-  for (r in reports) {
-    out[[r]] <- tryCatch(fns[[r]](), error = function(e) {
-      message("[pfmreports] report '", r, "' FAILED: ", conditionMessage(e)); NULL
-    })
+  if (is.null(nCores)) nCores <- min(length(reports), 4L)
+  nCores <- max(1L, as.integer(nCores))
+  runOne <- function(r) tryCatch(fns[[r]](), error = function(e) {
+    message("[pfmreports] report '", r, "' FAILED: ", conditionMessage(e)); NULL
+  })
+
+  useParallel <- nCores > 1L && length(reports) > 1L &&
+    requireNamespace("future", quietly = TRUE) && requireNamespace("future.apply", quietly = TRUE)
+  if (useParallel) {
+    # Pre-warm the panel caches ONCE in the master so parallel workers only READ panel-cache/*.rds
+    # (avoids the cold-cache write race; ADR 0030) — but only when a panel-consuming report is in
+    # the set (selection/model-selection read the sweep rds, not the panel). Anchor the cache dir
+    # the workers will derive.
+    panelReports <- c("results-adoption", "results-stringency", "publication")
+    if (length(intersect(reports, panelReports))) {
+      if (!nzchar(getOption("pfmreports.panelCacheDir", ""))) {
+        options(pfmreports.panelCacheDir = file.path(.absPath(outputDir), "panel-cache"))
+      }
+      if (nzchar(cachefolder)) try(madrat::setConfig(cachefolder = cachefolder), silent = TRUE)
+      try(madrat::setConfig(forcecache = TRUE), silent = TRUE)
+      try(getPanelDataHistoricalCached(aggregate = TRUE, y = 2000:2022,
+          outputRegionMappingFile = "regionmapping_54.csv"), silent = TRUE)
+      if (!is.null(gdxFile) && nzchar(gdxFile) && file.exists(gdxFile)) {
+        try(getPanelDataScenarioCached(gdxFile = gdxFile, aggregate = TRUE,
+            outputRegionMappingFile = "regionmapping_54.csv"), silent = TRUE)
+      }
+    }
+    workers <- min(nCores, length(reports))
+    oplan <- future::plan(); on.exit(future::plan(oplan), add = TRUE)
+    if (identical(.Platform$OS.type, "windows")) {
+      future::plan(future::multisession, workers = workers)
+    } else {
+      future::plan(future::multicore, workers = workers)
+    }
+    if (isTRUE(verbose)) message("[pfmreports] rendering ", length(reports),
+                                 " reports across ", workers, " worker(s) ...")
+    out <- future.apply::future_lapply(reports, runOne, future.seed = TRUE,
+      future.packages = c("pfmreports", "pfm", "madrat", "magclass"))
+    names(out) <- reports
+  } else {
+    out <- stats::setNames(lapply(reports, runOne), reports)
   }
   invisible(out)
 }

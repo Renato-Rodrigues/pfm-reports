@@ -13,7 +13,8 @@ renderGroup(
   gdxFile = .defGdx(),
   reportName = group,
   outputDir = .defOutput(),
-  verbose = TRUE
+  verbose = TRUE,
+  nCores = NULL
 )
 }
 \arguments{
@@ -23,6 +24,10 @@ individual render functions.}
 \item{reports}{Character vector subset of
 \code{c("selection","model-selection","results-adoption","results-stringency",
 "publication","robustness","subnational")}, or \code{NULL} for all.}
+
+\item{nCores}{Integer. Reports to render in parallel (ADR 0030). Default
+\code{min(length(reports), 4)} — the reports are independent; the panel cache is pre-warmed
+once so workers only read it. \code{1} = sequential. Override with a larger value on a big node.}
 }
 \value{
 Named list of rendered HTML paths (invisibly).
