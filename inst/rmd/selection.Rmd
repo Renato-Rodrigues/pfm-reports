@@ -574,7 +574,8 @@ interactiveTable(
   results %>%
     select(model, sector, stage, panelTransform,
            dplyr::any_of("priceLink"), tier, deltaR2Theory, theoryFrac,
-           aic, dplyr::any_of("bic"), pseudoR2, nObs, dplyr::any_of(c("nFE", "trendShare")),
+           aic, dplyr::any_of("bic"), pseudoR2, nObs,
+           dplyr::any_of(c("nFE", "trendShare", "nonTheoryShare")),
            maxVIF, converged, sigActorPower, sigInstQual,
            sigInteractions, auc, brier, calibrationSlope, rmse),
   caption = "Every fit in the sweep — all measures", pageLength = 25, filter = "top"
