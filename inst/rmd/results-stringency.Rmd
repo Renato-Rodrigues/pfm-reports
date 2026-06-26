@@ -120,6 +120,8 @@ has_proj <- length(proj) > 0
 
 # Executive Summary
 
+*What this section is for.* A high-level overview of the selected Price Stringency model specifications and key performance diagnostics (RMSE, obs-fit correlation) for the Bulk and Diffuse sectors.
+
 ```{r exec, results='asis'}
 for (sec in sectors) {
   f <- fits[[sec]]
@@ -137,6 +139,8 @@ cat(sprintf("\nHurdle projections (adoption-gated expected price): %s\n",
 ```
 
 # Model Equations & Coefficients {.tabset}
+
+*What this section is for.* The mathematical price equations and standardized coefficient estimates (with robust 95% confidence intervals) for each sector, allowing direct comparison of driver influence on price levels.
 
 ```{r coefs, results='asis', fig.height=6}
 for (sec in sectors) {
@@ -179,6 +183,8 @@ howToRead("Stringency coefficients are on the log(1+ECP) scale (a log-linear mod
 
 # Real-World Effects — Semi-Elasticities & USD Effects {.tabset}
 
+*What this section is for.* Translating log-linear coefficients into real-world price changes. It reports the percentage change in price (semi-elasticity) and the absolute dollar effect per one standard deviation increase in each driver, calculated at the mean fitted historical price.
+
 ```{r semi, results='asis'}
 for (sec in sectors) {
   cat(sprintf("## %s\n\n", sec))
@@ -208,6 +214,8 @@ howToRead("semiElasticityPct = (e^β − 1)·100: the % change in the (log1p) pr
 ```
 
 # Historical Fit & Outliers {.tabset}
+
+*What this section is for.* Diagnostic tools to evaluate model performance on the historical dataset (2000–2022). It includes calibration curves, historical price trajectory plots, list of price outliers, and residual diagnostics.
 
 ## Calibration (45°)
 
@@ -313,6 +321,8 @@ howToRead("Raw residuals against fitted values. A flat red smoother around zero 
 ```
 
 # Future Projections (SSP2) {.tabset}
+
+*What this section is for.* Projections of hurdle-expected carbon prices under the SSP2 scenario up to 2100. It combines the estimated adoption probability and the price stringency model to compute the expected price (probability of adoption multiplied by the conditional price) for each region, and displays trajectories, snapshot rankings, and price distributions.
 
 ```{r proj, results='asis', fig.height=6}
 if (has_proj) {

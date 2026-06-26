@@ -115,6 +115,19 @@ histProb <- bind_rows(lapply(sectors, function(sec) {
              prob = p[seq_len(n)], stringsAsFactors = FALSE)
 }))
 
+# Combined historical and projected probabilities per region, year and sector (for future categories)
+fullProb <- bind_rows(lapply(sectors, function(sec) {
+  histD <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+  if (has_proj && !is.null(proj[[sec]])) {
+    projD <- proj[[sec]][, c("region", "year", "prob")]
+    # Avoid duplicate years at the seam
+    projD <- projD[!(projD$year %in% histD$year), ]
+    bind_rows(histD, projD)
+  } else {
+    histD
+  }
+}))
+
 # Reference adoption thresholds per sector (ADR 0029): Sens-90 (default), Youden, base-rate.
 thr <- lapply(sectors, function(sec) {
   d <- histProb[histProb$sector == sec, ]
@@ -133,6 +146,8 @@ regionH12 <- tryCatch({
 ```
 
 # Executive Summary
+
+*What this section is for.* A high-level summary of the selected carbon pricing adoption model specifications and key diagnostics (including convergence, max VIF, theory fraction, and predictive metrics) for the Bulk and Diffuse sectors.
 
 ```{r exec, results='asis'}
 for (sec in sectors) {
@@ -154,6 +169,8 @@ cat(sprintf("\nScenario projections: %s\n",
 ```
 
 # Model Equations & Coefficients {.tabset}
+
+*What this section is for.* The mathematical equations of the estimated logistic regression models and the standardized coefficient estimates (with robust 95% confidence intervals) for the Bulk and Diffuse sectors.
 
 ```{r coefs, results='asis', fig.height=6}
 for (sec in sectors) {
@@ -206,22 +223,42 @@ for (sec in sectors) {
   cat(sprintf("## %s\n\n", sec))
   am <- fits[[sec]]$ame
   if (!is.null(am)) {
+    # Visual forest plot
+    am_plot <- am %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        ame_pp = ame * 100,
+        lower_pp = lower * 100,
+        upper_pp = upper * 100,
+        sig = p < 0.05
+      )
+    p <- ggplot(am_plot, aes(ame_pp, reorder(term, ame_pp), colour = sig)) +
+      geom_vline(xintercept = 0, linetype = "dashed", colour = "grey50") +
+      geom_pointrange(aes(xmin = lower_pp, xmax = upper_pp)) +
+      scale_colour_manual(values = c(`TRUE` = "#d62728", `FALSE` = "grey60")) +
+      theme_report() + theme(legend.position = "none") +
+      labs(title = paste0(sec, " — Average Marginal Effects (percentage points, robust 95% CI)"),
+           x = "Change in adoption probability (percentage points) per 1 SD", y = NULL)
+    print(p)
+    cat("\n\n")
+
+    # Full data table
     am2 <- am
     num <- vapply(am2, is.numeric, logical(1))
     am2[num] <- lapply(am2[num], function(x) round(x * 100, 2))
-    print(knitr::kable(am2, caption = paste0(sec, " — AME in percentage points of P(adoption), per 1 SD")))
+    print(knitr::kable(am2, caption = paste0(sec, " — AME table in percentage points of P(adoption), per 1 SD")))
     cat("\n\n")
   } else cat("*AMEs not available.*\n\n")
 }
-howToRead("Average Marginal Effects converted to percentage points: the average ",
-          "change in adoption probability when the driver increases by **one standard ",
-          "deviation** (drivers are standardized, so AMEs are comparable across drivers), ",
-          "holding observed covariates fixed. This is the closest single number to ",
-          "'real-world effect size' for the adoption stage.",
-          type = "table")
+howToRead("The chart (forest plot) and table display Average Marginal Effects (AMEs) in percentage points. ",
+          "An AME is the average change in adoption probability (in percentage points) when a driver ",
+          "increases by **one standard deviation** (drivers are standardized, making magnitudes directly ",
+          "comparable), holding other covariates fixed. Red points and lines denote statistical significance (p < 0.05).")
 ```
 
 # Historical Fit & Outliers {.tabset}
+
+*What this section is for.* Diagnostics of how well the models fit the historical data (2000–2022), featuring fitted probability density plots by actual outcome and a detailed list of region-years with large Pearson residuals (outliers).
 
 ## Predicted probability by outcome
 
@@ -274,6 +311,8 @@ howToRead("Adoption-side outlier rule: observations where the model was confiden
 ```
 
 # Predicted Probability Profiles {.tabset}
+
+*What this section is for.* Visualizing how the predicted adoption probability changes as each theory driver sweeps from its minimum to maximum value, holding other variables constant at their sample means.
 
 ```{r margins, results='asis', fig.height=4}
 for (sec in sectors) {
@@ -347,7 +386,7 @@ threshold-sensitive.
 
 ```{r classif-table}
 clsAll <- bind_rows(lapply(sectors, function(sec) {
-  d <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+  d <- fullProb[fullProb$sector == sec, c("region", "year", "prob")]
   s  <- rogersClassify(d, thr[[sec]]$Sens90)[, c("region", "adoptionYear", "group")]
   yo <- rogersClassify(d, thr[[sec]]$Youden)[, c("region", "group")]
   br <- rogersClassify(d, thr[[sec]]$BaseRate)[, c("region", "group")]
@@ -379,7 +418,7 @@ howToRead(
 for (tn in c("Sens90", "Youden", "BaseRate")) {
   cat(sprintf("### %s\n\n", tn))
   g_all <- bind_rows(lapply(sectors, function(sec) {
-    d <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+    d <- fullProb[fullProb$sector == sec, c("region", "year", "prob")]
     data.frame(sector = sec, group = rogersClassify(d, thr[[sec]][[tn]])$group)
   }))
   print(knitr::kable(as.data.frame.matrix(table(g_all$group, g_all$sector)),
@@ -438,7 +477,7 @@ if (!mapsAvailable) {
   cat("## Adopter category {.tabset}\n\n")
   for (sec in sectors) {
     cat(sprintf("### %s\n\n", sec))
-    d <- histProb[histProb$sector == sec, c("region", "year", "prob")]
+    d <- fullProb[fullProb$sector == sec, c("region", "year", "prob")]
     cls <- rogersClassify(d, thr[[sec]]$Sens90)
     p <- plotRegionWorldMap(cls[, c("region", "group")], discrete = TRUE, palette = rogersPal,
       title = sprintf("Rogers adopter category — %s (Sens-90)", sec), legend = "Adopter group")
@@ -519,6 +558,8 @@ howToRead("Per region: grey step = observed 0/1 adoption, blue = fitted probabil
 
 # Future Projections (SSP2) {.tabset}
 
+*What this section is for.* Projections of carbon pricing adoption probabilities under the SSP2 scenario up to 2100. It shows probability trajectories over time, region snapshots at specific horizons, and a seam check between the last historical and first scenario year.
+
 ```{r proj, results='asis', fig.height=6}
 if (has_proj) {
   pall <- bind_rows(proj)
@@ -592,6 +633,8 @@ if (has_proj) {
 ```
 
 # Measure Definitions
+
+*What this section is for.* A glossary defining all statistical measures and diagnostics used throughout this adoption report.
 
 ```{r defs}
 interactiveTable(

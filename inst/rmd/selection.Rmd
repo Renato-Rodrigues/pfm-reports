@@ -80,6 +80,8 @@ howForest <- function() howToRead(
 
 # Executive Summary
 
+*What this section is for.* A high-level overview of the model selection sweep, detailing the total number of candidate specifications fitted, the maximin selection rules, the Projection Sanity gates applied, and which specifications were ultimately selected for the Adoption and Price Stringency stages.
+
 ```{r exec, results='asis'}
 nSpec <- length(unique(results$model))
 cat(sprintf(paste0(
@@ -101,6 +103,8 @@ for (stg in stages) {
 ```
 
 # Chosen Models
+
+*What this section is for.* Detailed results for the selected specifications in each stage (Adoption and Stringency) and sector (Bulk and Diffuse). It displays model equations, coefficients, significance levels, diagnostics, and a coefficient forest plot.
 
 ```{r chosen, results='asis', fig.height=6}
 for (stg in stages) {
@@ -137,6 +141,8 @@ for (stg in stages) {
 ```
 
 # Selection Algorithm {.tabset}
+
+*What this section is for.* A step-by-step breakdown of how the selection pipeline works, from the Stage 0 channel collinearity screen, to VIF/convergence hard gates, worse-sector maximin tier ranking, delta-R2 tie-breaking, and finally the Projection Sanity gate.
 
 ## How selection works
 
@@ -295,10 +301,7 @@ howToRead(
 
 # Alternative Selections {.tabset}
 
-The deliverable follows one rule (the Maximin tab). These are the **same sweep ranked under
-different objectives** — to show how much the choice depends on the rule, and what a
-predictability-first, parsimony-first, theory-first or per-sector analyst would pick instead.
-None of these change the deliverable.
+*What this section is for.* Comparisons of model rankings and selections under alternative objectives—such as best per-sector performance, maximum predictability (AUC/RMSE), optimal parsimony (adjusted BIC), or pure theory content—to show how sensitive the selection is to the rule.
 
 ## Best per sector/stage
 
@@ -451,6 +454,8 @@ howToRead("The shortlist per stage under the deliverable rule — the gate-passi
 
 # Top Model Forest Plots {.tabset}
 
+*What this section is for.* Direct visual comparisons of the estimated coefficients (with robust 95% confidence intervals) across the top 5 maximin-ranked specifications, the selected model, and the incumbent model for each stage and sector.
+
 ```{r top-forests, results='asis', fig.height=6}
 for (stg in stages) {
   cat(sprintf("## %s {.tabset}\n\n", stg))
@@ -468,6 +473,8 @@ howForest()
 ```
 
 # Projection Sanity Flags
+
+*What this section is for.* A comprehensive log of all Projection Sanity rule violations (severe or warning) encountered for all evaluated specifications during the expanding-batch projection phase, helping identify why certain models were rejected.
 
 **What the sanity flags are.** After the Maximin ranking picks a leader, that spec is *projected*
 forward on the scenario and screened by the **Projection Sanity gate** — a set of rules that catch
@@ -515,6 +522,8 @@ howToRead(
 
 # All Models
 
+*What this section is for.* A complete master table containing every single specification fit in the sweep across both sectors and stages, listing all estimated parameters, selection metrics, and diagnostic indicators.
+
 ```{r all-models}
 interactiveTable(
   results %>%
@@ -536,6 +545,8 @@ howToRead(
 ```
 
 # Measure Definitions
+
+*What this section is for.* A canonical glossary defining all statistical measures, diagnostics, and selection criteria used throughout the PFM reports.
 
 ```{r defs}
 # Single source of truth shared across all reports (pfmreports::measureDefinitions); grouped so

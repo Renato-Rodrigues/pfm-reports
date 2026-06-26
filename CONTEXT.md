@@ -40,5 +40,8 @@ A region-year whose observed, fitted, or projected ECP exceeds the 99th percenti
 ## How-to-Read Caption
 A mandatory explanatory block rendered below **every** chart and table in the redesigned reports, starting "How to read this chart/table:" and stating the units, what each visual element encodes, and what a problematic pattern would look like. Emitted by a shared helper so styling is uniform; a chart without one is a defect.
 
+## Section Explanation
+A mandatory introductory paragraph at the beginning of each major section across all redesigned reports (Selection, Adoption, and Price Stringency), starting with `*What this section is for.*` in italics, explaining the purpose, scope, and interpretation of the section.
+
 ## Dispersion Chart
 A per-data-type chart of cross-region dispersion over time (σ-convergence view) showing whether the regional variation that identifies the model is shrinking.
