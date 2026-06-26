@@ -163,8 +163,9 @@ for (sec in sectors) {
          x = "Estimate (per 1 SD of the driver)", y = NULL)
   print(p)
   cat("\n\n")
-  print(interactiveTable(ct %>% select(term, estimate, stdError, zValue, pValue, signif),
-                         caption = paste0(sec, " — full coefficient table (per-SD drivers)")))
+  print(knitr::kable(ct %>% select(term, estimate, stdError, zValue, pValue, signif) %>%
+                       mutate(across(where(is.numeric), ~round(.x, 3))),
+                     caption = paste0(sec, " — full coefficient table (per-SD drivers)")))
   cat("\n\n")
 }
 howToRead("Stringency coefficients are on the log(1+ECP) scale (a log-linear model: ",
@@ -194,7 +195,7 @@ for (sec in sectors) {
       signif = sigStars(pValue)
     ) %>%
     select(term, estimate, semiElasticityPct, effectUSDtCO2, pValue, signif)
-  print(interactiveTable(eff, caption = sprintf(
+  print(knitr::kable(eff %>% mutate(across(where(is.numeric), ~round(.x, 3))), caption = sprintf(
     "%s — effect per 1 SD of driver (mean fitted price %.1f USD/tCO2)", sec, meanFitted)))
   cat("\n\n")
 }
@@ -316,22 +317,35 @@ howToRead("Raw residuals against fitted values. A flat red smoother around zero 
 ```{r proj, results='asis', fig.height=6}
 if (has_proj) {
   pall <- bind_rows(proj)
-  ci <- capAtP99(pall$expectedPrice)
 
   cat("## Hurdle-expected price trajectories\n\n")
-  pp <- pall %>% mutate(expCapped = pmin(expectedPrice, ci$cap))
+  pp <- pall %>% mutate(expCapped = pmin(expectedPrice, 1000))
   p <- ggplot(pp, aes(year, expCapped, group = region)) +
     geom_line(alpha = 0.35, linewidth = 0.4, colour = "#1f77b4") +
     stat_summary(aes(group = 1), fun = median, geom = "line",
                  colour = "#d62728", linewidth = 1.2) +
     facet_wrap(~sector) +
     theme_report() +
+    scale_y_continuous(limits = c(0, 1000)) +
     labs(title = "Projected expected carbon price: P(adoption) × price | adoption",
-         x = NULL, y = "USD/tCO2", subtitle = capAnnotation(ci))
+         x = NULL, y = "USD/tCO2", subtitle = "Capped at 1000 USD/tCO2")
   print(p)
   cat("\n\n")
+
+  outliers <- pall %>%
+    filter(expectedPrice > 1000) %>%
+    mutate(expectedPrice = round(expectedPrice, 1)) %>%
+    select(sector, region, year, expectedPrice) %>%
+    arrange(desc(expectedPrice))
+  if (nrow(outliers) > 0) {
+    print(knitr::kable(outliers, caption = "Projected expected prices above 1000 USD/tCO2"))
+  } else {
+    cat("*No projected expected prices exceed 1000 USD/tCO2.*\n")
+  }
+  cat("\n\n")
+
   howToRead("The hurdle expectation per region: adoption probability times the ",
-            "conditional price, back-transformed to USD/tCO2 and display-capped at p99. ",
+            "conditional price, back-transformed to USD/tCO2 and display-capped at 1000 USD/tCO2. ",
             "Red = median region. This is the quantity a REMIND rigidity factor would ",
             "be built from — shapes matter more than absolute levels.")
 
@@ -341,8 +355,8 @@ if (has_proj) {
     mutate(expectedPrice = round(expectedPrice, 1)) %>%
     select(sector, region, year, expectedPrice) %>%
     tidyr::pivot_wider(names_from = year, values_from = expectedPrice, names_prefix = "y")
-  print(interactiveTable(snap, caption = "Hurdle-expected price (USD/tCO2) at snapshot years",
-                         pageLength = 20))
+  print(knitr::kable(snap %>% mutate(across(where(is.numeric), ~round(.x, 1))),
+                     caption = "Hurdle-expected price (USD/tCO2) at snapshot years"))
   cat("\n\n")
   howToRead("Sortable per-region expected prices at four horizons — the ranking view ",
             "for 'which regions can sustain high carbon prices, when'. Values above the ",
@@ -351,15 +365,15 @@ if (has_proj) {
 
   cat("## Projected price distribution\n\n")
   pv <- pall %>% filter(year %in% c(2030, 2050, 2070, 2100))
-  civ <- capAtP99(pv$expectedPrice)
-  pv$expectedPrice <- civ$values
+  pv$expectedPrice <- pmin(pv$expectedPrice, 1000)
   p2 <- ggplot(pv, aes(factor(year), expectedPrice)) +
-    geom_violin(fill = "#1f77b4", alpha = 0.4, colour = NA) +
-    geom_boxplot(width = 0.12, outlier.size = 0.7) +
+    geom_violin(fill = "#1f77b4", alpha = 0.3, colour = "#1f77b4", scale = "width") +
+    geom_boxplot(width = 0.15, outlier.size = 1, outlier.colour = "grey40", fill = "white", alpha = 0.6) +
     facet_wrap(~sector) +
     theme_report() +
+    scale_y_continuous(limits = c(0, 1000)) +
     labs(title = "Distribution of expected prices across regions",
-         x = NULL, y = "USD/tCO2", subtitle = capAnnotation(civ))
+         x = NULL, y = "USD/tCO2", subtitle = "Capped at 1000 USD/tCO2")
   print(p2)
   cat("\n\n")
   howToRead("Cross-region distribution of the hurdle-expected price at each snapshot. ",
