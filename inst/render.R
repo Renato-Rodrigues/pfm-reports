@@ -27,5 +27,6 @@ invisible(renderGroup(
   cachefolder = getArg("cachefolder", getPfmConfig("cachefolder", getPfmConfig("cacheDir", "data/cache"))),
   gdxFile     = getArg("gdxFile",    getPfmConfig("gdxPath", "data/fulldata.gdx")),
   reportName  = getArg("reportName", group),
-  outputDir   = getArg("outputDir",  getPfmConfig("outputDir", "."))
+  outputDir   = getArg("outputDir",  getPfmConfig("outputDir", ".")),
+  nCores      = as.integer(getArg("nCores", getArg("renderCores", NULL)))
 ))
