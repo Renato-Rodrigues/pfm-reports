@@ -74,8 +74,10 @@ rogersClassify <- function(df, threshold) {
   if (length(adopt)) {
     ord <- adopt[order(out$adoptionYear[adopt])]
     out$rankPct[ord] <- (seq_along(ord) - 0.5) / length(ord)   # mid-rank percentile
-    out$group[ord] <- cut(out$rankPct[ord], breaks = c(-Inf, 0.025, 0.16, 0.50, 0.84, Inf),
-                          labels = lv[1:5])
+    # as.character() is essential: assigning a factor into the character `group` column otherwise
+    # stores the integer CODES (1..5), which the later factor(levels = lv) then turns into NA.
+    out$group[ord] <- as.character(cut(out$rankPct[ord], breaks = c(-Inf, 0.025, 0.16, 0.50, 0.84, Inf),
+                                       labels = lv[1:5]))
   }
   out$group[is.na(out$group)] <- "Non-Adopters"
   out$group <- factor(out$group, levels = lv)
