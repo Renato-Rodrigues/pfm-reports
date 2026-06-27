@@ -11,8 +11,8 @@
 #   Rscript start.R --bootstrap=200 --bootstrapDetail=full   # + selection-uncertainty bootstrap (ADR 0025)
 #   Rscript start.R --bootstrap=200 --bootstrapDetail=full --resume --render  # resume: skip steps whose
 #                                                           #   artifact already exists (don't re-pay them)
-#   Rscript start.R --priority                              # high-priority QOS; auto-sizes nCores/mem/
-#                                                           #   time to the detected QOS+node allowance
+#   (priority QOS is the DEFAULT on a SLURM host — auto-sizes nCores/mem/time to your detected
+#    allowance, ADR 0031. Opt out with --no-priority, or override with --qos=<other> / --nCores= etc.)
 #
 # Paths (relative paths are resolved against the current working directory):
 #   madrat data cache : --cachefolder= | config cachefolder/cacheDir | default data/cache
@@ -92,13 +92,16 @@ callArgs <- list(
 rc <- getArg("renderCores", NULL)
 if (!is.null(rc)) callArgs$renderCores <- as.integer(rc)
 
-# --priority: schedule on the high-priority QOS and AUTO-SIZE to the detected allowance (ADR 0031).
-# pfm::prioritySizing() queries `sacctmgr` (QOS cpu/mem/wall caps) and `sinfo` (node size) and returns
-# the largest cores/mem/time a single-node priority job may request. Each axis is only auto-set when
-# the user did NOT pass it explicitly (so --priority --nCores=8 still wins). Falls back to 16 cores
-# when SLURM tools are unavailable (e.g. a local dry run).
-if (hasFlag("priority")) {
-  if (is.null(getArg("qos", NULL))) callArgs$qos <- "priority"
+# Priority QOS is the DEFAULT on a SLURM submit host: schedule on the high-priority QOS and AUTO-SIZE
+# to the detected allowance (ADR 0031). pfm::prioritySizing() queries `sacctmgr` (QOS cpu/mem/wall
+# caps) and `sinfo` (node size) and returns the largest cores/mem/time a single-node priority job may
+# request. Each axis is only auto-set when the user did NOT pass it explicitly (so --nCores=8 still
+# wins). OPT OUT with --no-priority or by passing an explicit --qos=<other>. Only applies when `sbatch`
+# is on PATH (i.e. an actual cluster submit) — a local run keeps the normal defaults.
+usePriority <- nzchar(Sys.which("sbatch")) && !hasFlag("no-priority") &&
+  (hasFlag("priority") || is.null(getArg("qos", NULL)))
+if (usePriority) {
+  callArgs$qos <- "priority"
   ps <- tryCatch(pfm::prioritySizing(qos = callArgs$qos, partition = callArgs$partition),
                  error = function(e) NULL)
   if (is.null(ps)) ps <- list(nCores = 16L, mem = "64G", time = "24:00:00",
@@ -108,9 +111,9 @@ if (hasFlag("priority")) {
   if (is.null(getArg("time", NULL)))    callArgs$time      <- ps$time
   # Switch to a partition that permits the QOS (the default `standard` does not allow `priority`).
   if (is.null(getArg("partition", NULL)) && !is.null(ps$partition)) callArgs$partition <- ps$partition
-  message("[start] priority mode auto-sized: qos=", callArgs$qos, " partition=", callArgs$partition,
-          " nCores=", callArgs$nCores, " mem=", callArgs$mem, " time=", callArgs$time,
-          "  [", ps$detail, "]")
+  message("[start] priority QOS (default; --no-priority or --qos= to opt out) auto-sized: qos=",
+          callArgs$qos, " partition=", callArgs$partition, " nCores=", callArgs$nCores,
+          " mem=", callArgs$mem, " time=", callArgs$time, "  [", ps$detail, "]")
   if (!isTRUE(ps$partitionOk)) {
     message("[start] WARNING: could not confirm a partition that allows qos='", callArgs$qos,
             "' — submission may be rejected. Check `scontrol show partition | grep -iE 'PartitionName|AllowQos'`",
