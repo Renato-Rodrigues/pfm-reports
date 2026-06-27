@@ -46,6 +46,38 @@ adoptionReferenceThresholds <- function(y, prob, sensTarget = 0.90, fineGrid = s
   list(Sens90 = sens90, Youden = youden, BaseRate = baseRate)
 }
 
+#' Timeline-match adoption threshold (ADR 0029 follow-up)
+#'
+#' The probability cutoff that best aligns the model's first-crossing year with the OBSERVED first
+#' adoption year. For each candidate threshold it computes, per observed adopter, the absolute gap
+#' between the model's first-crossing year (fitted prob ≥ threshold) and the observed adoption year,
+#' counting a non-crossing adopter at the full observation-window span (so a cutoff can't win the
+#' match by losing coverage), and returns the threshold minimising the mean gap. Unlike Sens-90 /
+#' Youden / base-rate (classification-quality cutoffs) this targets *timing*, for the §9 timeline.
+#'
+#' @param df data.frame with columns \code{region}, \code{year}, \code{prob}, \code{y} (0/1).
+#' @param grid Candidate thresholds. Default \code{seq(0.05, 0.95, 0.02)}.
+#' @return Numeric threshold (NA if there are no observed adopters).
+#' @export
+adoptionTimelineMatchThreshold <- function(df, grid = seq(0.05, 0.95, 0.02)) {
+  ok <- is.finite(df$prob) & is.finite(df$y)
+  d <- df[ok, , drop = FALSE]
+  obsAdopt <- tapply(d$year[d$y == 1], d$region[d$y == 1], min)   # observed first-adoption year
+  obsAdopt <- obsAdopt[is.finite(obsAdopt)]
+  if (!length(obsAdopt)) return(NA_real_)
+  censYr <- max(d$year, na.rm = TRUE) + 1                         # right-censor a non-crosser here
+  meanGap <- vapply(grid, function(t) {
+    hit <- d$prob >= t
+    cross <- if (any(hit)) tapply(d$year[hit], d$region[hit], min) else numeric(0)
+    crossNm <- names(cross)
+    mean(vapply(names(obsAdopt), function(rg) {
+      cy <- if (rg %in% crossNm) cross[[rg]] else censYr   # never crosses -> "would cross past window"
+      abs(cy - obsAdopt[[rg]])
+    }, numeric(1)))
+  }, numeric(1))
+  grid[which.min(meanGap)]
+}
+
 #' Rogers adopter-timeline classification (model-driven, ADR 0029)
 #'
 #' Each region's adoption year = first year its fitted P(adoption) crosses \code{threshold}; adopters

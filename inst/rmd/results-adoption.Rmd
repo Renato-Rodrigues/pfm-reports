@@ -130,10 +130,13 @@ fullProb <- bind_rows(lapply(sectors, function(sec) {
   }
 }))
 
-# Reference adoption thresholds per sector (ADR 0029): Sens-90 (default), Youden, base-rate.
+# Reference adoption thresholds per sector (ADR 0029): Sens-90, Youden, base-rate, and the
+# TimelineMatch cutoff (best aligns the model crossing year with observed adoption — used by §9).
 thr <- lapply(sectors, function(sec) {
   d <- histProb[histProb$sector == sec, ]
-  adoptionReferenceThresholds(d$y, d$prob)
+  refs <- adoptionReferenceThresholds(d$y, d$prob)
+  refs$TimelineMatch <- adoptionTimelineMatchThreshold(d[, c("region", "year", "prob", "y")])
+  refs
 })
 names(thr) <- sectors
 
@@ -363,9 +366,11 @@ for (sec in sectors) {
   refs <- thr[[sec]]
   print(knitr::kable(tbl %>% mutate(across(where(is.numeric), ~round(.x, 3))),
                      caption = sprintf("%s — classification quality across thresholds", sec)))
-  cat(sprintf(paste0("\n\n**Reference thresholds — %s:** Sens-90 = **%.2f** (default; catches ≥90%% ",
-    "of historical adopters) · Youden-optimal = **%.2f** · base-rate = **%.2f**.\n\n"),
-    sec, refs$Sens90, refs$Youden, refs$BaseRate))
+  cat(sprintf(paste0("\n\n**Reference thresholds — %s:** Sens-90 = **%.2f** (classification default; ",
+    "catches ≥90%% of historical adopters) · Youden-optimal = **%.2f** · base-rate = **%.2f** · ",
+    "**TimelineMatch = %.2f** (best aligns the model's crossing year with observed adoption — used ",
+    "by the §9 timeline).\n\n"),
+    sec, refs$Sens90, refs$Youden, refs$BaseRate, refs$TimelineMatch %||% NA_real_))
   howToRead(
     "Each row is a candidate probability cutoff. **sensitivity** = share of historical adopter ",
     "region-years correctly flagged; **specificity** = share of non-adopters correctly left out; ",
@@ -392,21 +397,24 @@ clsAll <- bind_rows(lapply(sectors, function(sec) {
   if (nrow(d) == 0) {
     return(data.frame(sector = character(0), region = character(0), adoptionYear = numeric(0),
                       Sens90_group = factor(character(0)), Youden_group = factor(character(0)),
-                      BaseRate_group = factor(character(0)), changesWithThreshold = logical(0),
-                      stringsAsFactors = FALSE))
+                      BaseRate_group = factor(character(0)), TimelineMatch_group = factor(character(0)),
+                      changesWithThreshold = logical(0), stringsAsFactors = FALSE))
   }
   s  <- rogersClassify(d, thr[[sec]]$Sens90)[, c("region", "adoptionYear", "group")]
   yo <- rogersClassify(d, thr[[sec]]$Youden)[, c("region", "group")]
   br <- rogersClassify(d, thr[[sec]]$BaseRate)[, c("region", "group")]
+  tm <- rogersClassify(d, thr[[sec]]$TimelineMatch %||% thr[[sec]]$Sens90)[, c("region", "group")]
   m <- Reduce(function(a, b) merge(a, b, by = "region"),
               list(setNames(s, c("region", "adoptionYear", "Sens90_group")),
                    setNames(yo, c("region", "Youden_group")),
-                   setNames(br, c("region", "BaseRate_group"))))
+                   setNames(br, c("region", "BaseRate_group")),
+                   setNames(tm, c("region", "TimelineMatch_group"))))
   m$sector <- sec
   m$changesWithThreshold <- !(as.character(m$Sens90_group) == as.character(m$Youden_group) &
-                              as.character(m$Sens90_group) == as.character(m$BaseRate_group))
+                              as.character(m$Sens90_group) == as.character(m$BaseRate_group) &
+                              as.character(m$Sens90_group) == as.character(m$TimelineMatch_group))
   m[, c("sector", "region", "adoptionYear", "Sens90_group", "Youden_group",
-        "BaseRate_group", "changesWithThreshold")]
+        "BaseRate_group", "TimelineMatch_group", "changesWithThreshold")]
 }))
 interactiveTable(clsAll, caption = "Rogers adopter classification (Sens-90 default; group under each threshold)",
                  pageLength = 25, filter = "top")
@@ -423,7 +431,7 @@ howToRead(
 ## Band counts by threshold {.tabset}
 
 ```{r classif-counts, results='asis'}
-for (tn in c("Sens90", "Youden", "BaseRate")) {
+for (tn in c("Sens90", "Youden", "BaseRate", "TimelineMatch")) {
   cat(sprintf("### %s\n\n", tn))
   g_all <- bind_rows(lapply(sectors, function(sec) {
     d <- fullProb[fullProb$sector == sec, c("region", "year", "prob")]
@@ -517,33 +525,44 @@ if (!mapsAvailable) {
 
 *What this section is for.* Where does the model **lead or lag** reality? The bar spans each region's
 *observed* adoption period; the dot is the year the model's fitted probability first crosses the
-Sens-90 threshold. A dot left of the bar = the model saw conditions ripen early; right of the bar =
-the model was late.
+**TimelineMatch** threshold — the cutoff chosen to best align the model's crossing year with observed
+adoption (ADR 0029), so this view is as faithful to the historical timing as the model allows. A dot
+left of the bar = the model saw conditions ripen early; right of the bar = the model was late.
 
 ```{r timeline, results='asis', fig.height=7}
 for (sec in sectors) {
   cat(sprintf("## %s\n\n", sec))
   d <- histProb[histProb$sector == sec, ]
+  tmThr <- thr[[sec]]$TimelineMatch; if (!is.finite(tmThr)) tmThr <- thr[[sec]]$Sens90
   obs <- d %>% filter(y == 1) %>% group_by(region) %>%
     summarise(obsStart = min(year), obsEnd = max(year), .groups = "drop")
-  cls <- rogersClassify(d[, c("region", "year", "prob")], thr[[sec]]$Sens90)
+  cls <- rogersClassify(d[, c("region", "year", "prob")], tmThr)
   tl <- merge(obs, cls[, c("region", "adoptionYear")], by = "region", all = TRUE)
   tl <- tl %>% filter(is.finite(obsStart) | is.finite(adoptionYear)) %>%
     arrange(adoptionYear, obsStart)
   if (!nrow(tl)) { cat("*No adopters in sample.*\n\n"); next }
+  # Lead/lag summary across observed adopters that the model crosses.
+  matched <- tl %>% filter(is.finite(obsStart) & is.finite(adoptionYear))
+  medGap <- if (nrow(matched)) stats::median(matched$adoptionYear - matched$obsStart) else NA_real_
+  cat(sprintf(paste0("Crossing threshold **%.2f** (TimelineMatch). Of %d observed adopters, the model ",
+    "crosses for **%d**; median crossing vs observed onset = **%+.0f yr** (%s).\n\n"),
+    tmThr, sum(is.finite(tl$obsStart)), nrow(matched), medGap %||% NA_real_,
+    if (is.na(medGap)) "n/a" else if (medGap < 0) "model leads" else if (medGap > 0) "model lags" else "aligned"))
   tl$region <- factor(tl$region, levels = rev(unique(tl$region)))
   p <- ggplot(tl) +
     geom_segment(aes(x = obsStart, xend = obsEnd, y = region, yend = region),
                  colour = "grey70", linewidth = 2, na.rm = TRUE) +
     geom_point(aes(x = adoptionYear, y = region), colour = "#d62728", size = 2, na.rm = TRUE) +
     theme_report() +
-    labs(title = sprintf("%s — observed adoption period (bar) vs model crossing (dot)", sec),
+    labs(title = sprintf("%s — observed adoption period (bar) vs model crossing (dot), thr=%.2f", sec, tmThr),
          x = NULL, y = NULL)
   print(p); cat("\n\n")
 }
-howToRead("Grey bar = observed adoption period; red dot = first year fitted P crosses Sens-90. ",
-          "Dot before the bar = model anticipates (early warning); dot after = model lags; ",
-          "bar with no dot = the model never reaches the threshold for an observed adopter.")
+howToRead("Grey bar = observed adoption period; red dot = first year fitted P crosses the ",
+          "**TimelineMatch** cutoff (chosen to best match observed timing). Dot before the bar = ",
+          "model anticipates (early warning); dot after = model lags; bar with no dot = the model ",
+          "never reaches even this cutoff for an observed adopter. The §7 classification keeps the ",
+          "Sens-90 default; here we optimise for timing fidelity instead.")
 ```
 
 # Per-Region Fit {.tabset}
