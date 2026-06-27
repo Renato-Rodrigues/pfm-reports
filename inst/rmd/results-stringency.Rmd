@@ -103,11 +103,12 @@ if (!is.null(scen_mag)) {
     if (!is.null(pS)) {
       # Carry the UNCLAMPED model price + the clamp-pinned flag (ADR 0032): the report displays the
       # raw projection and uses the clamp only as a "beyond the extrapolation guard" indicator.
-      keep <- intersect(c("region", "year", "sector", "price", "priceUnclamped", "clampPinned"),
-                        colnames(pS))
+      keep <- intersect(c("region", "year", "sector", "price", "priceUnclamped",
+                          "clampPinned", "pmaxPinned"), colnames(pS))
       out <- pS[, keep, drop = FALSE]
       if (!"priceUnclamped" %in% names(out)) out$priceUnclamped <- out$price          # older fits
       if (!"clampPinned" %in% names(out)) out$clampPinned <- FALSE
+      if (!"pmaxPinned" %in% names(out)) out$pmaxPinned <- FALSE
       if (!is.null(pA)) {
         out <- merge(out, pA %>% select(region, year, prob), by = c("region", "year"))
         out$expectedPrice <- out$prob * out$priceUnclamped                            # unclamped
@@ -382,6 +383,14 @@ if (has_proj) {
   cat(sprintf("**Extrapolation indicator:** %s of projected region-years are beyond the extrapolation guard%s.\n\n",
               if (is.na(pinFrac)) "n/a" else sprintf("%.0f%%", 100 * pinFrac),
               if (!is.na(pinFrac) && pinFrac > 0.25) " — **> 25%, a severe clamp-reliance flag (this spec would be rejected in selection)**" else ""))
+  # Saturating form: bounded by Pmax, so it bypasses the clamp/clamp-reliance and instead reports a
+  # NON-severe Pmax-ceiling indicator (ADR 0032).
+  pmaxFrac <- if ("pmaxPinned" %in% names(pall)) mean(pall$pmaxPinned, na.rm = TRUE) else NA_real_
+  if (!is.na(pmaxFrac) && pmaxFrac > 0) {
+    cat(sprintf(paste0("**Pmax-ceiling indicator (saturating form):** %.0f%% of region-years project ",
+                "at the Pmax ceiling — bounded by construction, **non-severe** (the saturating form ",
+                "bypasses the extrapolation clamp/gate, ADR 0032).\n\n"), 100 * pmaxFrac))
+  }
   guardrows <- if ("clampPinned" %in% names(pall)) {
     pall %>% filter(clampPinned) %>%
       mutate(priceUnclamped = round(priceUnclamped, 1), expectedPrice = round(expectedPrice, 1)) %>%

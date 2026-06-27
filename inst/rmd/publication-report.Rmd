@@ -426,7 +426,7 @@ make_predicted_prob_plot <- function(fit, sweep_var, sector_name, n_grid = 50) {
 
 # Abstract
 
-This report presents results from the Political Feasibility Module (PFM) — a two-stage hurdle model estimating the probability of carbon pricing adoption (Stage 1: Firth penalized logistic regression) and conditional price stringency (Stage 2: Gamma GLM with log link) across 54 world regions for 2000–2022. We test whether actor power dynamics (clean-energy innovators versus fossil-fuel incumbents) and institutional quality (V-Dem state-capacity indicators and WGI governance indices) explain adoption and stringency outcomes beyond standard income and time-trend controls.
+This report presents results from the Political Feasibility Module (PFM) — a two-stage hurdle model estimating the probability of carbon pricing adoption (Stage 1: Firth penalized logistic regression) and conditional price stringency (Stage 2: gaussian-identity GLM on log(1+ECP), i.e. log-linear — *not* a Gamma/log link; a Pmax-bounded saturating form is also fit and competes, ADR 0007/0028) across 54 world regions for 2000–2022. We test whether actor power dynamics (clean-energy innovators versus fossil-fuel incumbents) and institutional quality (V-Dem state-capacity indicators and WGI governance indices) explain adoption and stringency outcomes beyond standard income and time-trend controls.
 
 Key findings: (1) No model specification achieves simultaneous significance across all three theory channels (actor power, institutional quality, interactions); GDP per capita and linear time trends dominate adoption models under standard fixed-effects identification. (2) Replacing the linear time trend with a logistic S-curve and applying Mundlak within-region mean corrections substantially recovers theory-channel identification: V-Dem Meritocracy Index is significant in Bulk adoption (AME = +0.796 pp, p = 0.017); Civil Service Professionalism is significant in Diffuse adoption (AME = +1.286 pp, p = 0.016). (3) Reducing the correlated five-variable V-Dem state-capacity block to principal components eliminates sign reversals. (4) Bulk stringency shows the strongest theory evidence (Blue tier) but remains dominated by regional fixed effects under standard H12 identification.
 
@@ -613,28 +613,29 @@ The five state-capacity indicators are standardized and reduced via principal co
 
 ```{r model-selection-table, echo=FALSE}
 sel_tbl <- data.frame(
-  Criterion = c("Hard gate 1", "Hard gate 2", "Hard gate 3",
-                "Tier 1 — Theory", "Tier 2 — ΔR²(theory)",
-                "Tier 3 — Theory Fraction", "Tier 4 — Information criteria",
-                "Tier 5 — FE/Theory ratio", "Tie-breaker"),
+  Criterion = c("Hard gate — convergence", "Hard gate — collinearity",
+                "Hard gate — no unintended lag", "Hard gate — non-degenerate fit",
+                "Hard gate — no trend dominance", "Rank 1 — worse-sector Theory Tier",
+                "Rank 2 — ΔR²(theory)", "Within-band tie-breaks (ε = 0.025)",
+                "Projection-Sanity gate"),
   Rule = c(
-    "Convergence: algorithm must reach a solution",
-    "k/N < 0.10: fewer than 1 predictor per 10 observations",
-    "No perfect separation flagged",
-    "Green (all 3 significant) > Blue (≥1) > Yellow (none)",
-    "Higher incremental R² from theory channels preferred",
-    "Higher Theory Fraction (AP + IQ + interaction share) preferred",
-    "Lower AIC / BIC preferred",
-    "Lower FE/Theory ratio preferred (Mundlak = 0 by construction)",
-    "Lowest max |Z| among tied models"
+    "Algorithm must reach a solution, in BOTH sectors",
+    "maxVIF < 10 in both sectors",
+    "No unintended lagged dependent-variable term (adoption lag)",
+    "ΔR²(theory) ≤ 1 (rejects inflated/near-separated degenerate fits)",
+    "Stringency: trendShare ≤ 0.5 — the atheoretical time trend may not carry > half the linear-predictor variance (ADR 0033)",
+    "Worse sector across Bulk/Diffuse: Green (all 3 groups significant) > Blue (≥1) > Yellow (none)",
+    "Higher mean incremental ΔR² from the theory channels preferred",
+    "drop-idle-control → low VIF/temporal fragility → low trend share → FE-discounted BIC → name",
+    "Project on SSP2; reject severe (price > 2000, invalid, dead region block, > 25% clamp-pinned). Saturating-price specs are Pmax-bounded and bypass the clamp (ADR 0032)."
   ),
   stringsAsFactors = FALSE
 )
-kable(sel_tbl, format = "html", caption = "Table 3: Model Selection Criteria (applied sequentially)") %>%
+kable(sel_tbl, format = "html", caption = "Table 3: Model Selection Criteria (applied sequentially — Maximin rule)") %>%
   kable_styling(bootstrap_options = c("striped","hover"), full_width = TRUE, font_size = 12)
 ```
 
-The comprehensive model-selection sweep (`channels-exhaustive`) tests ~1,445 specifications — crossing the three institutional-quality channels, the actor-power form, eight curated control sets and five region fixed-effect resolutions (pooled, H12, EU/OECD+, 54-unit, Mundlak) — and selects one shared specification per stage by the maximin theory-tier rule, gated by a projection-sanity check on SSP2 trajectories. The specifications reported here are those maximin-selected models; prediction-optimal alternatives are shown in the Robustness section.
+The comprehensive model-selection sweep (`channels-exhaustive`) tests the full cross of the three institutional-quality channels, the actor-power form, eight curated control sets and the defensible region fixed-effect strategies (H12, EU/OECD+, Mundlak — pooled `noFE` and the 54-unit FE are reported only as labelled bias-variance baselines, never maximin candidates, ADR 0011), with each levels stringency spec additionally fit under both the `log1p` and the bounded `saturating` price form (ADR 0028). It selects one shared specification per stage by the maximin worse-sector theory-tier rule above, gated by the projection-sanity check on SSP2 trajectories. The specifications reported here are those maximin-selected models; prediction-optimal alternatives are shown in the Robustness section.
 
 ---
 

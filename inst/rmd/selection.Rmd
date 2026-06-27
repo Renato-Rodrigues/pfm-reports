@@ -87,7 +87,8 @@ nSpec <- length(unique(results$model))
 cat(sprintf(paste0(
   "- **Sweep:** `%s` mode — %d specifications × 4 sector/stages = %d fits (generated %s).\n",
   "- **Selection rule:** Maximin (worse-sector tier, then mean ΔR²(theory)), hard gates ",
-  "VIF < 10 / convergence / no lagged terms, followed by the **Projection Sanity gate** ",
+  "VIF < 10 / convergence / no lagged terms / no trend dominance (trendShare ≤ 0.5), followed by ",
+  "the **Projection Sanity gate** ",
   "(expanding batches; severe rules: price > 2000 USD/tCO2, invalid prices, dead region ",
   "blocks. All-region adoption saturation is a *warning*, not severe — expected under an ",
   "ambitious scenario).\n"
@@ -142,7 +143,7 @@ for (stg in stages) {
 
 # Selection Algorithm {.tabset}
 
-*What this section is for.* A step-by-step breakdown of how the selection pipeline works, from the Stage 0 channel collinearity screen, to VIF/convergence hard gates, worse-sector maximin tier ranking, delta-R2 tie-breaking, and finally the Projection Sanity gate.
+*What this section is for.* A step-by-step breakdown of how the selection pipeline works, from the Stage 0 channel collinearity screen, to the hard gates (VIF / convergence / trend-dominance), worse-sector maximin tier ranking, delta-R2 tie-breaking, and finally the Projection Sanity gate.
 
 ## How selection works
 
@@ -166,8 +167,11 @@ cat(sprintf(paste0(
 "(Adoption/Stringency × Bulk/Diffuse). Saturating-price stringency twins are fit on the ",
 "stringency stage only (ADR 0028).\n",
 "3. **Hard gates (pass/fail, both sectors).** maxVIF < **%g**, model converged, no unintended ",
-"lagged term, ΔR² ≤ 1. A spec failing any gate in either sector is set `gatePass = FALSE` and ",
-"ranks last. *(see Gate attrition)*\n",
+"lagged term, ΔR² ≤ 1, and — for stringency — **no trend dominance** (`trendShare ≤ 0.5`: the ",
+"atheoretical time trend must not carry more than half the linear-predictor variance; ADR 0033). ",
+"A spec failing any gate in either sector is set `gatePass = FALSE` and ranks last. ",
+"*(see Gate attrition; the companion `nonTheoryShare` diagnostic — controls + trend share — is ",
+"reported, not gated)*\n",
 "4. **Maximin tier.** Specs are ranked by their **worse sector's** theory Tier ",
 "(Green > Blue > Yellow) — a spec is only as good as its weaker sector.\n",
 "5. **ΔR²(theory) tie-break.** Within a tier, higher mean ΔR²(theory) wins (the unique ",
@@ -178,7 +182,9 @@ cat(sprintf(paste0(
 "7. **Projection Sanity gate.** The maximin leader is projection-tested on the scenario; severe ",
 "violations (price > **%g** USD/tCO2, invalid prices, a dead region block, > **%g%%** ",
 "clamp-pinned region-years) disqualify it and the next candidate is tried (expanding batches). ",
-"The first candidate that passes is the **deliverable**. *(see Projection Sanity trace & flags)*\n\n",
+"The first candidate that passes is the **deliverable**. Saturating-price specs are bounded by ",
+"Pmax, so they bypass the extrapolation clamp/clamp-reliance and instead carry a non-severe ",
+"`pmax-pinned` indicator (ADR 0032). *(see Projection Sanity trace & flags)*\n\n",
 "Region fixed effects swept: **%s**. Everything labelled *report-only* below (AUC, Brier, RMSE, ",
 "calibration) is shown for transparency and plays **no** role in selection.\n"),
   nSpec, wf$mode, vifGate, nearEps, priceSev, round(100 * clampSev),
@@ -285,6 +291,9 @@ funnel <- do.call(rbind, lapply(stages, function(stg) {
     `Specifications` = length(byModel),
     `Converged (both sectors)` = passAll(function(d) isTRUE(all(d$converged))),
     `+ maxVIF < 10` = passAll(function(d) all(d$converged) && all(d$maxVIF < 10, na.rm = TRUE)),
+    `+ trendShare ≤ 0.5` = if ("trendShare" %in% names(rs)) passAll(function(d)
+      all(d$converged) && all(d$maxVIF < 10, na.rm = TRUE) &&
+      all(is.na(d$trendShare) | d$trendShare <= 0.5)) else NA_integer_,
     `+ ΔR² ≤ 1 (gate-passing pool)` = sum(vapply(split(wf$maximin[[stg]], wf$maximin[[stg]]$model),
                                                   function(d) isTRUE(any(d$gatePass)), logical(1))),
     `Sanity-evaluated` = if (!is.null(wf$sanity[[stg]]$trace)) nrow(wf$sanity[[stg]]$trace) else NA_integer_,
