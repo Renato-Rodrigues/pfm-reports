@@ -3,6 +3,7 @@
 export("%||%")
 export(adoptionReferenceThresholds)
 export(adoptionThresholdTable)
+export(adoptionTimelineGap)
 export(adoptionTimelineMatchThreshold)
 export(capAnnotation)
 export(capAtP99)

@@ -49,33 +49,76 @@ adoptionReferenceThresholds <- function(y, prob, sensTarget = 0.90, fineGrid = s
 #' Timeline-match adoption threshold (ADR 0029 follow-up)
 #'
 #' The probability cutoff that best aligns the model's first-crossing year with the OBSERVED first
-#' adoption year. For each candidate threshold it computes, per observed adopter, the absolute gap
-#' between the model's first-crossing year (fitted prob ≥ threshold) and the observed adoption year,
-#' counting a non-crossing adopter at the full observation-window span (so a cutoff can't win the
-#' match by losing coverage), and returns the threshold minimising the mean gap. Unlike Sens-90 /
-#' Youden / base-rate (classification-quality cutoffs) this targets *timing*, for the §9 timeline.
+#' adoption year. For each candidate threshold it computes, per observed adopter, the gap between the
+#' model's first-crossing year (fitted prob ≥ threshold) and the observed adoption year, counting a
+#' non-crossing adopter at the full observation-window span (so a cutoff can't win the match by losing
+#' coverage), and returns the threshold minimising the mean (pinball) gap. Unlike Sens-90 / Youden /
+#' base-rate (classification-quality cutoffs) this targets *timing*, for the §9 timeline.
+#'
+#' \strong{Asymmetry (\code{tau}).} The penalty is the pinball / quantile loss of the signed gap
+#' \eqn{g = crossYear - observedYear} (negative = model leads / early, positive = model lags / late):
+#' \eqn{\rho_\tau(g) = \tau g} for \eqn{g \ge 0} and \eqn{(\tau-1) g = (1-\tau)|g|} for \eqn{g < 0}.
+#' At \code{tau = 0.5} this is \eqn{0.5\,|g|}, i.e. the symmetric mean-absolute gap (default; lead and
+#' lag treated alike). \code{tau > 0.5} penalises \emph{lateness} more (selects a lower cutoff → more
+#' lead — sensible when a late warning is useless); \code{tau < 0.5} penalises \emph{earliness} more
+#' (selects a higher cutoff → later, more conservative crossings). Non-crossers are right-censored as
+#' a large lag, so \code{tau >= 0.5} keeps timing fidelity tied to coverage.
 #'
 #' @param df data.frame with columns \code{region}, \code{year}, \code{prob}, \code{y} (0/1).
 #' @param grid Candidate thresholds. Default \code{seq(0.05, 0.95, 0.02)}.
+#' @param tau Pinball asymmetry weight in \code{(0, 1)}. Default \code{0.5} (symmetric = mean |gap|).
 #' @return Numeric threshold (NA if there are no observed adopters).
 #' @export
-adoptionTimelineMatchThreshold <- function(df, grid = seq(0.05, 0.95, 0.02)) {
+adoptionTimelineMatchThreshold <- function(df, grid = seq(0.05, 0.95, 0.02), tau = 0.5) {
   ok <- is.finite(df$prob) & is.finite(df$y)
   d <- df[ok, , drop = FALSE]
   obsAdopt <- tapply(d$year[d$y == 1], d$region[d$y == 1], min)   # observed first-adoption year
   obsAdopt <- obsAdopt[is.finite(obsAdopt)]
   if (!length(obsAdopt)) return(NA_real_)
   censYr <- max(d$year, na.rm = TRUE) + 1                         # right-censor a non-crosser here
+  pinball <- function(g) ifelse(g >= 0, tau * g, (tau - 1) * g)   # tau>.5 penalises lag (late) more
   meanGap <- vapply(grid, function(t) {
     hit <- d$prob >= t
     cross <- if (any(hit)) tapply(d$year[hit], d$region[hit], min) else numeric(0)
     crossNm <- names(cross)
     mean(vapply(names(obsAdopt), function(rg) {
       cy <- if (rg %in% crossNm) cross[[rg]] else censYr   # never crosses -> "would cross past window"
-      abs(cy - obsAdopt[[rg]])
+      pinball(cy - obsAdopt[[rg]])
     }, numeric(1)))
   }, numeric(1))
   grid[which.min(meanGap)]
+}
+
+#' Per-region lead/lag gap for the adoption timeline (ADR 0029 follow-up)
+#'
+#' For a given probability threshold, returns each observed adopter's observed first-adoption year,
+#' the model's first-crossing year, and their signed gap \code{crossYear - obsStart} (negative = model
+#' leads / early warning, positive = model lags). Non-crossing adopters keep \code{NA} crossYear/gap.
+#' Feeds the §9 gap-distribution exhibit so a reader can see whether the lead/lag is a near-constant
+#' offset (→ a calibration constant the threshold absorbs) or varies across regions (→ hazard
+#' dynamics, not a fixable constant — and not a lag-misspecification artefact).
+#'
+#' @param df data.frame with columns \code{region}, \code{year}, \code{prob}, \code{y} (0/1).
+#' @param threshold Numeric probability cutoff.
+#' @return data.frame \code{(region, obsStart, crossYear, gap)} over observed adopters.
+#' @export
+adoptionTimelineGap <- function(df, threshold) {
+  ok <- is.finite(df$prob) & is.finite(df$y)
+  d <- df[ok, , drop = FALSE]
+  obsAdopt <- tapply(d$year[d$y == 1], d$region[d$y == 1], min)
+  obsAdopt <- obsAdopt[is.finite(obsAdopt)]
+  if (!length(obsAdopt)) {
+    return(data.frame(region = character(0), obsStart = numeric(0),
+                      crossYear = numeric(0), gap = numeric(0), stringsAsFactors = FALSE))
+  }
+  hit <- d$prob >= threshold
+  cross <- if (any(hit)) tapply(d$year[hit], d$region[hit], min) else numeric(0)
+  crossNm <- names(cross)
+  regs <- names(obsAdopt)
+  cy <- vapply(regs, function(rg) if (rg %in% crossNm) cross[[rg]] else NA_real_, numeric(1))
+  obs <- as.numeric(obsAdopt[regs])
+  data.frame(region = regs, obsStart = obs, crossYear = cy, gap = cy - obs,
+             row.names = NULL, stringsAsFactors = FALSE)
 }
 
 #' Rogers adopter-timeline classification (model-driven, ADR 0029)

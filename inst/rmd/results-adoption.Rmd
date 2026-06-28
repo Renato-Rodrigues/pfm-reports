@@ -565,6 +565,87 @@ howToRead("Grey bar = observed adoption period; red dot = first year fitted P cr
           "Sens-90 default; here we optimise for timing fidelity instead.")
 ```
 
+## Lead/lag gap distribution {.tabset}
+
+*Is the lead a constant offset or does it vary by region?* The §9 dots tend to sit **before** the
+observed bars — the model "sees conditions ripen" a year or two early. That early bias is **not** a
+lag-misspecification: the outcome is coded at year *t* and the fitted probability is stamped to that
+same year *t*; the early crossing comes from comparing a smooth, rising hazard against a discrete
+0→1 event (a rising curve crosses a moderate cutoff before the jump fires). This panel shows the
+**distribution of that gap** so you can tell whether it is a near-constant offset (which the
+threshold simply absorbs) or genuinely region-specific (hazard dynamics).
+
+```{r timeline-gap, results='asis', fig.height=4.2}
+for (sec in sectors) {
+  cat(sprintf("### %s\n\n", sec))
+  d <- histProb[histProb$sector == sec, c("region", "year", "prob", "y")]
+  tmThr <- thr[[sec]]$TimelineMatch; if (!is.finite(tmThr)) tmThr <- thr[[sec]]$Sens90
+  g  <- adoptionTimelineGap(d, tmThr)
+  gm <- g[is.finite(g$gap), ]
+  if (!nrow(gm)) { cat("*No matched adopters at this threshold.*\n\n"); next }
+  med <- stats::median(gm$gap); mu <- mean(gm$gap)
+  sdg <- stats::sd(gm$gap);     iqr <- stats::IQR(gm$gap)
+  pLead <- mean(gm$gap < 0); pLag <- mean(gm$gap > 0); pAlign <- mean(gm$gap == 0)
+  # Does the offset drift with the era of adoption? Near-zero slope => constant offset.
+  slopeTxt <- "n/a (too few matched adopters)"
+  if (nrow(gm) >= 4 && stats::sd(gm$obsStart) > 0) {
+    sl <- unname(stats::coef(stats::lm(gap ~ obsStart, data = gm))[2])
+    slopeTxt <- sprintf("**%+.2f yr per calendar year** of observed onset", sl)
+  }
+  cat(sprintf(paste0("At the TimelineMatch cutoff **%.2f** (%d matched adopters): median gap ",
+    "**%+.1f yr**, mean **%+.1f**, SD **%.1f**, IQR **%.1f**. **%.0f%%** lead, **%.0f%%** lag, ",
+    "**%.0f%%** exactly on. Gap-vs-onset-era slope: %s — near 0 ⇒ a roughly constant offset the ",
+    "threshold absorbs; large ⇒ the lead varies across regions (hazard dynamics, not a fixable ",
+    "constant).\n\n"),
+    tmThr, nrow(gm), med, mu, sdg, iqr, 100 * pLead, 100 * pLag, 100 * pAlign, slopeTxt))
+  gm$dir <- ifelse(gm$gap < 0, "model leads", ifelse(gm$gap > 0, "model lags", "aligned"))
+  p <- ggplot(gm, aes(gap)) +
+    geom_histogram(aes(fill = dir), binwidth = 1, colour = "white") +
+    geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+    geom_vline(xintercept = med, colour = "#d62728", linewidth = 0.6) +
+    scale_fill_manual(values = c("model leads" = "#2c7fb8", "aligned" = "grey60",
+                                 "model lags" = "#e6550d")) +
+    theme_report() +
+    labs(title = sprintf("%s — distribution of (model crossing − observed onset)", sec),
+         x = "Gap in years (negative = model leads / early warning)", y = "Regions", fill = NULL)
+  print(p); cat("\n\n")
+}
+howToRead("One bar per 1-year gap bucket across observed adopters. Left of the dashed 0-line = the ",
+  "model crossed **before** the region actually adopted (early warning); right = it lagged. The red ",
+  "line is the median gap. A tight pile around one negative value is the ~constant lead — absorbed ",
+  "by the threshold choice; a wide spread (or a non-zero era slope) means the lead genuinely varies ",
+  "by region and is a property of the hazard, not a calendar misalignment.")
+```
+
+## Asymmetric timing penalty (lead vs lag) {.tabset}
+
+*Should an early crossing count the same as a late one?* TimelineMatch defaults to a **symmetric**
+penalty (mean |gap|, lead and lag weighted alike). For an **early-warning** reading a late signal is
+arguably worse than an early one, so the cutoff can instead be chosen under a **pinball (quantile)
+loss** with weight τ: τ > 0.5 penalises *lateness* more (picks a lower cutoff → more lead),
+τ < 0.5 penalises *earliness* more (picks a higher, more conservative cutoff). The table shows how
+the selected cutoff moves with τ; the default chart keeps τ = 0.5.
+
+```{r timeline-asym, results='asis'}
+asymTab <- bind_rows(lapply(sectors, function(sec) {
+  d <- histProb[histProb$sector == sec, c("region", "year", "prob", "y")]
+  data.frame(
+    sector                      = sec,
+    `penalise leads (τ=0.3)`    = adoptionTimelineMatchThreshold(d, tau = 0.3),
+    `symmetric (τ=0.5, default)`= adoptionTimelineMatchThreshold(d, tau = 0.5),
+    `penalise lags (τ=0.7)`     = adoptionTimelineMatchThreshold(d, tau = 0.7),
+    check.names = FALSE, stringsAsFactors = FALSE)
+}))
+print(knitr::kable(asymTab, digits = 2,
+  caption = "TimelineMatch cutoff under symmetric vs asymmetric (pinball) timing loss"))
+howToRead(
+  "Each cell is the probability cutoff TimelineMatch would pick under that asymmetry. Moving from ",
+  "**penalise leads** to **penalise lags** lowers the cutoff (the model is allowed to fire earlier ",
+  "to avoid ever being late). If the three columns are close, the timing is robust to the choice; ",
+  "if they swing widely, state which objective (accurate dating vs never-late warning) the headline ",
+  "uses. The default τ = 0.5 (accurate dating) is the peer-review-safe choice.", type = "table")
+```
+
 # Per-Region Fit {.tabset}
 
 *What this section is for.* The granular diagnostic: each region's fitted probability over its

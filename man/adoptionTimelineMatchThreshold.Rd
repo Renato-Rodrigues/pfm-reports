@@ -4,21 +4,33 @@
 \alias{adoptionTimelineMatchThreshold}
 \title{Timeline-match adoption threshold (ADR 0029 follow-up)}
 \usage{
-adoptionTimelineMatchThreshold(df, grid = seq(0.05, 0.95, 0.02))
+adoptionTimelineMatchThreshold(df, grid = seq(0.05, 0.95, 0.02), tau = 0.5)
 }
 \arguments{
 \item{df}{data.frame with columns \code{region}, \code{year}, \code{prob}, \code{y} (0/1).}
 
 \item{grid}{Candidate thresholds. Default \code{seq(0.05, 0.95, 0.02)}.}
+
+\item{tau}{Pinball asymmetry weight in \code{(0, 1)}. Default \code{0.5} (symmetric = mean |gap|).}
 }
 \value{
 Numeric threshold (NA if there are no observed adopters).
 }
 \description{
 The probability cutoff that best aligns the model's first-crossing year with the OBSERVED first
-adoption year. For each candidate threshold it computes, per observed adopter, the absolute gap
-between the model's first-crossing year (fitted prob ≥ threshold) and the observed adoption year,
-counting a non-crossing adopter at the full observation-window span (so a cutoff can't win the
-match by losing coverage), and returns the threshold minimising the mean gap. Unlike Sens-90 /
-Youden / base-rate (classification-quality cutoffs) this targets \emph{timing}, for the §9 timeline.
+adoption year. For each candidate threshold it computes, per observed adopter, the gap between the
+model's first-crossing year (fitted prob ≥ threshold) and the observed adoption year, counting a
+non-crossing adopter at the full observation-window span (so a cutoff can't win the match by losing
+coverage), and returns the threshold minimising the mean (pinball) gap. Unlike Sens-90 / Youden /
+base-rate (classification-quality cutoffs) this targets \emph{timing}, for the §9 timeline.
+}
+\details{
+\strong{Asymmetry (\code{tau}).} The penalty is the pinball / quantile loss of the signed gap
+\eqn{g = crossYear - observedYear} (negative = model leads / early, positive = model lags / late):
+\eqn{\rho_\tau(g) = \tau g} for \eqn{g \ge 0} and \eqn{(\tau-1) g = (1-\tau)|g|} for \eqn{g < 0}.
+At \code{tau = 0.5} this is \eqn{0.5\,|g|}, i.e. the symmetric mean-absolute gap (default; lead and
+lag treated alike). \code{tau > 0.5} penalises \emph{lateness} more (selects a lower cutoff → more
+lead — sensible when a late warning is useless); \code{tau < 0.5} penalises \emph{earliness} more
+(selects a higher cutoff → later, more conservative crossings). Non-crossers are right-censored as
+a large lag, so \code{tau >= 0.5} keeps timing fidelity tied to coverage.
 }
