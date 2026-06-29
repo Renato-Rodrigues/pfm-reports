@@ -77,14 +77,19 @@ if (!is.null(params$cachefolder) && nchar(params$cachefolder) > 0) {
   )
 }
 
+# Anchor a path: absolute paths (as render.R passes for modelDir/assetDir) are used as-is;
+# only relative ones are taken against the knit working directory. Prepending getwd() to an
+# already-absolute path nests it under the run-group dir (the spurious output/exhaustive/p/...
+# folder seen on the cluster). 2026-06-29.
+.anchor <- function(p) if (pfmreports::is_absolute_path(p)) p else file.path(getwd(), p)
+
 # ── Model store ───────────────────────────────────────────────────────────────
-.model_store <- file.path(getwd(),
-                           getPfmConfig("modelDir", params$modelDir))
+.model_store <- .anchor(getPfmConfig("modelDir", params$modelDir))
 dir.create(.model_store, showWarnings = FALSE, recursive = TRUE)
 options(pfm.modelDir = .model_store)
 
 # ── Asset directory ───────────────────────────────────────────────────────────
-asset_dir <- file.path(getwd(), params$assetDir)
+asset_dir <- .anchor(params$assetDir)
 dir.create(asset_dir, showWarnings = FALSE, recursive = TRUE)
 
 # ── Config resolver ───────────────────────────────────────────────────────────
