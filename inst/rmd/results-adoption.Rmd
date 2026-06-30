@@ -104,6 +104,16 @@ if (!is.null(scen_mag)) {
 }
 has_proj <- any(!vapply(proj, is.null, logical(1)))
 
+# ── Multi-scenario projections (ADR 0035): pure-consume the projection fan-out artifacts
+# (<group>/projections/<id>.rds, written by pfm::runProjection) so the report shows EVERY Policy
+# Scenario side-by-side, not just the single gating gdx projected live above. Falls back to the
+# legacy projection.rds; NULL when neither exists. ──
+projAll <- tryCatch(pfmreports::loadGroupProjections(file.path(dirname(cfg_path), "projections")),
+                    error = function(e) NULL)
+scenIds   <- if (!is.null(projAll)) unique(projAll$scenario) else character(0)
+scenNames <- if (!is.null(projAll)) stats::setNames(projAll$scenarioName[match(scenIds, projAll$scenario)], scenIds) else character(0)
+multiScen <- length(scenIds) >= 2
+
 # ── Historical region × year fitted probabilities (feeds thresholds, classification, maps) ──────
 histProb <- bind_rows(lapply(sectors, function(sec) {
   f <- fits[[sec]]
@@ -170,7 +180,10 @@ for (sec in sectors) {
      if (!is.null(pd)) sprintf("%.2f", pd$calibrationSlope) else "—"))
 }
 cat(sprintf("\nScenario projections: %s\n",
-            if (has_proj) "available (SSP2)" else "not available (no gdx or FD spec)"))
+            if (!is.null(projAll)) sprintf("%d Policy Scenario(s) — %s (ADR 0035)",
+                  length(scenIds), paste(scenNames, collapse = ", "))
+            else if (has_proj) "available (single scenario, live)"
+            else "not available (no gdx or FD spec)"))
 ```
 
 # Model Equations & Coefficients {.tabset}
@@ -479,8 +492,54 @@ if (!mapsAvailable) {
             "darker = more likely to have carbon pricing. The between-region gradient is the ",
             "cross-sectional feasibility picture.")
 
-  ## A'. Scenario probability (if available)
-  if (has_proj) {
+  ## A'. Scenario probability — every Policy Scenario side-by-side (ADR 0035)
+  if (!is.null(projAll)) {
+    projY <- 2050
+    ord <- pfmreports::scenarioOrder(projAll, projY)   # least -> most ambitious (no hard-coded ids)
+    cat("## P(adoption) — scenarios {.tabset}\n\n")
+    for (sec in sectors) {
+      cat(sprintf("### %s\n\n", sec))
+      for (sid in ord) {
+        dd <- projAll[projAll$scenario == sid & projAll$sector == sec, ]
+        if (!nrow(dd)) next
+        yy <- dd$year[which.min(abs(dd$year - projY))][1]
+        d  <- dd[dd$year == yy, ]
+        p <- plotRegionWorldMap(setNames(d$prob, d$region), discrete = FALSE, limits = c(0, 1),
+          title = sprintf("Projected P(adoption) — %s — %s, %d", sec, dd$scenarioName[1], yy),
+          legend = "P(adoption)")
+        if (!is.null(p)) { print(p); cat("\n\n") } else cat("*Map could not be drawn.*\n\n")
+      }
+      if (multiScen) {                                 # feasibility gap: most − least ambitious
+        lo <- ord[1]; hi <- ord[length(ord)]
+        a <- projAll[projAll$scenario == hi & projAll$sector == sec, c("region", "year", "prob")]
+        b <- projAll[projAll$scenario == lo & projAll$sector == sec, c("region", "year", "prob")]
+        yy <- a$year[which.min(abs(a$year - projY))][1]
+        g <- merge(a[a$year == yy, ], b[b$year == yy, ], by = "region", suffixes = c(".hi", ".lo"))
+        g$gap <- g$prob.hi - g$prob.lo
+        p <- plotRegionWorldMap(setNames(g$gap, g$region), discrete = FALSE,
+          title = sprintf("Feasibility gap — %s: %s − %s, %d", sec, scenNames[hi], scenNames[lo], yy),
+          legend = "Δ P(adoption)")
+        if (!is.null(p)) { print(p); cat("\n\n") }
+      }
+    }
+    if (multiScen) {
+      cat("### Divergence over time\n\n")
+      md <- stats::aggregate(prob ~ scenarioName + sector + year, data = projAll, FUN = mean)
+      p <- ggplot(md, aes(year, prob, colour = scenarioName)) +
+        geom_line(linewidth = 0.9) + facet_wrap(~sector) +
+        coord_cartesian(ylim = c(0, 1)) +
+        labs(title = "Mean projected P(adoption) by Policy Scenario", x = NULL,
+             y = "mean P(adoption)", colour = NULL) + theme_minimal() +
+        theme(legend.position = "top")
+      print(p); cat("\n\n")
+    }
+    howToRead("Projected adoption probability around ", projY, " for each Policy Scenario (ordered ",
+              "least to most ambitious), the feasibility gap (most − least ambitious), and the mean ",
+              "trajectory over time. Positive gaps mark where ambition endogenously expands ",
+              "feasibility (the co-evolution signal); the scenarios are near-identical near-term and ",
+              "diverge by mid-century.")
+  } else if (has_proj) {
+    # Legacy single-scenario fallback (no per-scenario artifacts found).
     cat("## P(adoption) — scenario {.tabset}\n\n")
     projY <- 2050
     for (sec in names(proj)) {

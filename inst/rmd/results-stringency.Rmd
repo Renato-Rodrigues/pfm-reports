@@ -122,6 +122,15 @@ if (!is.null(scen_mag)) {
 }
 has_proj <- length(proj) > 0
 
+# ── Multi-scenario projections (ADR 0035): pure-consume the projection fan-out artifacts
+# (<group>/projections/<id>.rds) so the report compares the feasible price across EVERY Policy
+# Scenario, not just the single gating gdx projected live above. NULL when none exist. ──
+projAll <- tryCatch(pfmreports::loadGroupProjections(file.path(dirname(cfg_path), "projections")),
+                    error = function(e) NULL)
+scenIdsS   <- if (!is.null(projAll)) unique(projAll$scenario) else character(0)
+scenNamesS <- if (!is.null(projAll)) stats::setNames(projAll$scenarioName[match(scenIdsS, projAll$scenario)], scenIdsS) else character(0)
+multiScenS <- length(scenIdsS) >= 2
+
 # Shared display cap for ALL price charts (ADR 0032): the p99/p99.5/p99.9 of the pooled prices that is
 # closest to 1000 USD/tCO2 without exceeding it. A disclosed display cap (not the model clamp).
 histPx <- unlist(lapply(sectors, function(sec) {
@@ -148,7 +157,9 @@ for (sec in sectors) {
      if (!is.null(pd)) sprintf("%.3f", pd$corObsPred) else "—"))
 }
 cat(sprintf("\nHurdle projections (adoption-gated expected price): %s\n",
-            if (has_proj) "available (SSP2)" else "not available"))
+            if (!is.null(projAll)) sprintf("%d Policy Scenario(s) — %s (ADR 0035)",
+                  length(scenIdsS), paste(scenNamesS, collapse = ", "))
+            else if (has_proj) "available (single scenario, live)" else "not available"))
 ```
 
 # Model Equations & Coefficients {.tabset}
@@ -359,6 +370,29 @@ howToRead("Raw residuals against fitted values. A flat red smoother around zero 
 ```{r proj, results='asis', fig.height=6}
 if (has_proj) {
   pall <- bind_rows(proj)
+
+  # ── By Policy Scenario (ADR 0035): feasible expected price across ALL scenarios, from the
+  # projection fan-out artifacts (the same files the paper consumes). ──
+  if (multiScenS) {
+    cat("## By scenario\n\n")
+    ordS <- pfmreports::scenarioOrder(projAll, 2050)
+    pa <- projAll; pa$scenarioName <- factor(pa$scenarioName, levels = scenNamesS[ordS])
+    md <- stats::aggregate(expectedPrice ~ scenarioName + sector + year, data = pa, FUN = stats::median)
+    md$expectedPrice <- pmin(md$expectedPrice, priceCap)
+    p0 <- ggplot(md, aes(year, expectedPrice, colour = scenarioName)) +
+      geom_line(linewidth = 0.9) + facet_wrap(~sector) + theme_report() +
+      coord_cartesian(ylim = c(0, priceCap)) +
+      labs(title = "Median hurdle-expected carbon price by Policy Scenario",
+           x = NULL, y = "USD/tCO2", colour = NULL,
+           subtitle = sprintf("Shared display cap %.0f USD/tCO2", priceCap)) +
+      theme(legend.position = "top")
+    print(p0); cat("\n\n")
+    howToRead("Median expected price (P(adoption) × conditional price) over time for each Policy ",
+              "Scenario (", paste(scenNamesS[ordS], collapse = ", "), "). Divergence shows where ",
+              "higher ambition yields a higher *feasible* price path; late-century convergence ",
+              "reflects saturation. Pure consumer of projections/<id>.rds — the same artifacts the ",
+              "paper's Fig 10/10b use.")
+  }
 
   cat("## Hurdle-expected price trajectories\n\n")
   nAboveP <- sum(pall$expectedPrice > priceCap, na.rm = TRUE)
