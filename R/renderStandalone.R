@@ -65,6 +65,9 @@ renderCountryAdoption <- function(country = "BRA", countryName = country,
 #'
 #' @param modelDir,cachefolder,gdxFile Fit Cache / madrat cache / scenario gdx.
 #' @param modelDataFile Path to the consolidated \code{modelData.RData} cache.
+#' @param projectionsDir Optional path to a Run-Group \code{projections/} directory
+#'   (the multi-scenario fan-out, ADR 0035) for the Policy-Scenario Contrast exhibit.
+#'   \code{NULL}/empty auto-discovers one under the modelData/modelDir/output roots.
 #' @param outputDir Directory for the rendered HTML.
 #' @param verbose Logical.
 #' @return Path to the rendered HTML (invisibly).
@@ -72,11 +75,13 @@ renderCountryAdoption <- function(country = "BRA", countryName = country,
 renderModelDiagnostics <- function(modelDir = .defModel(), cachefolder = .defCache(),
                                    gdxFile = .defGdx(),
                                    modelDataFile = file.path(.defOutput(), "modelData.RData"),
+                                   projectionsDir = NULL,
                                    outputDir = .defOutput(), verbose = TRUE) {
   options(pfm.modelDir = .absPath(modelDir))
   .renderRmd("IAM_PFM_report", "IAM_PFM_report.html",
              params = list(modelDataFile = modelDataFile, modelDir = .absPath(modelDir),
                            cachefolder = cachefolder, gdxPath = gdxFile,
+                           projectionsDir = if (is.null(projectionsDir)) "" else .absPath(projectionsDir),
                            assetDir = file.path(.absPath(outputDir), "IAM_PFM_report")),
              outputDir = outputDir, verbose = verbose)
 }

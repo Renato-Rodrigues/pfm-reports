@@ -9,6 +9,7 @@ params:
   modelDir:      "cache"
   cachefolder:      ""
   gdxPath:       ""
+  projectionsDir: ""
   assetDir:      "output/IAM_PFM_report"
 output:
   html_document:
@@ -771,6 +772,54 @@ cat("\nFor immediate IAM integration, deploy the models marked Ready or Monitor,
 
 ```{r projection-caveats, echo=FALSE, results='asis'}
 cat(diag_results$projectionCaveats$asNumberedList)
+```
+
+## Policy-Scenario Contrast
+
+```{r scenario-contrast, echo=FALSE, results='asis', fig.height=4}
+# Locate the projection fan-out (ADR 0035): an explicit projectionsDir, else auto-discover a
+# `projections/` directory (with *.rds) under the modelData / modelDir / asset roots.
+.findProjDir <- function() {
+  cand <- character(0)
+  if (!is.null(params$projectionsDir) && nzchar(params$projectionsDir)) cand <- params$projectionsDir
+  roots <- unique(c(dirname(params$modelDataFile), params$modelDir, dirname(params$assetDir), getwd()))
+  roots <- roots[!is.na(roots) & nzchar(roots)]
+  for (r in roots) cand <- c(cand, file.path(r, "projections"), Sys.glob(file.path(r, "*", "projections")))
+  cand <- unique(cand)
+  hit <- cand[vapply(cand, function(d) dir.exists(d) && length(list.files(d, pattern = "\\.rds$")) > 0, logical(1))]
+  if (length(hit)) hit[1] else NULL
+}
+projAll <- tryCatch(pfmreports::loadGroupProjections(.findProjDir()), error = function(e) NULL)
+if (!is.null(projAll) && length(unique(projAll$scenario)) >= 2) {
+  ord <- pfmreports::scenarioOrder(projAll, 2050)                       # least -> most ambitious
+  nm  <- stats::setNames(projAll$scenarioName[match(ord, projAll$scenario)], ord)
+  pa  <- projAll; pa$scenarioName <- factor(pa$scenarioName, levels = nm)
+  hi  <- ord[length(ord)]; lo <- ord[1]
+  adoptM <- stats::aggregate(prob ~ scenarioName + year, data = pa, FUN = mean)
+  g1 <- ggplot(adoptM, aes(year, prob, colour = scenarioName)) + geom_line(linewidth = 0.9) +
+    coord_cartesian(ylim = c(0, 1)) + labs(title = "Mean P(adoption)", x = NULL, y = NULL, colour = NULL) +
+    theme_minimal() + theme(legend.position = "top")
+  priceM <- stats::aggregate(expectedPrice ~ scenarioName + year, data = pa, FUN = stats::median)
+  pcap <- as.numeric(stats::quantile(pa$expectedPrice, 0.99, na.rm = TRUE)); priceM$expectedPrice <- pmin(priceM$expectedPrice, pcap)
+  g2 <- ggplot(priceM, aes(year, expectedPrice, colour = scenarioName)) + geom_line(linewidth = 0.9) +
+    labs(title = "Median expected price (USD/tCO2)", x = NULL, y = NULL, colour = NULL) +
+    theme_minimal() + theme(legend.position = "top")
+  print(g1 + g2 + patchwork::plot_layout(guides = "collect") & theme(legend.position = "top"))
+  cat("\n\n")
+  m <- merge(pa[pa$scenario == hi, c("region", "year", "prob")],
+             pa[pa$scenario == lo, c("region", "year", "prob")],
+             by = c("region", "year"), suffixes = c(".hi", ".lo"))
+  ag <- stats::aggregate(abs(m$prob.hi - m$prob.lo), list(year = m$year), mean); py <- ag$year[which.max(ag$x)]
+  cat(sprintf(paste0("Deployed model projected onto **%s** vs **%s** (both SSP2, one shared fit, ADR 0035): ",
+    "near-identical near-term and diverging by mid-century — the adoption-probability gap peaks ~**%d** ",
+    "(mean %.0f percentage points), with higher ambition also lifting the feasible price path. These are ",
+    "relative feasibility signals (above-historical-range extrapolation), not forecasts.\n\n"),
+    nm[length(nm)], nm[1], py, 100 * max(ag$x)))
+} else {
+  cat("*Policy-scenario contrast unavailable: no multi-scenario `projections/*.rds` found. Pass ",
+      "`projectionsDir=<group>/projections` or run the `projection` fan-out over a multi-scenario ",
+      "registry (ADR 0035).*\n\n")
+}
 ```
 
 ---

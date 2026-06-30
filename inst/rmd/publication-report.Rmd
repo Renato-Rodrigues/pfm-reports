@@ -148,6 +148,15 @@ panelData <- mbind(panelData, setNames(panelData[, , "GDP per Capita"]^2, "GDP p
 has_scenario <- !is.null(params$gdxPath) && nchar(params$gdxPath) > 0 &&
                 file.exists(params$gdxPath)
 
+# ── Multi-scenario projections (ADR 0035): pure-consume the projection fan-out artifacts
+# (<group>/projections/<id>.rds, written by pfm::runProjection), found next to the deployed
+# selected-models.yml, so the REMIND-integration section can show the policy-scenario contrast. ──
+projAll <- tryCatch(pfmreports::loadGroupProjections(file.path(dirname(theory_cfg_path), "projections")),
+                    error = function(e) NULL)
+scenIdsP   <- if (!is.null(projAll)) unique(projAll$scenario) else character(0)
+scenNamesP <- if (!is.null(projAll)) stats::setNames(projAll$scenarioName[match(scenIdsP, projAll$scenario)], scenIdsP) else character(0)
+multiScenP <- length(scenIdsP) >= 2
+
 tidy_mag <- function(mag, label = "Historical") {
   if (is.null(mag)) return(NULL)
   df <- as.data.frame(mag)
@@ -1076,6 +1085,46 @@ The PFM adoption and stringency models feed into REMIND's climate policy project
 The logistic S-curve time trend ensures that projected adoption saturates realistically by $\sim$2060 rather than growing unboundedly to universal adoption by 2100 under the linear trend.
 
 Scenario discrimination — whether institutional quality differences create divergent carbon pricing trajectories under alternative SSP pathways — is testable using the theory-optimal models. Models with significant IQ channels (Blue/Green tier) translate governance scenario assumptions (SSP1 strong institutions vs. SSP3 weak institutions) into meaningfully different price projections.
+
+## Policy-scenario contrast
+
+```{r remind_scenarios, echo=FALSE, results='asis', fig.height=4}
+if (multiScenP) {
+  ord <- pfmreports::scenarioOrder(projAll, 2050); nm <- scenNamesP[ord]   # least -> most ambitious
+  pa <- projAll; pa$scenarioName <- factor(pa$scenarioName, levels = nm)
+  hi <- ord[length(ord)]; lo <- ord[1]
+  adoptM <- stats::aggregate(prob ~ scenarioName + year, data = pa, FUN = mean)
+  print(ggplot(adoptM, aes(year, prob, colour = scenarioName)) + geom_line(linewidth = 0.9) +
+    coord_cartesian(ylim = c(0, 1)) + labs(title = "Mean projected P(adoption) by Policy Scenario",
+    x = NULL, y = "mean P(adoption)", colour = NULL) + theme_minimal() + theme(legend.position = "top"))
+  cat("\n\n")
+  priceM <- stats::aggregate(expectedPrice ~ scenarioName + sector + year, data = pa, FUN = stats::median)
+  pcap <- as.numeric(stats::quantile(pa$expectedPrice, 0.99, na.rm = TRUE))
+  priceM$expectedPrice <- pmin(priceM$expectedPrice, pcap)
+  print(ggplot(priceM, aes(year, expectedPrice, colour = scenarioName)) + geom_line(linewidth = 0.9) +
+    facet_wrap(~sector, scales = "free_y") + theme_minimal() + theme(legend.position = "top") +
+    labs(title = "Median hurdle-expected carbon price by Policy Scenario", x = NULL,
+         y = "USD/tCO2", colour = NULL))
+  cat("\n\n")
+  m <- merge(pa[pa$scenario == hi, c("region", "year", "sector", "prob")],
+             pa[pa$scenario == lo, c("region", "year", "sector", "prob")],
+             by = c("region", "year", "sector"), suffixes = c(".hi", ".lo"))
+  ag <- stats::aggregate(abs(m$prob.hi - m$prob.lo), list(year = m$year), mean); py <- ag$year[which.max(ag$x)]
+  medp <- function(s, y, sec) stats::median(pa$expectedPrice[pa$scenario == s & pa$year == y & pa$sector == sec], na.rm = TRUE)
+  cat(sprintf(paste0("The deployed model is projected onto **%s** and **%s** (both SSP2; one shared fit, ",
+    "differing only through the energy-mix → actor-power channel, ADR 0035). The pathways are ",
+    "near-identical near-term and diverge by mid-century: the adoption-probability gap peaks around ",
+    "**%d** (mean %.0f percentage points), and the median feasible **Bulk** price at 2050 is **%.0f ",
+    "USD/tCO2 (%s) vs %.0f (%s)** — higher ambition lifts the *feasible* price path, not just the ",
+    "cost-optimal one. As above-historical-range extrapolation these are relative feasibility signals, ",
+    "not forecasts (feasibility envelope, ADR 0024).\n\n"),
+    nm[length(nm)], nm[1], py, 100 * max(ag$x),
+    medp(hi, 2050, "Bulk"), nm[length(nm)], medp(lo, 2050, "Bulk"), nm[1]))
+} else {
+  cat("*Policy-scenario contrast unavailable: per-scenario projections not found under the Run-Group ",
+      "`projections/` directory (run the `projection` step over a multi-scenario registry, ADR 0035).*\n\n")
+}
+```
 
 ---
 
