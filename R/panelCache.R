@@ -57,8 +57,18 @@ getPanelDataHistoricalCached <- function(aggregate = TRUE, y = 2000:2022,
 
 #' Load or compute the scenario panel data with local caching
 #'
+#' Supports the Policy Scenario Registry (ADR 0035): the cache is keyed per scenario
+#' (\code{scenarioId} or, failing that, a short hash of the gdx path) so building two
+#' scenarios in one session does not clobber a single cache file, and the gdx's own
+#' region mapping is honoured — the \code{SSP2-EU21-*} runs are 21-region and need
+#' \code{regionmapping_21_EU11-without-missingH12.csv}, not the H12 default.
+#'
 #' @param gdxFile Character. Path to \code{fulldata.gdx}.
 #' @param aggregate,outputRegionMappingFile Passed to \code{pfm::panelDataScenario}.
+#' @param gdxRegionMappingFile Character. Region mapping matching the gdx's native
+#'   resolution. Default \code{"regionmappingH12.csv"}.
+#' @param scenarioId Optional character. Scenario id used as the cache-file suffix
+#'   (else derived from the gdx path).
 #' @param forceRecompute Logical. Bypass the cache.
 #' @param panelCacheDir Character. Directory for the cached rds (see
 #'   \code{\link{getPanelDataHistoricalCached}}).
@@ -66,6 +76,8 @@ getPanelDataHistoricalCached <- function(aggregate = TRUE, y = 2000:2022,
 #' @export
 getPanelDataScenarioCached <- function(gdxFile, aggregate = TRUE,
                                        outputRegionMappingFile = "regionmapping_54.csv",
+                                       gdxRegionMappingFile = "regionmappingH12.csv",
+                                       scenarioId = NULL,
                                        forceRecompute = FALSE,
                                        panelCacheDir = getOption("pfmreports.panelCacheDir",
                                                                  file.path(getwd(), "data"))) {
@@ -75,9 +87,15 @@ getPanelDataScenarioCached <- function(gdxFile, aggregate = TRUE,
   isStandard <- aggregate && outputRegionMappingFile == "regionmapping_54.csv"
   if (!isStandard) {
     return(pfm::panelDataScenario(gdxFile = gdxFile, aggregate = aggregate,
+                                  gdxRegionMappingFile = gdxRegionMappingFile,
                                   outputRegionMappingFile = outputRegionMappingFile))
   }
-  cacheFile <- file.path(panelCacheDir, "panelDataScenario.rds")
+  # Per-scenario cache key: explicit id, else the REMIND run folder name (the gdx's parent dir,
+  # the discriminating part — every scenario's file is named fulldata.gdx). Cheap and stable; the
+  # gdx mtime check below still invalidates a stale cache.
+  key <- if (!is.null(scenarioId) && nzchar(scenarioId)) gsub("[^A-Za-z0-9._-]", "_", scenarioId)
+         else gsub("[^A-Za-z0-9._-]", "_", basename(dirname(normalizePath(gdxFile, mustWork = FALSE))))
+  cacheFile <- file.path(panelCacheDir, paste0("panelDataScenario-", key, ".rds"))
   gdxMtime <- file.info(gdxFile)$mtime
   currentState <- get_library_state()
   if (!forceRecompute && file.exists(cacheFile)) {
@@ -93,6 +111,7 @@ getPanelDataScenarioCached <- function(gdxFile, aggregate = TRUE,
   }
   message("Computing scenario panel data from GDX: ", gdxFile)
   data <- pfm::panelDataScenario(gdxFile = gdxFile, aggregate = aggregate,
+                                 gdxRegionMappingFile = gdxRegionMappingFile,
                                  outputRegionMappingFile = outputRegionMappingFile)
   dir.create(panelCacheDir, showWarnings = FALSE, recursive = TRUE)
   saveRDS(list(data = data, state = currentState), file = cacheFile)

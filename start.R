@@ -46,11 +46,22 @@ absify <- function(p) if (is.null(p) || grepl("^([A-Za-z]:|/|\\\\)", p)) p else 
 
 nCoresArg <- getArg("nCores", NULL)
 cachefolder <- absify(getArg("cachefolder", defCache("data/cache")))
-gdx <- absify(getArg("gdxFile", def("gdxPath", "data/fulldata.gdx")))
+
+# Policy Scenario Registry (ADR 0035): parse config.yml's `scenarios:` block into normalised
+# descriptors. The gating scenario's gdx drives selection's Projection-Sanity gate (gdxFile);
+# the full list is forwarded to the projection step's fan-out (one labelled projection each).
+# An explicit --gdxFile= or a single `gdxPath` overrides/falls back to a one-scenario run.
+scenReg  <- pfm::parseScenarioRegistry(cfg, baseDir = getwd())
+scenList <- if (length(scenReg$scenarios)) scenReg$scenarios else NULL
+gdxArg   <- getArg("gdxFile", NULL)
+gdx <- if (!is.null(gdxArg)) absify(gdxArg) else (pfm::scenarioGatingGdx(scenReg) %||% absify(def("gdxPath", "data/fulldata.gdx")))
 if (!is.null(gdx) && !file.exists(gdx)) {
-  message("[start] scenario gdx not found (", gdx, ") — Projection-Sanity gate will be skipped.")
+  message("[start] gating-scenario gdx not found (", gdx, ") — Projection-Sanity gate will be skipped.")
   gdx <- NULL
 }
+if (!is.null(scenList))
+  message("[start] Policy Scenario Registry: ", length(scenList), " scenario(s) [",
+          paste(names(scenList), collapse = ", "), "]; gating = ", scenReg$gating %||% "none")
 render   <- hasFlag("render")
 selectFE <- getArg("selectFE", NULL)
 
@@ -73,6 +84,7 @@ callArgs <- list(
   modelDir        = absify(getArg("modelDir",   def("modelDir",   "output"))),
   cachefolder     = cachefolder,
   gdxFile         = gdx,
+  scenarios       = scenList,
   nCores          = as.integer(if (is.null(nCoresArg)) "32" else nCoresArg),
   cluster         = getArg("cluster", "auto"),
   qos             = getArg("qos", "short"),

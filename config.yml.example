@@ -7,7 +7,24 @@
 # the working directory. (Legacy key name: `cacheDir` — still accepted by start.R.)
 cachefolder: "data/cache"
 
-# Path to the REMIND fulldata.gdx file for scenario projections.
+# Policy Scenario Registry (ADR 0035) — the REMIND policy pathways the one shared Fitted
+# Model is projected onto. Each entry: stable `id`, human-readable `name` (reports + paper),
+# `gdx` path, and `gdxRegionMapping` matching the gdx's native resolution (default H12 runs
+# use regionmappingH12.csv; EU21 runs use regionmapping_21_EU11-without-missingH12.csv).
+# `gatingScenario` names the scenario whose projection drives model selection (the
+# high-ambition stress test). Selection runs once against it; every scenario is projected.
+scenarios:
+  - id: national-policies
+    name: "National Policies"
+    gdx: "data/runs/<NPi-run>/fulldata.gdx"
+    gdxRegionMapping: "regionmappingH12.csv"
+  - id: climate-ambition
+    name: "Climate Ambition"
+    gdx: "data/runs/<PkBudg-run>/fulldata.gdx"
+    gdxRegionMapping: "regionmappingH12.csv"
+gatingScenario: climate-ambition
+
+# Legacy single-scenario fallback (used only when `scenarios:` is absent).
 gdxPath: "data/fulldata.gdx"
 
 # Fit Cache / model store (ADR 0009) — holds models/, panels/ and index.json. This is the
