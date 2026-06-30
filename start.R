@@ -31,8 +31,18 @@ getArg  <- function(name, default = NULL) {
 }
 hasFlag <- function(name) any(args == paste0("--", name))
 
-cfg <- list()
-if (file.exists("config.yml") && requireNamespace("yaml", quietly = TRUE)) {
+# Config resolution: an explicit --config=<path> wins — its directory (confDir) anchors every
+# relative path in the config, including the scenario gdx paths; otherwise fall back to config.yml
+# in the CWD. confDir equals getwd() unless --config moves it, so the default/CWD behaviour is
+# unchanged. This lets you keep a config.yml (with the scenario gdx paths) next to the run script
+# and pass --config=<that file> regardless of where the launcher is invoked from.
+configArg <- getArg("config", NULL)
+cfg <- list(); confDir <- getwd()
+if (!is.null(configArg) && nzchar(configArg) && file.exists(configArg) && requireNamespace("yaml", quietly = TRUE)) {
+  cfg <- tryCatch(yaml::read_yaml(configArg), error = function(e) list())
+  confDir <- dirname(normalizePath(configArg, winslash = "/", mustWork = FALSE))
+  message("[start] config (--config): ", normalizePath(configArg, winslash = "/", mustWork = FALSE))
+} else if (file.exists("config.yml") && requireNamespace("yaml", quietly = TRUE)) {
   cfg <- tryCatch(yaml::read_yaml("config.yml"), error = function(e) list())
 }
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -42,16 +52,31 @@ defCache <- function(fb) {
   v <- cfg[["cachefolder"]] %||% cfg[["cacheDir"]]
   if (is.null(v) || !nzchar(as.character(v))) fb else v
 }
-absify <- function(p) if (is.null(p) || grepl("^([A-Za-z]:|/|\\\\)", p)) p else normalizePath(file.path(getwd(), p), winslash = "/", mustWork = FALSE)
+absify <- function(p) if (is.null(p) || grepl("^([A-Za-z]:|/|\\\\)", p)) p else normalizePath(file.path(confDir, p), winslash = "/", mustWork = FALSE)
 
 nCoresArg <- getArg("nCores", NULL)
 cachefolder <- absify(getArg("cachefolder", defCache("data/cache")))
 
-# Policy Scenario Registry (ADR 0035): parse config.yml's `scenarios:` block into normalised
-# descriptors. The gating scenario's gdx drives selection's Projection-Sanity gate (gdxFile);
-# the full list is forwarded to the projection step's fan-out (one labelled projection each).
-# An explicit --gdxFile= or a single `gdxPath` overrides/falls back to a one-scenario run.
-scenReg  <- pfm::parseScenarioRegistry(cfg, baseDir = getwd())
+# Policy Scenario Registry (ADR 0035): parse the config's `scenarios:` block into normalised
+# descriptors. The gating scenario's gdx drives selection's Projection-Sanity gate (gdxFile); the
+# full list is forwarded to the projection step's fan-out (one labelled projection each). Relative
+# gdx paths resolve against confDir (the config file's own directory). If --config was not used and
+# the CWD config carried no `scenarios:` block, fall back to a config.yml next to this script
+# (pfm-reports/), resolving its paths against that directory. An explicit --gdxFile= or a single
+# `gdxPath` overrides/falls back to a one-scenario run.
+scenCfg <- cfg; scenDir <- confDir
+if (is.null(scenCfg$scenarios)) {
+  .sd <- tryCatch({ a <- commandArgs(FALSE); f <- sub("^--file=", "", a[grepl("^--file=", a)])
+                    if (length(f)) dirname(normalizePath(f[1], mustWork = FALSE)) else NA_character_ },
+                  error = function(e) NA_character_)
+  .cp <- if (!is.na(.sd)) file.path(.sd, "config.yml") else NA_character_
+  if (!is.na(.cp) && file.exists(.cp) && requireNamespace("yaml", quietly = TRUE)) {
+    .alt <- tryCatch(yaml::read_yaml(.cp), error = function(e) NULL)
+    if (!is.null(.alt$scenarios)) { scenCfg <- .alt; scenDir <- .sd
+      message("[start] scenario registry read from ", .cp) }
+  }
+}
+scenReg  <- pfm::parseScenarioRegistry(scenCfg, baseDir = scenDir)
 scenList <- if (length(scenReg$scenarios)) scenReg$scenarios else NULL
 gdxArg   <- getArg("gdxFile", NULL)
 gdx <- if (!is.null(gdxArg)) absify(gdxArg) else (pfm::scenarioGatingGdx(scenReg) %||% absify(def("gdxPath", "data/fulldata.gdx")))
