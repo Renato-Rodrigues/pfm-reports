@@ -28,6 +28,9 @@ The output subfolder named after the report (e.g. `output/IAM_PFM_report/`) that
 ## Pure-Consumer Report
 A report that only visualizes precomputed artifacts (workflow RDS, model store, selected-models config) and never estimates models or recomputes selection results itself (ADR 0006). The redesigned reports (`panel-data`, `selection`, `results-adoption`, `results-stringency`) are pure consumers; scenario projection prediction is the one in-report computation allowed (presentation-specific). The deprecated self-computing reports are `panel-data-input`, `model-selection`, `adoption-model`, `stringency-model`.
 
+## PSM Results Report
+The single Pure-Consumer Report for a **Policy Stringency Model Run-Group** (ADR 0036): `psm-results.Rmd`, rendered by `renderPSMResults(group, resultsDir)`. Consumes `sweep.rds` (fit metrics, maximin, bounded-index sanity trace), `selected-models-psm.yml`, `estimator-agreement.rds` (the estimator-invariance exhibit: satP engine vs fractional-logit headline vs beta/levels, compared on signs and natural-scale AMEs, never AIC/BIC), and `projections/*.rds` (the scenario fan-out with Implementability-Factor columns and the out-of-coverage flag). Every section degrades gracefully when its artifact is missing, so it renders at any pipeline stage. Not part of `renderGroup`'s default set (that set is for carbon-price run-groups).
+
 ## Projection Convergence
 The behaviour of a panel input at and beyond the historical→scenario seam: its convergence target (e.g. V-Dem logistic convergence to the 75th global percentile by 2150, midpoint 2080), the stitched trajectory, and continuity at the seam. A mandatory subsection per data type in the panel-data report.
 

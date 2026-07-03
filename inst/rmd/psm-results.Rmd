@@ -1,0 +1,350 @@
+---
+title: "PSM Results — Policy Stringency Model — `r params$reportName`"
+date: "`r format(Sys.time(), '%Y-%m-%d %H:%M')`"
+output:
+  html_document:
+    theme: flatly
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: true
+    number_sections: true
+    code_folding: hide
+params:
+  sweepRds: "results/psm-exhaustive/sweep.rds"
+  selectedConfig: "results/psm-exhaustive/selected-models-psm.yml"
+  agreementRds: "results/psm-exhaustive/estimator-agreement.rds"
+  projectionsDir: "results/psm-exhaustive/projections"
+  manifestJson: "results/psm-exhaustive/manifest.json"
+  reportName: "default"
+  indexMax: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 10, fig.height = 5)
+library(ggplot2)
+library(dplyr)
+library(pfmreports)
+
+root <- getwd()
+absify <- function(p) {
+  if (is.null(p) || !nzchar(p)) return(p)
+  if (grepl("^([A-Za-z]:|/|\\\\)", p)) p else file.path(root, p)
+}
+readIf <- function(p, reader) {
+  p <- absify(p)
+  if (!is.null(p) && nzchar(p) && file.exists(p)) tryCatch(reader(p), error = function(e) NULL) else NULL
+}
+sweep <- readIf(params$sweepRds, readRDS)
+sel <- readIf(params$selectedConfig, yaml::read_yaml)
+agree <- readIf(params$agreementRds, readRDS)
+manifest <- readIf(params$manifestJson, function(p) jsonlite::fromJSON(p, simplifyVector = FALSE))
+projDir <- absify(params$projectionsDir)
+projFiles <- if (!is.null(projDir) && nzchar(projDir) && dir.exists(projDir)) {
+  list.files(projDir, pattern = "\\.rds$", full.names = TRUE)
+} else character(0)
+projections <- if (length(projFiles)) {
+  dplyr::bind_rows(lapply(projFiles, function(f) tryCatch(readRDS(f), error = function(e) NULL)))
+} else NULL
+indexMax <- as.numeric(params$indexMax)
+deployedSpec <- if (!is.null(sweep$selected$PolicyStringency)) sweep$selected$PolicyStringency else
+  if (!is.null(sel) && length(sel)) sel[[1]]$name else NA_character_
+sectors <- c("Bulk", "Diffuse")
+fmt <- function(x, d = 3) ifelse(is.na(x), "", formatC(x, digits = d, format = "f"))
+```
+
+# Overview
+
+*What this report is for.* The **Policy Stringency Model (PSM, ADR 0036)** results for one
+Run-Group: a single-stage bounded-response model of the CAPMF policy-stringency index
+(0–`r indexMax`) on Actor Power, Institutional Quality and their interactions — the PFM's
+policy-*portfolio* implementability signal, sibling to the carbon-price hurdle model. This report
+is a **pure consumer** of the Run-Group artifacts (`sweep.rds`, `selected-models-psm.yml`,
+`estimator-agreement.rds`, `projections/`): it estimates nothing itself. Two properties frame
+everything below: the outcome is **bounded by construction** (`index = indexMax·logit⁻¹(η)`), so
+**no extrapolation clamp exists anywhere** in this model; and estimators are **never compared on
+AIC/BIC** — the satP engine drives selection, the fractional logit headlines the coefficients,
+and the agreement between them is the robustness claim.
+
+```{r provenance, results='asis'}
+cat("**Artifact checklist:** ",
+    sprintf("sweep.rds %s | selected-models-psm.yml %s | estimator-agreement.rds %s | projections/ %s\n\n",
+            if (!is.null(sweep)) "✓" else "✗ missing",
+            if (!is.null(sel)) "✓" else "✗ missing",
+            if (!is.null(agree)) "✓" else "✗ missing",
+            if (!is.null(projections)) sprintf("✓ (%d scenario file(s))", length(projFiles)) else "✗ missing"))
+if (!is.null(manifest)) {
+  cat(sprintf("- **Run-Group:** `%s` (mode `%s`), pfm %s / mrpfm %s\n",
+              manifest$group %||% "?", manifest$mode %||% "?",
+              manifest$pfm_version %||% "?", manifest$mrpfm_version %||% "?"))
+  if (!is.null(manifest$training_years)) {
+    cat(sprintf("- **Training years:** %s–%s | panel hash `%s`\n",
+                manifest$training_years[[1]], manifest$training_years[[2]],
+                manifest$panel_hash %||% "?"))
+  }
+  if (!is.null(manifest$steps)) {
+    st <- vapply(names(manifest$steps), function(s) {
+      e <- manifest$steps[[s]]
+      if (is.list(e)) paste0(s, ": ", e$status %||% "?") else paste0(s, ": done")
+    }, character(1))
+    cat("- **Steps:** ", paste(st, collapse = " | "), "\n")
+  }
+}
+cat(sprintf("- **Deployed spec:** `%s`\n", deployedSpec))
+if (is.null(sweep)) {
+  cat("\n> **sweep.rds not found — run `pfm::runPSMSweep()` first.** Sections below that depend on it are skipped.\n")
+}
+```
+
+# Selection (sweep + maximin + bounded-index sanity)
+
+*What this section is for.* How the deployed specification was chosen: every swept spec's fit
+metrics, the worse-sector Maximin ranking (identical rule to the carbon-price model — the satP
+engine's full likelihood keeps AIC/BIC/ΔR² valid), and the **bounded-index Projection Sanity
+gate**. Because the index saturates structurally, the price model's explosion/clamp-reliance
+rules have no analogue here; what is screened is *implausibility on the index scale* (dead
+region blocks, saturation timing, seams, spikes).
+
+```{r sweep-results, results='asis'}
+if (!is.null(sweep$results) && nrow(sweep$results)) {
+  res <- sweep$results
+  keep <- intersect(c("model", "sector", "tier", "deltaR2Theory", "pseudoR2", "aic", "bic",
+                      "maxVIF", "trendShare", "nObs", "converged"), colnames(res))
+  tab <- res[, keep, drop = FALSE]
+  for (cc in intersect(c("deltaR2Theory", "pseudoR2", "trendShare"), colnames(tab))) tab[[cc]] <- round(tab[[cc]], 3)
+  for (cc in intersect(c("aic", "bic", "maxVIF"), colnames(tab))) tab[[cc]] <- round(tab[[cc]], 1)
+  tab$deployed <- ifelse(tab$model == deployedSpec, "◄ deployed", "")
+  interactiveTable(tab, caption = "Per-fit metrics — every swept PSM spec × sector", pageLength = 12)
+  howToRead("One row per fitted (spec, sector). `tier` is the Theory Tier (Green > Blue > Yellow), ",
+            "`deltaR2Theory` the incremental pseudo-R² of the theory terms over FE + controls + trend ",
+            "(the primary identification metric), `maxVIF` the collinearity gate input. The deployed ",
+            "spec is flagged. A spec must convergence- and VIF-pass in BOTH sectors to compete.",
+            type = "table")
+} else cat("> *No sweep results available.*\n")
+```
+
+```{r maximin, results='asis'}
+mm <- sweep$maximin$PolicyStringency
+if (!is.null(mm) && nrow(mm)) {
+  mt <- mm
+  numc <- vapply(mt, is.numeric, logical(1))
+  mt[numc] <- lapply(mt[numc], function(v) round(v, 3))
+  mt$deployed <- ifelse(mt$model == deployedSpec, "◄ deployed", "")
+  interactiveTable(utils::head(mt, 40), caption = "Maximin ranking (worse-sector tier → mean ΔR²(theory) → tie-breaks)",
+                   pageLength = 12)
+  howToRead("The cross-sector ranking that picks the shared specification: rank by the WORSE sector's ",
+            "Theory Tier, tie-break by mean ΔR²(theory), then the BIC-parsimony band rules. `gatePass` ",
+            "combines the hard gates (VIF, convergence, no unintended lag). The deployed spec is the ",
+            "best gate-passing row that also cleared the bounded-index sanity gate below.", type = "table")
+} else cat("> *No maximin table available.*\n")
+```
+
+```{r sanity, results='asis'}
+sn <- sweep$sanity$PolicyStringency
+if (!is.null(sn) && !is.null(sn$trace) && nrow(sn$trace)) {
+  cat(sprintf("**Sanity walk:** %d candidate(s) evaluated; chosen `%s`%s.\n\n",
+              nrow(sn$trace), sn$chosen,
+              if (isTRUE(sn$forced)) " — **LEAST-FLAGGED fallback (no candidate passed all severe rules)**" else ""))
+  print(knitr::kable(sn$trace, row.names = FALSE,
+                     caption = "Bounded-index Projection-Sanity trace (expanding batches, maximin order)"))
+  cat("\n\n")
+  howToRead("Candidates are projected onto the gating scenario in maximin order and screened by the ",
+            "bounded-index rules — severe: non-finite index, dead region block (a whole block below ",
+            sprintf("%.1f", 0.05 * indexMax), " through the horizon); warnings: all-region saturation above ",
+            sprintf("%.1f", 0.95 * indexMax), ", seam jumps, single-year spikes, NA coverage. The first ",
+            "severe-free candidate wins. There is NO price-explosion or clamp-reliance rule: nothing in ",
+            "this model is unbounded.", type = "table")
+  fl <- sn$flags[[sn$chosen]]
+  if (!is.null(fl) && nrow(fl)) {
+    print(knitr::kable(fl, row.names = FALSE, caption = paste0("Flags for the deployed spec `", sn$chosen, "`")))
+    cat("\n\n")
+    howToRead("Remaining (non-severe) flags on the deployed spec's gating-scenario projection — ",
+              "disclosed, not disqualifying.", type = "table")
+  } else cat("*The deployed spec carries no sanity flags on the gating scenario.*\n\n")
+} else cat("> *No sanity trace (sweep ran without a scenario panel — selection was pure maximin).*\n")
+```
+
+# Deployed model — coefficients
+
+*What this section is for.* The deployed specification's estimated coefficients per sector, from
+the **satP selection engine** (gaussian GLM on `logit(y/indexMax)`, cluster-robust SEs by
+region). Coefficients are in per-standard-deviation units of each driver on the logit scale;
+the natural-scale magnitudes are in the AME comparison of the next section.
+
+```{r coefficients, results='asis'}
+cf <- sweep$coefficients
+if (!is.null(cf) && nrow(cf) && !is.na(deployedSpec)) {
+  d <- cf[cf$model == deployedSpec & cf$stage == "PolicyStringency", , drop = FALSE]
+  d <- d[!grepl("^regionFE", d$term), , drop = FALSE]
+  if (nrow(d)) {
+    d$sig <- cut(d$pValue, c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+                 labels = c("***", "**", "*", ".", ""))
+    tab <- d %>%
+      mutate(estimate = round(estimate, 3), stdError = round(stdError, 3),
+             zValue = round(zValue, 2), pValue = signif(pValue, 3)) %>%
+      select(sector, term, estimate, stdError, zValue, pValue, sig)
+    interactiveTable(tab, caption = paste0("Deployed spec `", deployedSpec, "` — cluster-robust coefficients (satP engine)"),
+                     pageLength = 15)
+    howToRead("Coefficients on the logit(index/indexMax) scale, per sector, with clustered (region) ",
+              "standard errors. Signs are directly interpretable (positive = more policy stringency); ",
+              "magnitudes are per-SD of the standardized driver. Interaction terms carry the `_x_` infix.",
+              type = "table")
+    thy <- d[!grepl("Intercept|timeTrend|logisticTimeTrend|lagged_ecp", d$term), , drop = FALSE]
+    if (nrow(thy)) {
+      p <- ggplot(thy, aes(x = estimate, y = term, colour = sector)) +
+        geom_vline(xintercept = 0, linetype = 2, colour = "grey50") +
+        geom_pointrange(aes(xmin = estimate - 1.96 * stdError, xmax = estimate + 1.96 * stdError),
+                        position = position_dodge(width = 0.5)) +
+        theme_report() +
+        labs(title = paste0("Deployed spec `", deployedSpec, "` — theory coefficients (95% CI)"),
+             x = "coefficient (logit scale, per SD)", y = NULL)
+      print(p); cat("\n\n")
+      howToRead("Point estimate ± 1.96 clustered SE per sector. Intervals clear of the zero line = ",
+                "significant at 5%; sector agreement in sign is the Shared-Specification expectation.")
+    }
+  } else cat("> *No coefficient rows for the deployed spec.*\n")
+} else cat("> *No coefficient table available.*\n")
+```
+
+# Estimator agreement (the estimator-invariance claim)
+
+*What this section is for.* The deployed spec re-estimated under the whole **PSM Estimator
+Suite** — satP engine, **fractional logit (the paper's headline)**, beta regression, and the
+levels-OLS benchmark. The published claim is that the political-economy channels are
+**estimator-invariant**: same signs, comparable natural-scale AMEs. Estimators are compared only
+on scale-free natural-scale metrics; the AIC column is transparency, never a ranking.
+
+```{r agreement, results='asis', fig.height=5.5}
+if (!is.null(agree) && length(agree$bySector)) {
+  for (sec in intersect(sectors, names(agree$bySector))) {
+    a <- agree$bySector[[sec]]
+    if (is.null(a)) next
+    cat(sprintf("## %s\n\n", sec))
+    fs <- a$fitStats
+    if (!is.null(fs)) {
+      numc <- vapply(fs, is.numeric, logical(1))
+      fs[numc] <- lapply(fs[numc], function(v) round(v, 3))
+      print(knitr::kable(fs, row.names = FALSE, caption = paste0(sec, " — per-estimator fit statistics")))
+      cat("\n\n")
+      howToRead("`rmseNatural`/`corNatural` are computed on the natural 0–", indexMax, " scale and are the ",
+                "ONLY cross-estimator comparable fit numbers. `aic` is NA for the fractional logit by ",
+                "construction (quasi-likelihood) — that is why it can never drive selection. ",
+                "`shareAtZero`/`shareAtMax` are the boundary masses: the empirical gate for the ",
+                "conditional Tobit/two-part rung.", type = "table")
+    }
+    if (!is.null(a$agreement) && nrow(a$agreement)) {
+      print(knitr::kable(a$agreement, row.names = FALSE,
+                         caption = paste0(sec, " — per-term sign agreement across the fitted suite")))
+      cat("\n\n")
+      howToRead("`signsAgree` = every fitted estimator gives this term the same sign; `nSignificant05` ",
+                "counts in how many estimators it clears 5%. Theory terms with full agreement are the ",
+                "estimator-invariance result; a disagreeing term is fragile and must be reported as such.",
+                type = "table")
+    }
+    tb <- a$table
+    if (!is.null(tb) && nrow(tb)) {
+      thy <- tb[!grepl("Intercept|timeTrend|logisticTimeTrend|lagged_ecp", tb$term), , drop = FALSE]
+      thy <- thy[is.finite(thy$ameIndex), , drop = FALSE]
+      if (nrow(thy)) {
+        p <- ggplot(thy, aes(x = ameIndex, y = term, colour = estimator)) +
+          geom_vline(xintercept = 0, linetype = 2, colour = "grey50") +
+          geom_pointrange(aes(xmin = ameIndex - 1.96 * ameSE, xmax = ameIndex + 1.96 * ameSE),
+                          position = position_dodge(width = 0.6)) +
+          theme_report() +
+          labs(title = paste0(sec, " — natural-scale AMEs across the estimator suite"),
+               x = paste0("average marginal effect (index points, 0–", indexMax, ")"), y = NULL)
+        print(p); cat("\n\n")
+        howToRead("Average marginal effects on the natural index scale (delta-method 95% intervals, ",
+                  "clustered vcov) — the cross-estimator comparable effect size. Overlapping intervals ",
+                  "with the same sign across estimators = the robustness claim in one picture. The ",
+                  "fractional-logit AMEs are the numbers the paper leads with.")
+      }
+    }
+  }
+  if (length(agree$skipped)) {
+    cat(sprintf("> Skipped estimator(s): %s.\n\n",
+                paste(sprintf("`%s` (%s)", names(agree$skipped), agree$skipped), collapse = "; ")))
+  }
+} else cat("> *estimator-agreement.rds not found — run `pfm::runPSMEstimatorAgreement()`.*\n")
+```
+
+# Scenario projections (fan-out)
+
+*What this section is for.* The deployed spec projected onto every registered **Policy
+Scenario** (ADR 0035) — the exogenous scenario calculation that is the paper's v1 results
+scope. Values are **bounded by construction**; the display needs no cap and there is no clamp
+whose reliance would have to be disclosed. Rows for regions outside the CAPMF estimation sample
+(USA, Brazil, …) are driver-based extrapolations and flagged `outOfCoverage`. The
+**Implementability Factor** columns (`index/indexMax` ∈ [0,1]) are the ready-to-apply IAM
+multiplier; the raw index remains the canonical output.
+
+```{r projections, results='asis', fig.height=5.5}
+if (!is.null(projections) && nrow(projections)) {
+  pr <- projections
+  pr$coverage <- ifelse(pr$outOfCoverage, "out-of-coverage (extrapolated)", "in-coverage")
+  summ <- pr %>%
+    filter(is.finite(index)) %>%
+    group_by(scenarioName, sector, year) %>%
+    summarise(mid = median(index), lo = quantile(index, 0.25), hi = quantile(index, 0.75),
+              .groups = "drop")
+  p <- ggplot(summ, aes(x = year, y = mid, colour = scenarioName, fill = scenarioName)) +
+    geom_ribbon(aes(ymin = lo, ymax = hi), alpha = 0.15, colour = NA) +
+    geom_line(linewidth = 0.9) +
+    facet_wrap(~sector) +
+    coord_cartesian(ylim = c(0, indexMax)) +
+    theme_report() +
+    labs(title = "Projected policy-stringency index by scenario (median, IQR across regions)",
+         x = NULL, y = paste0("CAPMF index (0–", indexMax, ")"), colour = NULL, fill = NULL)
+  print(p); cat("\n\n")
+  howToRead("Median projected index across regions per scenario and sector, ribbon = interquartile ",
+            "range. The y-axis is the FULL structural range — nothing can leave it, so scenario ",
+            "separation here is driver-driven (actor power / institutions), not a runaway functional ",
+            "form. A widening gap between scenarios is the political-economy signal delivered to the IAM.")
+
+  horizonYear <- max(pr$year[is.finite(pr$index)], na.rm = TRUE)
+  horizon <- pr %>%
+    filter(year == horizonYear, is.finite(index)) %>%
+    group_by(Scenario = scenarioName, Sector = sector) %>%
+    summarise(`median index` = round(median(index), 2),
+              `median implementability` = round(median(implementability), 3),
+              `p10–p90 implementability` = sprintf("%.2f–%.2f", quantile(implementability, 0.1),
+                                                   quantile(implementability, 0.9)),
+              `out-of-coverage regions` = length(unique(region[outOfCoverage])),
+              .groups = "drop")
+  print(knitr::kable(horizon, row.names = FALSE,
+                     caption = paste0("Horizon summary (", horizonYear, ") — index and Implementability Factor")))
+  cat("\n\n")
+  howToRead("End-of-horizon medians per scenario × sector. The Implementability Factor is the 0–1 ",
+            "rescale REMIND can apply to non-price policy assumptions (raw index stays canonical). ",
+            "Out-of-coverage counts state how many regions are extrapolations rather than in-sample ",
+            "predictions.", type = "table")
+
+  ooc <- pr %>% filter(outOfCoverage) %>% distinct(region)
+  if (nrow(ooc)) {
+    cat(sprintf("**Out-of-coverage regions (driver-based extrapolation):** %s.\n\n",
+                paste(sort(ooc$region), collapse = ", ")))
+  }
+} else cat("> *No projection artifacts — run `pfm::runPSMProjection()` with the Scenario Registry.*\n")
+```
+
+# Definitions
+
+```{r defs}
+defs <- data.frame(
+  Term = c("Policy Stringency Model (PSM)", "satP engine", "Fractional logit (headline)",
+           "Estimator agreement", "ΔR²(theory)", "Bounded-index Projection Sanity",
+           "Implementability Factor", "Out-of-coverage"),
+  Definition = c(
+    "Single-stage bounded-response model of the CAPMF index (0–10) on AP + IQ + AP×IQ; no adoption hurdle (ADR 0036).",
+    "Gaussian GLM on logit(index/indexMax) — full likelihood, so it drives selection (maximin, BIC tie-breaks).",
+    "Papke–Wooldridge quasi-binomial logit — canonical for bounded outcomes, exact boundary handling; the paper's coefficient/AME tables. No likelihood ⇒ never used for selection.",
+    "The deployed spec re-estimated under the whole suite; signs/AMEs compared, never information criteria.",
+    "Pseudo-R² of the full model minus a baseline with all theory terms removed — the primary identification metric.",
+    "Severe: non-finite index, dead region block. Warnings: saturation timing, seam jumps, spikes, NA coverage. No explosion/clamp rules — nothing is unbounded.",
+    "index/indexMax ∈ [0,1]: the post-processing multiplier for IAM coupling; the raw index remains canonical.",
+    "Region absent from the CAPMF estimation sample; its projection is a driver-based extrapolation, flagged per row."),
+  stringsAsFactors = FALSE
+)
+interactiveTable(defs, caption = "PSM report glossary", pageLength = 10)
+```

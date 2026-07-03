@@ -136,6 +136,55 @@ howToRead(
   "near zero means most specifications carry little theory signal there.")
 ```
 
+# ΔR²(theory) distribution — gate-passing specifications only
+
+```{r dr2-dist-gated, results='asis'}
+# Redrawn distribution restricted to specifications that PASS the hard reliability gates
+# (per-sector VIF < 10, converged, no lagged dependent-variable terms, non-inflated ΔR² ≤ 1,
+# and — stringency only — the time trend not dominating, trendShare ≤ 0.5). This matches the
+# hard gates in pfm::computeMaximinScore, so the reject pile (which is ~half of all converged
+# specs and contaminates the raw violin's upper tail with collinear/degenerate fits) is removed.
+# The deployed model per stage is marked so the reader sees WHERE the pick sits in the valid set.
+gp <- results %>%
+  filter(converged %in% TRUE, is.finite(deltaR2Theory)) %>%
+  mutate(gatePass = (is.na(maxVIF) | maxVIF < 10) &
+                    !(usesLagged %in% TRUE) &
+                    deltaR2Theory <= 1 &
+                    (is.na(trendShare) | trendShare <= 0.5)) %>%
+  filter(gatePass)
+nAll  <- results %>% filter(converged %in% TRUE, is.finite(deltaR2Theory)) %>% nrow()
+nKept <- nrow(gp)
+dep <- do.call(rbind, lapply(stages, function(stg) {
+  sel <- wf$selected[[stg]]
+  if (is.null(sel)) return(NULL)
+  results %>% filter(model == sel, stage == stg, is.finite(deltaR2Theory)) %>%
+    transmute(stage, sector, deltaR2Theory)
+}))
+depLayer <- if (!is.null(dep) && nrow(dep) > 0)
+  geom_point(data = dep, aes(x = sector, y = deltaR2Theory), inherit.aes = FALSE,
+             shape = 23, size = 3.2, fill = "#D55E00", colour = "white", stroke = 0.8) else NULL
+if (nKept > 0) {
+  p <- ggplot(gp, aes(x = sector, y = deltaR2Theory, fill = sector)) +
+    geom_violin(alpha = 0.5, colour = NA) +
+    geom_boxplot(width = 0.15, outlier.size = 0.6) +
+    depLayer +
+    facet_wrap(~stage, scales = "free_y") +
+    theme_report() + theme(legend.position = "none") +
+    labs(title = "ΔR²(theory) among gate-passing specifications, with the deployed model marked (◆)",
+         subtitle = sprintf("Reliability-gate survivors only: %d of %d converged fits retained (%.0f%% dropped for VIF ≥ 10, inflation, lagged terms, or trend dominance)",
+                            nKept, nAll, 100 * (1 - nKept / nAll)),
+         x = NULL, y = "ΔR²(theory)")
+  print(p)
+}
+howToRead(
+  "The same theory-signal distribution as above, but restricted to specifications that clear ",
+  "the HARD reliability gates (VIF < 10, converged, no lagged terms, ΔR²(theory) ≤ 1, trend not ",
+  "dominant). Roughly half of all converged fits are removed — including most of the raw chart's ",
+  "high-ΔR² tail, which is inflated by collinear/degenerate specs the selection rule rejects. The ",
+  "orange diamond (◆) marks the deployed model: it sits HIGH within the valid distribution without ",
+  "chasing the (rejected) inflated tail — the honest read of 'we did not cherry-pick the max-ΔR² spec.'")
+```
+
 # Model Rankings {.tabset}
 
 ```{r model-rankings, results='asis'}

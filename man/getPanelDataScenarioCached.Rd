@@ -8,6 +8,8 @@ getPanelDataScenarioCached(
   gdxFile,
   aggregate = TRUE,
   outputRegionMappingFile = "regionmapping_54.csv",
+  gdxRegionMappingFile = "regionmappingH12.csv",
+  scenarioId = NULL,
   forceRecompute = FALSE,
   panelCacheDir = getOption("pfmreports.panelCacheDir", file.path(getwd(), "data"))
 )
@@ -16,6 +18,12 @@ getPanelDataScenarioCached(
 \item{gdxFile}{Character. Path to \code{fulldata.gdx}.}
 
 \item{aggregate, outputRegionMappingFile}{Passed to \code{pfm::panelDataScenario}.}
+
+\item{gdxRegionMappingFile}{Character. Region mapping matching the gdx's native
+resolution. Default \code{"regionmappingH12.csv"}.}
+
+\item{scenarioId}{Optional character. Scenario id used as the cache-file suffix
+(else derived from the gdx path).}
 
 \item{forceRecompute}{Logical. Bypass the cache.}
 
@@ -26,5 +34,9 @@ getPanelDataScenarioCached(
 A magpie object, or \code{NULL} when \code{gdxFile} is missing.
 }
 \description{
-Load or compute the scenario panel data with local caching
+Supports the Policy Scenario Registry (ADR 0035): the cache is keyed per scenario
+(\code{scenarioId} or, failing that, a short hash of the gdx path) so building two
+scenarios in one session does not clobber a single cache file, and the gdx's own
+region mapping is honoured — the \code{SSP2-EU21-*} runs are 21-region and need
+\code{regionmapping_21_EU11-without-missingH12.csv}, not the H12 default.
 }

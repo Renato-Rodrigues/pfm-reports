@@ -9,6 +9,7 @@ renderModelDiagnostics(
   cachefolder = .defCache(),
   gdxFile = .defGdx(),
   modelDataFile = file.path(.defOutput(), "modelData.RData"),
+  projectionsDir = NULL,
   outputDir = .defOutput(),
   verbose = TRUE
 )
@@ -17,6 +18,10 @@ renderModelDiagnostics(
 \item{modelDir, cachefolder, gdxFile}{Fit Cache / madrat cache / scenario gdx.}
 
 \item{modelDataFile}{Path to the consolidated \code{modelData.RData} cache.}
+
+\item{projectionsDir}{Optional path to a Run-Group \code{projections/} directory
+(the multi-scenario fan-out, ADR 0035) for the Policy-Scenario Contrast exhibit.
+\code{NULL}/empty auto-discovers one under the modelData/modelDir/output roots.}
 
 \item{outputDir}{Directory for the rendered HTML.}
 
