@@ -216,8 +216,11 @@ renderGroup <- function(group = getPfmConfig("group", "exhaustive"),
                         cachefolder = .defCache(), gdxFile = .defGdx(), reportName = group,
                         outputDir = .defOutput(), verbose = TRUE, nCores = NULL) {
   all <- c("selection", "model-selection", "results-adoption", "results-stringency",
-           "publication", "robustness", "subnational", "selection-stability")
-  reports <- if (is.null(reports)) all else intersect(all, reports)
+           "publication", "robustness", "subnational", "selection-stability",
+           "psm-results")
+  # "psm-results" (ADR 0036) is requestable but NOT in the NULL-default set: the default is
+  # the carbon-price report bundle, while the PSM report targets a PSM Run-Group.
+  reports <- if (is.null(reports)) setdiff(all, "psm-results") else intersect(all, reports)
   fns <- list(
     "selection" = function() renderSelection(group, resultsDir, reportName, outputDir, verbose),
     "model-selection" = function() renderModelSelection(group, resultsDir, reportName,
@@ -232,7 +235,9 @@ renderGroup <- function(group = getPfmConfig("group", "exhaustive"),
     "publication" = function() renderPublication(group, resultsDir, modelDir, cachefolder, gdxFile,
                                                  reportName, outputDir, verbose),
     "robustness" = function() renderRobustness(group, resultsDir, reportName, outputDir, verbose),
-    "subnational" = function() renderSubnational(group, resultsDir, reportName, outputDir, verbose)
+    "subnational" = function() renderSubnational(group, resultsDir, reportName, outputDir, verbose),
+    "psm-results" = function() renderPSMResults(group, resultsDir, reportName,
+                                                outputDir = outputDir, verbose = verbose)
   )
   if (is.null(nCores)) nCores <- min(length(reports), 4L)
   nCores <- max(1L, as.integer(nCores))
