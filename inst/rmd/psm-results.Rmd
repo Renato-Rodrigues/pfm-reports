@@ -16,6 +16,8 @@ params:
   agreementRds: "results/psm-exhaustive/estimator-agreement.rds"
   projectionsDir: "results/psm-exhaustive/projections"
   manifestJson: "results/psm-exhaustive/manifest.json"
+  temporalRds: "results/psm-exhaustive/temporal-validation.rds"
+  frontierRds: "results/psm-exhaustive/frontier.rds"
   reportName: "default"
   indexMax: 10
 ---
@@ -40,6 +42,8 @@ sweep <- readIf(params$sweepRds, readRDS)
 sel <- readIf(params$selectedConfig, yaml::read_yaml)
 agree <- readIf(params$agreementRds, readRDS)
 manifest <- readIf(params$manifestJson, function(p) jsonlite::fromJSON(p, simplifyVector = FALSE))
+temporal <- readIf(params$temporalRds, readRDS)
+frontierArt <- readIf(params$frontierRds, readRDS)
 projDir <- absify(params$projectionsDir)
 projFiles <- if (!is.null(projDir) && nzchar(projDir) && dir.exists(projDir)) {
   list.files(projDir, pattern = "\\.rds$", full.names = TRUE)
@@ -269,6 +273,45 @@ if (!is.null(agree) && length(agree$bySector)) {
 } else cat("> *estimator-agreement.rds not found — run `pfm::runPSMEstimatorAgreement()`.*\n")
 ```
 
+## Marginal effects over observed support
+
+*What this section is for.* The interaction claims live or die here: the marginal effect of
+each Actor-Power term on the 0–`r params$indexMax` index, traced over the **observed**
+(standardized) range of its institutional-quality moderator. The solid segment is where the
+moderation is identified; the faded extension shows how the fitted line continues just outside
+support — which is exactly what a scenario projection does when drivers leave their history
+(the driver-support guard now winsorizes there).
+
+```{r me-support, results='asis', fig.height=4.5}
+mes <- if (!is.null(agree) && length(agree$bySector)) {
+  dplyr::bind_rows(lapply(names(agree$bySector), function(sec) {
+    m <- agree$bySector[[sec]]$meSupport
+    if (is.null(m)) return(NULL)
+    m$sector <- sec
+    m
+  }))
+} else NULL
+if (!is.null(mes) && nrow(mes)) {
+  mes$pair <- paste(gsub("\\.", " ", mes$apTerm), "×", gsub("\\.", " ", mes$moderator))
+  p <- ggplot(mes, aes(x = m, y = me)) +
+    geom_hline(yintercept = 0, linetype = "dashed", colour = "grey40") +
+    geom_ribbon(aes(ymin = lo, ymax = hi, alpha = inSupport), fill = "steelblue") +
+    geom_line(aes(linetype = inSupport), colour = "steelblue4") +
+    scale_alpha_manual(values = c(`TRUE` = 0.35, `FALSE` = 0.12), guide = "none") +
+    scale_linetype_manual(values = c(`TRUE` = "solid", `FALSE` = "dotted"), guide = "none") +
+    facet_grid(sector ~ pair, scales = "free_x") +
+    theme_minimal() +
+    labs(x = "moderator value (standardized; solid = observed support)",
+         y = "marginal effect of AP (index points)")
+  print(p); cat("\n\n")
+  howToRead("Marginal effect of the actor-power term at each moderator value (satP engine, ",
+            "delta-method 95% band, clustered vcov). Where the band excludes zero INSIDE the ",
+            "solid segment, the moderation is an identified claim; dotted segments are ",
+            "extrapolation and carry no evidence.")
+} else cat("> *No marginal-effect-support exhibit (older estimator-agreement.rds — re-run ",
+           "`pfm::runPSMEstimatorAgreement()`).*\n")
+```
+
 # Scenario projections (fan-out)
 
 *What this section is for.* The deployed spec projected onto every registered **Policy
@@ -326,6 +369,87 @@ if (!is.null(projections) && nrow(projections)) {
                 paste(sort(ooc$region), collapse = ", ")))
   }
 } else cat("> *No projection artifacts — run `pfm::runPSMProjection()` with the Scenario Registry.*\n")
+```
+
+# Feasibility frontier and political slack
+
+*What this section is for.* The frontier reading of feasibility: instead of the conditional
+*mean* ("how much policy do comparable polities typically have"), a stochastic frontier
+estimates the *maximum attainable* stringency given political-economy fundamentals, and
+attributes the shortfall to one-sided **political slack** — the ambition gap. Two statistics
+qualify everything else: `gamma` (share of error variance from slack; near 0 = the data show
+no frontier structure) and the LR test against the no-frontier null. The ratio
+observed/frontier is the principled Implementability Factor.
+
+```{r frontier, results='asis', fig.height=4.5}
+if (!is.null(frontierArt) && length(frontierArt$bySector)) {
+  cat(sprintf("Deployed spec: `%s`.\n\n", if (is.null(frontierArt$spec)) "?" else frontierArt$spec))
+  gt <- dplyr::bind_rows(lapply(names(frontierArt$bySector), function(sec) {
+    e <- frontierArt$bySector[[sec]]
+    data.frame(sector = sec, gamma = e$gamma, LRvsNoFrontier = e$lr, n = e$n,
+               medianSlack = stats::median(e$scores$slackIndex, na.rm = TRUE))
+  }))
+  print(knitr::kable(gt, digits = 3, caption = "Frontier structure per sector"))
+  cat("\n\n")
+  sc <- dplyr::bind_rows(lapply(names(frontierArt$bySector), function(sec) {
+    s <- frontierArt$bySector[[sec]]$scores
+    if (is.null(s)) return(NULL)
+    s$sector <- sec
+    s
+  }))
+  if (!is.null(sc) && nrow(sc)) {
+    scLast <- sc |> dplyr::group_by(sector, region) |> dplyr::slice_max(year, n = 1) |> dplyr::ungroup()
+    p <- ggplot(scLast, aes(x = observedIndex, y = frontierIndex)) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+      geom_point(alpha = 0.7, colour = "steelblue4") +
+      facet_wrap(~sector) +
+      coord_equal(xlim = c(0, indexMax), ylim = c(0, indexMax)) +
+      theme_minimal() +
+      labs(x = "observed index (last estimation year)", y = "feasibility frontier")
+    print(p); cat("\n\n")
+    howToRead("Each point is a region at its last estimation year; vertical distance to the ",
+              "dashed diagonal is the political ambition gap (frontier minus observed). If ",
+              "gamma is near zero, the frontier collapses onto the regression mean and the ",
+              "gaps carry no information — check the table before reading the plot.")
+  }
+} else cat("> *frontier.rds not found — run `pfm::runPSMFrontier()` (step `psm-frontier`).*\n")
+```
+
+# Pseudo-out-of-sample validation
+
+*What this section is for.* The decisive test of the projection claim: the deployed spec is
+re-fit on the panel truncated at `trainEnd`, projected onto the **observed** drivers of the
+held-out years under full deployment discipline (frozen scaling, frozen trend, driver-support
+guard), and scored against the **observed** CAPMF index. `skillVsPersistence` compares against
+carrying each region's last observed value forward — the naive baseline any projection must
+beat (positive = beats persistence).
+
+```{r temporal-validation, results='asis', fig.height=4.5}
+if (!is.null(temporal) && length(temporal$bySector)) {
+  cat(sprintf("Deployed spec: `%s` — trained ≤ %s, scored on later observed years.\n\n",
+              if (is.null(temporal$spec)) "?" else temporal$spec, temporal$trainEnd))
+  mt <- dplyr::bind_rows(lapply(names(temporal$bySector), function(sec) {
+    data.frame(sector = sec, as.data.frame(temporal$bySector[[sec]]$metrics))
+  }))
+  print(knitr::kable(mt, digits = 3, caption = "Held-out fit metrics per sector"))
+  cat("\n\n")
+  rows <- dplyr::bind_rows(lapply(temporal$bySector, `[[`, "rows"))
+  if (nrow(rows)) {
+    p <- ggplot(rows, aes(x = observed, y = predicted, colour = factor(year))) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", colour = "grey40") +
+      geom_point(alpha = 0.7) +
+      facet_wrap(~sector) +
+      coord_equal(xlim = c(0, indexMax), ylim = c(0, indexMax)) +
+      theme_minimal() +
+      labs(x = "observed CAPMF index", y = "predicted (held-out)", colour = "year")
+    print(p); cat("\n\n")
+    howToRead("Each point is a held-out region-year. Points on the dashed diagonal are perfect ",
+              "predictions; systematic displacement above/below reveals level bias, and a ",
+              "vertical spread wider than the historical index movement means the drivers carry ",
+              "little forecasting signal. Read together with skillVsPersistence in the table.")
+  }
+} else cat("> *temporal-validation.rds not found — run `pfm::runPSMTemporalValidation()` ",
+           "(step `psm-temporal`).*\n")
 ```
 
 # Definitions

@@ -30,6 +30,8 @@ renderPSMResults <- function(group = getPfmConfig("group", "psm-exhaustive"),
                agreementRds = runGroupArtifact("estimator-agreement.rds", group, resultsDir),
                projectionsDir = runGroupArtifact("projections", group, resultsDir),
                manifestJson = runGroupArtifact("manifest.json", group, resultsDir),
+               temporalRds = runGroupArtifact("temporal-validation.rds", group, resultsDir),
+               frontierRds = runGroupArtifact("frontier.rds", group, resultsDir),
                reportName = reportName, indexMax = indexMax
              ),
              outputDir = outputDir, verbose = verbose)
