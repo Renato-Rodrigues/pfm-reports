@@ -18,6 +18,7 @@ params:
   manifestJson: "results/psm-exhaustive/manifest.json"
   temporalRds: "results/psm-exhaustive/temporal-validation.rds"
   frontierRds: "results/psm-exhaustive/frontier.rds"
+  influenceRds: "results/psm-exhaustive/influence.rds"
   reportName: "default"
   indexMax: 10
 ---
@@ -44,6 +45,7 @@ agree <- readIf(params$agreementRds, readRDS)
 manifest <- readIf(params$manifestJson, function(p) jsonlite::fromJSON(p, simplifyVector = FALSE))
 temporal <- readIf(params$temporalRds, readRDS)
 frontierArt <- readIf(params$frontierRds, readRDS)
+influence <- readIf(params$influenceRds, readRDS)
 projDir <- absify(params$projectionsDir)
 projFiles <- if (!is.null(projDir) && nzchar(projDir) && dir.exists(projDir)) {
   list.files(projDir, pattern = "\\.rds$", full.names = TRUE)
@@ -310,6 +312,57 @@ if (!is.null(mes) && nrow(mes)) {
             "extrapolation and carry no evidence.")
 } else cat("> *No marginal-effect-support exhibit (older estimator-agreement.rds — re-run ",
            "`pfm::runPSMEstimatorAgreement()`).*\n")
+```
+
+# Influence diagnostics (pivotal countries; ADR 0037)
+
+*What this section is for.* Explains **which clusters (regions/countries) make a theory term
+marginally (non-)significant** instead of pressuring selection with p-values. Every cluster is
+dropped in turn and the deployed spec refit (analytic CR1 clustered SEs, the suite's convention);
+a **pivotal** cluster is one whose removal moves a term across the 5% line in either direction
+(`gain` = significant only without it; `loss` = significance depends on it). The wild-cluster
+bootstrap is re-run at pivotal folds only. **Report-only** — this never changes the deliverable;
+a term that owes its star to one country must be claimed accordingly.
+
+```{r influence, results='asis', fig.height=4.5}
+if (!is.null(influence) && length(influence$bySector)) {
+  for (sec in intersect(sectors, names(influence$bySector))) {
+    inf <- influence$bySector[[sec]]
+    if (is.null(inf$byTerm) || !nrow(inf$byTerm)) next
+    cat(sprintf("## %s\n\n", sec))
+    bt <- inf$byTerm
+    numc <- vapply(bt, is.numeric, logical(1))
+    bt[numc] <- lapply(bt[numc], function(v) round(v, 3))
+    print(knitr::kable(bt, row.names = FALSE,
+                       caption = paste0(sec, " — per-term leave-one-cluster-out summary")))
+    cat("\n\n")
+    howToRead("`p` is the full-sample cluster-robust p; `pMin`/`pMax` bound the leave-one-",
+              "cluster-out p path. `pivotalClusters` lists the folds crossing 5%; ",
+              "`topInfluencer` moves the coefficient most; `tChangeDriver` says whether that ",
+              "fold changes the t-statistic through the coefficient or through the SE ",
+              "(coefficient shrinkage vs SE inflation).", type = "table")
+    pp <- inf$path[inf$path$crossing != "fold-failed" & is.finite(inf$path$p), , drop = FALSE]
+    focus <- inf$byTerm$term[inf$byTerm$nPivotal > 0 |
+                               (inf$byTerm$p > 0.01 & inf$byTerm$p < 0.10)]
+    pp <- pp[pp$term %in% focus, , drop = FALSE]
+    if (nrow(pp)) {
+      p <- ggplot(pp, aes(x = p, y = cluster, colour = crossing)) +
+        geom_vline(xintercept = inf$alpha, linetype = 2, colour = "grey40") +
+        geom_point(size = 1.8) +
+        scale_colour_manual(values = c(gain = "seagreen", loss = "firebrick",
+                                       none = "grey60")) +
+        facet_wrap(~term, scales = "free_x") +
+        theme_report() +
+        labs(title = paste0(sec, " — leave-one-cluster-out p paths (marginal / pivotal terms)"),
+             x = "cluster-robust p when this cluster is dropped", y = NULL)
+      print(p); cat("\n\n")
+      howToRead("Each dot is the term's p-value with that cluster removed; the dashed line is ",
+                "alpha = 5%. Green (`gain`) folds show the cluster suppressing an otherwise-",
+                "significant term; red (`loss`) folds show the significance depends on that ",
+                "one cluster — either way the claim must not rest on a single country.")
+    }
+  }
+} else cat("> *influence.rds not found — run `pfm::runPSMInfluence()`.*\n")
 ```
 
 # Scenario projections (fan-out)
