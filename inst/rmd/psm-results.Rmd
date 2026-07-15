@@ -171,6 +171,36 @@ if (!is.null(sn) && !is.null(sn$trace) && nrow(sn$trace)) {
 } else cat("> *No sanity trace (sweep ran without a scenario panel — selection was pure maximin).*\n")
 ```
 
+## Selection variants and the sharing cost (Tournament v2, ADR 0039)
+
+*What this subsection is for.* Under Tournament v2 the ranking is the **worse sector's
+ΔR²(theory)** and tier is a **gate** (deployment requires Green in both sectors). Three
+things are documented rather than hidden: the **Blue-gate (tier-relaxed) winner**, each
+sector's **own best** spec, and the **Specification-Sharing Cost** — the ΔR² each sector
+gives up because one shared spec serves both. Per-sector winners are never deployed
+(the Shared Specification rule stands); this exhibit quantifies what the rule costs.
+
+```{r selection-variants, results='asis'}
+sv <- sweep$selectionVariants
+if (is.null(sv)) sv <- readIf(file.path(dirname(absify(params$sweepRds)), "selection-variants.rds"), readRDS)
+if (!is.null(sv)) {
+  w <- data.frame(tierGate = names(sv$winners),
+                  winner = unlist(lapply(sv$winners, function(x) if (is.na(x)) "(gate passes nothing)" else x)),
+                  deployed = names(sv$winners) == sv$deployedGate,
+                  row.names = NULL)
+  print(knitr::kable(w, row.names = FALSE, caption = "Tier-gate winners (worse-sector ΔR² ranking)"))
+  cat("\n\n")
+  ps <- sv$perSector
+  numc <- vapply(ps, is.numeric, logical(1)); ps[numc] <- lapply(ps[numc], function(v) round(v, 3))
+  print(knitr::kable(ps, row.names = FALSE, caption = "Specification-Sharing Cost exhibit"))
+  cat("\n\n")
+  howToRead("`sharingCost` = the sector's own best worse-case ΔR²(theory) minus what it gets ",
+            "under the shared deployed spec; `sharingCostShare` expresses it as a fraction of ",
+            "the achievable. A large share is grounds to re-open the dual-deployment question ",
+            "in its own decision session — never a silent switch.", type = "table")
+} else cat("> *No selection-variants exhibit (pre-v2 sweep, or documentTierGates = NULL).*\n")
+```
+
 # Deployed model — coefficients
 
 *What this section is for.* The deployed specification's estimated coefficients per sector, from
